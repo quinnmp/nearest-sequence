@@ -58,7 +58,10 @@ class NNAgent:
         return self.expert_data[obs.traj_num]['actions'][obs.obs_num]
 
     def update_obs_history(self, current_ob):
-        self.obs_history = np.vstack((current_ob, self.obs_history))
+        if len(self.obs_history) == 0:
+            self.obs_history = np.array([current_ob])
+        else:
+            self.obs_history = np.vstack((current_ob, self.obs_history))
 
     def update_distances(self, current_ob):
         print("No provided distance function! Don't instantiate a base NNAgent class!")
@@ -113,18 +116,50 @@ class NNAgentEuclidean(NNAgent):
 
 
     def find_nearest_sequence(self):
+        if self.obs_history.ndim == 1:
+            return self.obs_list[0]
+
         nearest_neighbors = self.obs_list[:self.candidates]
         accum_distance = []
+        mask = [1, 1, 1, 1, 1, 1, 0, 0.5, 0.5, 0.5, 0.5, 1, 1, 0, 0.5, 0.5, 0.5, 0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1]
 
         for neighbor in nearest_neighbors:
             accum_distance.append(0)
             traj = neighbor.traj_num
             max_lookback = min(self.lookback, min(neighbor.obs_num + 1, len(self.obs_history)))
             for i in range(max_lookback):
-                accum_distance[-1] += distance.euclidean(self.obs_history[i], self.obs_matrix[traj][neighbor.obs_num - i].obs) * (1 / (i + 1))
+                accum_distance[-1] += distance.euclidean(self.obs_history[i] * mask, self.obs_matrix[traj][neighbor.obs_num - i].obs * mask) * (1 / (i + 1))
             accum_distance[-1] / max_lookback
 
         return nearest_neighbors[np.argmin(accum_distance)]
+
+    def linearly_regress(self):
+        nearest_neighbors = self.obs_list[:self.candidates]
+        accum_distance = []
+        mask = [1, 1, 1, 1, 1, 1, 0, 0.5, 0.5, 0.5, 0.5, 1, 1, 0, 0.5, 0.5, 0.5, 0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1]
+        X = np.array([])
+        Y = np.array([])
+
+
+        for neighbor in nearest_neighbors:
+            accum_distance.append(0)
+            traj = neighbor.traj_num
+            max_lookback = min(self.lookback, min(neighbor.obs_num + 1, len(self.obs_history)))
+            for i in range(max_lookback):
+                accum_distance[-1] += distance.euclidean(self.obs_history[i] * mask, self.obs_matrix[traj][neighbor.obs_num - i].obs * mask) * (1 / (i + 1))
+            accum_distance[-1] / max_lookback
+
+            X = np.append(X, self.obs_matrix[traj][neighbor.obs_num].obs)
+            Y = np.append(Y, self.get_action_from_obs(self.obs_matrix[traj][neighbor.obs_num]))
+
+        query_point = np.r_[1, self.obs_history[0]]
+        X = np.c_[np.ones(len(X)), X]
+
+        X_weights = X.T * accum_distance
+        breakpoint()
+        theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
+        
+        return query_point @ theta
 
 class NNAgentEuclideanStandardized(NNAgentEuclidean):
     def __init__(self, expert_data_path, plot=False, candidates=10, lookback=20):
@@ -143,7 +178,7 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
                 expert_data[i]['observations'][j] = (o - self.mins) / self.maxes
 
         new_path = expert_data_path[:-4] + '_normalized.pkl'
-        save_expert_data(expert_data[:1], new_path)
+        save_expert_data(expert_data, new_path)
 
         super().__init__(new_path, plot=plot, candidates=candidates, lookback=lookback)
 

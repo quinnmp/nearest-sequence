@@ -3,8 +3,8 @@ import numpy as np
 import metaworld
 import metaworld.envs.mujoco.env_dict as _env_dict
 
-candidates = [1, 5, 10, 20, 30, 40, 50]
-lookback = [1, 10, 25, 50, 100]
+candidates = [100]
+lookback = [50]
 
 for candidate_num in candidates:
     for lookback_num in lookback:
@@ -13,26 +13,26 @@ for candidate_num in candidates:
         env._freeze_rand_vec = False
         env._set_task_called = True
         env.seed(42)
-        env.action_space.seed(config.seed)
-        env.observation_space.seed(config.seed)
+        env.action_space.seed(42)
+        env.observation_space.seed(42)
 
-        nn_agent = nn_util.NNAgentEuclideanStandardized('metaworld-coffee-pull-v2_50-shortened.pkl', plot=False, candidates=candidate_num, lookback=lookback_num)
+        nn_agent = nn_util.NNAgentEuclideanStandardized('metaworld-coffee-pull-v2_50.pkl', plot=False, candidates=candidate_num, lookback=lookback_num)
 
         episode_rewards = []
         success = 0
         trial = 0
         while True:
             observation = env.reset()
-            nn_agent.obs_history = np.array(observation)
+            nn_agent.obs_history = np.array([])
             nn_agent.update_distances(observation)
 
             episode_reward = 0.0
             steps = 0
             while True:
-                action = nn_agent.obs_list[0]
-                action = nn_agent.find_nearest_sequence()
+                # action = nn_agent.obs_list[0]
+                # action = nn_agent.find_nearest_sequence()
+                action = nn_agent.linearly_regress()
                 observation, reward, done, info = env.step(nn_agent.get_action_from_obs(action))
-
                 nn_agent.update_distances(observation)
 
                 episode_reward += reward
@@ -45,6 +45,7 @@ for candidate_num in candidates:
                 steps += 1
             success += info['success'] if 'success' in info else 0
             episode_rewards.append(episode_reward)
+            print(episode_reward)
             trial += 1
             if trial >= 10:
                 break
