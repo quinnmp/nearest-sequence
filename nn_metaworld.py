@@ -3,7 +3,7 @@ import numpy as np
 import metaworld
 import metaworld.envs.mujoco.env_dict as _env_dict
 
-candidates = [100]
+candidates = [200]
 lookback = [50]
 
 for candidate_num in candidates:
@@ -13,8 +13,7 @@ for candidate_num in candidates:
         env._freeze_rand_vec = False
         env._set_task_called = True
         env.seed(42)
-        env.action_space.seed(42)
-        env.observation_space.seed(42)
+        np.random.seed(42)
 
         nn_agent = nn_util.NNAgentEuclideanStandardized('metaworld-coffee-pull-v2_50.pkl', plot=False, candidates=candidate_num, lookback=lookback_num)
 
@@ -29,10 +28,12 @@ for candidate_num in candidates:
             episode_reward = 0.0
             steps = 0
             while True:
-                # action = nn_agent.obs_list[0]
+                # action = nn_agent.get_action_from_obs(nn_agent.obs_list[0])
                 # action = nn_agent.find_nearest_sequence()
-                action = nn_agent.linearly_regress()
-                observation, reward, done, info = env.step(nn_agent.get_action_from_obs(action))
+                action = nn_agent.find_nearest_sequence_dynamic_time_warping()
+                # action = nn_agent.linearly_regress()
+                # action = nn_agent.linearly_regress_dynamic_time_warping()
+                observation, reward, done, info = env.step(action)
                 nn_agent.update_distances(observation)
 
                 episode_reward += reward
@@ -40,7 +41,7 @@ for candidate_num in candidates:
                     env.render()
                 if done:
                     break
-                if steps > 499:
+                if steps >= 500:
                     break
                 steps += 1
             success += info['success'] if 'success' in info else 0

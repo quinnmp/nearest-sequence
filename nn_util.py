@@ -117,46 +117,131 @@ class NNAgentEuclidean(NNAgent):
 
     def find_nearest_sequence(self):
         if self.obs_history.ndim == 1:
-            return self.obs_list[0]
+            return self.get_action_from_obs(self.obs_list[0])
 
         nearest_neighbors = self.obs_list[:self.candidates]
         accum_distance = []
-        mask = [1, 1, 1, 1, 1, 1, 0, 0.5, 0.5, 0.5, 0.5, 1, 1, 0, 0.5, 0.5, 0.5, 0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1]
+        mask = np.ones(len(self.expert_data[0]['observations'][0]))
+        # mask = [1, 1, 1, 1, 1, 1, 0, 0.5, 0.5, 0.5, 0.5, 1, 1, 0, 0.5, 0.5, 0.5, 0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1]
+        # mask = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1]
 
         for neighbor in nearest_neighbors:
             accum_distance.append(0)
             traj = neighbor.traj_num
             max_lookback = min(self.lookback, min(neighbor.obs_num + 1, len(self.obs_history)))
             for i in range(max_lookback):
-                accum_distance[-1] += distance.euclidean(self.obs_history[i] * mask, self.obs_matrix[traj][neighbor.obs_num - i].obs * mask) * (1 / (i + 1))
+                accum_distance[-1] += distance.euclidean(self.obs_history[i] * mask, self.obs_matrix[traj][neighbor.obs_num - i].obs * mask) * (1 / ((1) ** 2))
             accum_distance[-1] / max_lookback
 
-        return nearest_neighbors[np.argmin(accum_distance)]
+        return self.get_action_from_obs(nearest_neighbors[np.argmin(accum_distance)])
+
+    def find_nearest_sequence_dynamic_time_warping(self):
+        if len(self.obs_history) == 1:
+            return self.get_action_from_obs(self.obs_list[0])
+
+        nearest_neighbors = self.obs_list[:self.candidates]
+        accum_distance = []
+        mask = np.ones(len(self.expert_data[0]['observations'][0]))
+
+        for neighbor in nearest_neighbors:
+            accum_distance.append(0)
+            traj = neighbor.traj_num
+            max_lookback = min(self.lookback, min(neighbor.obs_num + 1, len(self.obs_history)))
+
+            w = 25
+
+            dtw = np.full((max_lookback, max_lookback), np.inf)
+            dtw[0, 0] = 0
+
+            for i in range(1, max_lookback):
+                j_start = max(1, i - w)
+                j_end = min(max_lookback, i + w + 1)
+                dtw[i, j_start:j_end] = 0
+
+            for i in range(1, max_lookback):
+                j_start = max(1, i - w)
+                j_end = min(max_lookback, i + w + 1)
+                for j in range(j_start, j_end):
+                    cost = distance.euclidean(self.obs_history[i] * mask, self.obs_matrix[traj][neighbor.obs_num - j].obs * mask) * ((i + 1) ** -0.3)
+                    dtw[i, j] = cost + min(dtw[i-1, j],    # insertion
+                                           dtw[i, j-1],    # deletion
+                                           dtw[i-1, j-1])  # match
+
+            accum_distance[-1] = dtw[max_lookback - 1, max_lookback - 1] / max_lookback
+
+        return self.get_action_from_obs(nearest_neighbors[np.argmin(accum_distance)])
 
     def linearly_regress(self):
         nearest_neighbors = self.obs_list[:self.candidates]
         accum_distance = []
-        mask = [1, 1, 1, 1, 1, 1, 0, 0.5, 0.5, 0.5, 0.5, 1, 1, 0, 0.5, 0.5, 0.5, 0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1]
-        X = np.array([])
-        Y = np.array([])
-
+        mask = np.ones(len(self.expert_data[0]['observations'][0]))
+        # mask = [1, 1, 1, 1, 1, 1, 0, 0.5, 0.5, 0.5, 0.5, 1, 1, 0, 0.5, 0.5, 0.5, 0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1]
+        # mask = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1]
+        X = np.zeros((0, len(self.expert_data[0]['observations'][0])))
+        Y = np.zeros((0, len(self.expert_data[0]['actions'][0])))
 
         for neighbor in nearest_neighbors:
             accum_distance.append(0)
             traj = neighbor.traj_num
             max_lookback = min(self.lookback, min(neighbor.obs_num + 1, len(self.obs_history)))
             for i in range(max_lookback):
-                accum_distance[-1] += distance.euclidean(self.obs_history[i] * mask, self.obs_matrix[traj][neighbor.obs_num - i].obs * mask) * (1 / (i + 1))
+                accum_distance[-1] += distance.euclidean(self.obs_history[i] * mask, self.obs_matrix[traj][neighbor.obs_num - i].obs * mask) * ((i + 1) ** -0.3)
             accum_distance[-1] / max_lookback
 
-            X = np.append(X, self.obs_matrix[traj][neighbor.obs_num].obs)
-            Y = np.append(Y, self.get_action_from_obs(self.obs_matrix[traj][neighbor.obs_num]))
+            X = np.vstack((X, self.obs_matrix[traj][neighbor.obs_num].obs))
+            Y = np.vstack((Y, self.get_action_from_obs(self.obs_matrix[traj][neighbor.obs_num])))
 
-        query_point = np.r_[1, self.obs_history[0]]
-        X = np.c_[np.ones(len(X)), X]
+        X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
+        query_point = np.concatenate(([1], self.obs_history[0]))
 
         X_weights = X.T * accum_distance
-        breakpoint()
+        theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
+        
+        return query_point @ theta
+
+    def linearly_regress_dynamic_time_warping(self):
+        if len(self.obs_history) == 1:
+            return self.linearly_regress()
+
+        nearest_neighbors = self.obs_list[:self.candidates]
+        accum_distance = []
+        mask = np.ones(len(self.expert_data[0]['observations'][0]))
+        X = np.zeros((0, len(self.expert_data[0]['observations'][0])))
+        Y = np.zeros((0, len(self.expert_data[0]['actions'][0])))
+
+        for neighbor in nearest_neighbors:
+            accum_distance.append(0)
+            traj = neighbor.traj_num
+            max_lookback = min(self.lookback, min(neighbor.obs_num + 1, len(self.obs_history)))
+
+            w = 10
+
+            dtw = np.full((max_lookback, max_lookback), np.inf)
+            dtw[0, 0] = 0
+
+            for i in range(1, max_lookback):
+                j_start = max(1, i - w)
+                j_end = min(max_lookback, i + w + 1)
+                dtw[i, j_start:j_end] = 0
+
+            for i in range(1, max_lookback):
+                j_start = max(1, i - w)
+                j_end = min(max_lookback, i + w + 1)
+                for j in range(j_start, j_end):
+                    cost = distance.euclidean(self.obs_history[i] * mask, self.obs_matrix[traj][neighbor.obs_num - j].obs * mask) * ((i + 1) ** -0.3)
+                    dtw[i, j] = cost + min(dtw[i-1, j],    # insertion
+                                           dtw[i, j-1],    # deletion
+                                           dtw[i-1, j-1])  # match
+
+            accum_distance[-1] = dtw[max_lookback - 1, max_lookback - 1] / max_lookback
+
+            X = np.vstack((X, self.obs_matrix[traj][neighbor.obs_num].obs))
+            Y = np.vstack((Y, self.get_action_from_obs(self.obs_matrix[traj][neighbor.obs_num])))
+
+        X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
+        query_point = np.concatenate(([1], self.obs_history[0]))
+
+        X_weights = X.T * accum_distance
         theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
         
         return query_point @ theta
