@@ -10,6 +10,8 @@ import argparse
 import gym
 import d4rl
 
+DEBUG = False
+
 parser = argparse.ArgumentParser()
 parser.add_argument("config_path", help="Path to config file")
 args, _ = parser.parse_known_args()
@@ -57,14 +59,14 @@ for candidate_num in candidates:
                         # action = nn_agent.old_find_nearest_sequence_dynamic_time_warping()
                         # action = nn_agent.linearly_regress()
                         action = nn_agent.linearly_regress_dynamic_time_warping()
-                        # t_post_action = time.perf_counter()
+                        t_post_action = time.perf_counter()
                         # print(f"Time to get action: {t_post_action - t_start}")
                         observation, reward, done, info = env.step(action)
                         t_env_step = time.perf_counter()
                         # print(f"Time to step env: {t_env_step - t_post_action}")
                         nn_agent.update_distances(observation)
                         t_update = time.perf_counter()
-                        print(f"Time to update distances: {t_update - t_env_step}")
+                        # print(f"Time to update distances: {t_update - t_env_step}")
 
                         episode_reward += reward
                         if False:
@@ -75,10 +77,18 @@ for candidate_num in candidates:
                             break
                         steps += 1
                         t_end = time.perf_counter()
-                        # print(f"At step {steps}, total time: {t_end - t_start}")
+                        t_total = t_end - t_start
+                        if DEBUG:
+                            print(f"Step total: {t_total}")
+                            print(f"Action: {(t_post_action - t_start) / t_total}%")
+                            print(f"Env step: {(t_env_step - t_post_action) / t_total}%")
+                            print(f"Update: {(t_update - t_env_step) / t_total}%")
+                            print(f"Finishing up: {(t_end - t_update) / t_total}%")
+
                     success += info['success'] if 'success' in info else 0
                     episode_rewards.append(episode_reward)
                     trial += 1
+                    print(trial)
                     if trial >= 100:
                         break
 
