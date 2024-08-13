@@ -47,8 +47,7 @@ for candidate_num in candidates:
                 trial = 0
                 while True:
                     observation = env.reset()
-                    nn_agent.obs_history = np.array([])
-                    nn_agent.update_distances(observation)
+                    nn_agent.obs_history = np.array([observation])
 
                     episode_reward = 0.0
                     steps = 0
@@ -58,15 +57,11 @@ for candidate_num in candidates:
                         # action = nn_agent.find_nearest_sequence()
                         # action = nn_agent.old_find_nearest_sequence_dynamic_time_warping()
                         # action = nn_agent.linearly_regress()
-                        action = nn_agent.linearly_regress_dynamic_time_warping()
+                        action = nn_agent.linearly_regress_dynamic_time_warping(observation)
+                        print(f"action: {action}")
                         t_post_action = time.perf_counter()
-                        # print(f"Time to get action: {t_post_action - t_start}")
                         observation, reward, done, info = env.step(action)
                         t_env_step = time.perf_counter()
-                        # print(f"Time to step env: {t_env_step - t_post_action}")
-                        nn_agent.update_distances(observation)
-                        t_update = time.perf_counter()
-                        # print(f"Time to update distances: {t_update - t_env_step}")
 
                         episode_reward += reward
                         if False:
@@ -82,8 +77,7 @@ for candidate_num in candidates:
                             print(f"Step total: {t_total}")
                             print(f"Action: {(t_post_action - t_start) / t_total}%")
                             print(f"Env step: {(t_env_step - t_post_action) / t_total}%")
-                            print(f"Update: {(t_update - t_env_step) / t_total}%")
-                            print(f"Finishing up: {(t_end - t_update) / t_total}%")
+                            print(f"Finishing up: {(t_end - t_env_step) / t_total}%")
 
                     success += info['success'] if 'success' in info else 0
                     episode_rewards.append(episode_reward)

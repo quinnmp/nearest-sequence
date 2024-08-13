@@ -11,13 +11,6 @@ from numba import jit
 
 DEBUG = False
 
-@dataclass
-class ObsWithDistance:
-    obs: np.ndarray
-    traj_num: int
-    obs_num: int
-    distance: float = 0.0
-
 def calculate_inverse_covariance_obs_matrix(expert_data):
     observations = np.concatenate([traj['observations'] for traj in expert_data])
 
@@ -31,28 +24,23 @@ def save_expert_data(data, path):
     with open(path, 'wb') as output_file:
         return pickle.dump(data, output_file)
 
-def create_obs_list(expert_data):
-    obs_list = []
+def create_matrices(expert_data):
+    max_length = max((len(traj['observations']) for traj in expert_data))
     obs_matrix = []
 
-    for i, data in enumerate(expert_data):
-        temp_obs_list = []
-        for j, obs in enumerate(data['observations']):
-            obs_list.append(ObsWithDistance(obs, i, j))
-            temp_obs_list.append(obs_list[-1])
+    for traj in expert_data:
+        obs_matrix.append(np.pad(traj['observations'], [(0, max_length - len(traj['observations'])), (0, 0)], mode='constant', constant_values=np.inf))
 
-        obs_matrix.append(temp_obs_list)
-
-    return obs_list, obs_matrix
+    obs_matrix = np.asarray(obs_matrix)
+    return obs_matrix
 
 class NNAgent:
     def __init__(self, expert_data_path, plot=False, candidates=10, lookback=20, decay=-1, window=10):
         self.expert_data = load_expert_data(expert_data_path)
 
-        self.obs_list, self.obs_matrix = create_obs_list(self.expert_data)
+        self.obs_matrix = create_matrices(self.expert_data)
 
-        observation = self.expert_data[0]['observations'][0]
-        self.obs_history = np.array(observation)
+        self.obs_history = np.array([])
 
         self.candidates = candidates
         self.lookback = lookback
@@ -61,9 +49,6 @@ class NNAgent:
 
         if plot:
             self.plot = nn_plot.NNPlot(self.expert_data)
-
-    def get_action_from_obs(self, obs: ObsWithDistance):
-        return self.expert_data[obs.traj_num]['actions'][obs.obs_num]
 
     def update_obs_history(self, current_ob):
         if len(self.obs_history) == 0:
@@ -117,17 +102,6 @@ class NNAgentMahalanobis(NNAgent):
         return nearest_neighbors[np.argmin(accum_distance)]
 
 class NNAgentEuclidean(NNAgent):
-    def update_distances(self, current_ob):
-        obs_array = np.array([o.obs for o in self.obs_list])
-        distances = cdist(obs_array, np.array([current_ob]), metric='euclidean').flatten()
-
-        self.obs_list = sorted(self.obs_list, key=lambda o, dist=iter(distances): next(dist))
-
-        for o, dist in zip(self.obs_list, distances):
-            o.distance = dist
-            
-        self.update_obs_history(current_ob)
-
     def find_nearest_sequence(self):
         if self.obs_history.ndim == 1:
             return self.get_action_from_obs(self.obs_list[0])
@@ -221,11 +195,16 @@ class NNAgentEuclidean(NNAgent):
         
         return query_point @ theta
 
-    def linearly_regress_dynamic_time_warping(self):
-        if len(self.obs_history) == 1:
-            return self.linearly_regress()
+    def linearly_regress_dynamic_time_warping(self, current_ob):
+        self.update_obs_history(current_ob)
+        # if len(self.obs_history) == 1:
+        #   return self.linearly_regress()
+        
+        flattened_matrix = self.obs_matrix.flatten().reshape(-1, self.obs_matrix.shape[2])
+        distances = cdist(current_ob.reshape(1, self.obs_matrix.shape[2]), flattened_matrix, metric='euclidean')
+        
+        nearest_neighbors = np.argpartition(distances.flatten(), kth=self.candidates)[:self.candidates]
 
-        nearest_neighbors = self.obs_list[:self.candidates]
         accum_distance = []
         mask = np.ones(len(self.expert_data[0]['observations'][0]))
         X = np.zeros((0, len(self.expert_data[0]['observations'][0])))
@@ -234,15 +213,15 @@ class NNAgentEuclidean(NNAgent):
         
         for neighbor in nearest_neighbors:
             t_neighbor_start = time.perf_counter()
-            max_lookback = min(self.lookback, min(neighbor.obs_num + 1, len(self.obs_history)))
+            traj_num = neighbor // self.obs_matrix.shape[1]
+            obs_num = neighbor % self.obs_matrix.shape[1]
+            max_lookback = min(self.lookback, min(obs_num + 1, len(self.obs_history)))
 
             t_init = time.perf_counter()
 
             weighted_obs_history = self.obs_history[:max_lookback] * mask
-            obs_matrix_slice = self.obs_matrix[neighbor.traj_num][neighbor.obs_num - max_lookback + 1:neighbor.obs_num + 1]
-            weighted_obs_matrix = np.array([obj.obs for obj in obs_matrix_slice]) * mask
+            weighted_obs_matrix = self.obs_matrix[traj_num][obs_num + 1 - max_lookback + 1:obs_num + 1]
 
-            # distances = np.linalg.norm(weighted_obs_history[:, np.newaxis, :] - weighted_obs_matrix[np.newaxis, :, :], axis=2)
             distances = cdist(weighted_obs_history, weighted_obs_matrix, 'euclidean')
 
             i_array = np.arange(1, max_lookback + 1, dtype=float)[:, np.newaxis]
@@ -254,8 +233,8 @@ class NNAgentEuclidean(NNAgent):
 
             accum_distance.append(dtw_result / max_lookback)
 
-            X = np.vstack((X, self.obs_matrix[neighbor.traj_num][neighbor.obs_num].obs))
-            Y = np.vstack((Y, self.get_action_from_obs(self.obs_matrix[neighbor.traj_num][neighbor.obs_num])))
+            X = np.vstack((X, self.obs_matrix[traj_num][obs_num]))
+            Y = np.vstack((Y, self.expert_data[traj_num]['actions'][obs_num]))
             t_neighbor_done = time.perf_counter()
             t_total = t_neighbor_done - t_neighbor_start
             if DEBUG:
@@ -264,6 +243,7 @@ class NNAgentEuclidean(NNAgent):
                 print(f"Init: {(t_init - t_neighbor_start) / t_total}%")
                 print(f"Loop: {(t_loop_done - t_init) / t_total}%")
                 print(f"Accumulation: {(t_neighbor_done - t_loop_done) / t_total}%")
+        breakpoint()
         t_end = time.perf_counter()
 
         X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
