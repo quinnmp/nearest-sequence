@@ -1,0 +1,14 @@
+seed: 42
+metaworld: false
+env: "walker2d-expert-v2"
+data:
+  pkl: "data/walker2d-expert-v2_20.pkl"
+policy:
+  k_neighbors:
+    - 200
+  lookback: 
+    - 50
+  decay_rate:
+    - -0.5
+  dtw_window: 
+    - 25
