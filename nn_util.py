@@ -292,4 +292,4 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
 
     def linearly_regress_dynamic_time_warping(self, current_ob):
         standardized_ob = (current_ob - self.mins) / self.maxes
-        super().linearly_regress_dynamic_time_warping(standardized_ob)
+        return super().linearly_regress_dynamic_time_warping(standardized_ob)
