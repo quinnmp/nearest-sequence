@@ -243,7 +243,6 @@ class NNAgentEuclidean(NNAgent):
                 print(f"Init: {(t_init - t_neighbor_start) / t_total}%")
                 print(f"Loop: {(t_loop_done - t_init) / t_total}%")
                 print(f"Accumulation: {(t_neighbor_done - t_loop_done) / t_total}%")
-        breakpoint()
         t_end = time.perf_counter()
 
         X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
@@ -291,6 +290,6 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
 
         super().__init__(new_path, plot=plot, candidates=candidates, lookback=lookback, decay=decay, window=window)
 
-    def update_distances(self, current_ob):
+    def linearly_regress_dynamic_time_warping(self, current_ob):
         standardized_ob = (current_ob - self.mins) / self.maxes
-        super().update_distances(standardized_ob)
+        super().linearly_regress_dynamic_time_warping(standardized_ob)

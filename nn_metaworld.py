@@ -47,7 +47,7 @@ for candidate_num in candidates:
                 trial = 0
                 while True:
                     observation = env.reset()
-                    nn_agent.obs_history = np.array([observation])
+                    nn_agent.obs_history = np.array([])
 
                     episode_reward = 0.0
                     steps = 0
