@@ -145,49 +145,6 @@ class NNAgentEuclidean(NNAgent):
 
         return self.get_action_from_obs(nearest_neighbors[np.argmin(accum_distance)])
     
-    def old_find_nearest_sequence_dynamic_time_warping(self):
-        if len(self.obs_history) == 1:
-            return self.get_action_from_obs(self.obs_list[0])
-
-        nearest_neighbors = self.obs_list[:self.candidates]
-        accum_distance = []
-        mask = np.ones(len(self.expert_data[0]['observations'][0]))
-
-        for neighbor in nearest_neighbors:
-            accum_distance.append(0)
-            traj = neighbor.traj_num
-            max_lookback = min(self.lookback, min(neighbor.obs_num + 1, len(self.obs_history)))
-
-            w = self.window
-
-            dtw = np.full((max_lookback, max_lookback), np.inf)
-            dtw[0, 0] = 0
-
-            for i in range(1, max_lookback):
-                j_start = max(1, i - w)
-                j_end = min(max_lookback, i + w + 1)
-                dtw[i, j_start:j_end] = 0
-
-            t_init = time.perf_counter()
-
-            for i in range(1, max_lookback):
-                j_start = max(1, i - w)
-                j_end = min(max_lookback, i + w + 1)
-                for j in range(j_start, j_end):
-                    cost = distance.euclidean(self.obs_history[i] * mask, self.obs_matrix[traj][neighbor.obs_num - j].obs * mask) * ((i + 1) ** -0.3)
-                    dtw[i, j] = cost + min(dtw[i-1, j],    # insertion
-                                           dtw[i, j-1],    # deletion
-                                           dtw[i-1, j-1])  # match
-            
-            t_loop_done = time.perf_counter()
-            # print(f"Time for loop: {t_loop_done - t_init}")
-            print(dtw)
-            breakpoint()
-            accum_distance[-1] = dtw[-1, -1] / max_lookback
-
-        return self.get_action_from_obs(nearest_neighbors[np.argmin(accum_distance)])
-
-
     def find_nearest_sequence_dynamic_time_warping(self):
         if len(self.obs_history) == 1:
             return self.get_action_from_obs(self.obs_list[0])
@@ -211,8 +168,6 @@ class NNAgentEuclidean(NNAgent):
                 j_end = min(max_lookback, i + w + 1)
                 dtw[i, j_start:j_end] = 0
 
-            t_init = time.perf_counter()
-
             weighted_obs_history = self.obs_history[:max_lookback] * mask
             obs_matrix_slice = self.obs_matrix[traj][neighbor.obs_num - max_lookback + 1:neighbor.obs_num + 1]
             weighted_obs_matrix = np.array([obj.obs * mask for obj in obs_matrix_slice])
@@ -227,13 +182,10 @@ class NNAgentEuclidean(NNAgent):
                 j_start = max(1, i - w)
                 j_end = min(max_lookback, i + w + 1)
                 for j in range(j_start, j_end):
-                    dtw[i, j] = distances[i, j] + min(dtw[i-1, j],    # insertion
+                    dtw[i, j] = distances[i, max_lookback - 1 - j] + min(dtw[i-1, j],    # insertion
                                            dtw[i, j-1],    # deletion
                                            dtw[i-1, j-1])  # match
             
-            t_loop_done = time.perf_counter()
-            # print(f"Time for loop: {t_loop_done - t_init}")
-
             print(dtw)
             breakpoint()
             accum_distance[-1] = dtw[-1, -1] / max_lookback
@@ -311,7 +263,7 @@ class NNAgentEuclidean(NNAgent):
                 j_start = max(1, i - w)
                 j_end = min(max_lookback, i + w + 1)
                 for j in range(j_start, j_end):
-                    dtw[i, j] = distances[i, j] + min(dtw[i-1, j],    # insertion
+                    dtw[i, j] = distances[i, max_lookback - 1 - j] + min(dtw[i-1, j],    # insertion
                                            dtw[i, j-1],    # deletion
                                            dtw[i-1, j-1])  # match
             

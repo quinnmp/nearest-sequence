@@ -2,15 +2,15 @@ import gym
 import nn_util
 import numpy as np
 
-candidates = [400]
-lookback = [25]
+candidates = [1]
+lookback = [1]
 
 for candidate_num in candidates:
     for lookback_num in lookback:
         env = gym.make('Hopper-v2')
         env.seed(42)
 
-        nn_agent = nn_util.NNAgentEuclideanStandardized('hopper-expert-v2_25.pkl', plot=False, candidates=candidate_num, lookback=lookback_num)
+        nn_agent = nn_util.NNAgentEuclideanStandardized('hopper-expert-v2_25.pkl', plot=False, candidates=candidate_num, lookback=lookback_num, decay=0.5, window=50)
 
         episode_rewards = []
         success = 0

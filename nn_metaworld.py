@@ -1,26 +1,44 @@
+import os
+os.environ["D4RL_SUPPRESS_IMPORT_ERROR"] = "1"
 import nn_util
 import numpy as np
 import metaworld
 import metaworld.envs.mujoco.env_dict as _env_dict
 import time
+import yaml
+import argparse
+import gym
+import d4rl
 
-candidates = [200]
-lookback = [50]
-decay = [-0.5]
-window = [25]
+parser = argparse.ArgumentParser()
+parser.add_argument("config_path", help="Path to config file")
+args, _ = parser.parse_known_args()
+
+with open(args.config_path, 'r') as f:
+    config = yaml.load(f, Loader=yaml.FullLoader)
+
+print(config)
+
+candidates = config['policy']['k_neighbors']
+lookback = config['policy']['lookback']
+decay = config['policy']['decay_rate']
+window = config['policy']['dtw_window']
 
 for candidate_num in candidates:
     for lookback_num in lookback:
         for decay_num in decay:
             for window_num in window:
-                env = _env_dict.MT50_V2['coffee-pull-v2']()
-                env._partially_observable = False
-                env._freeze_rand_vec = False
-                env._set_task_called = True
-                env.seed(42)
-                np.random.seed(42)
+                if config['metaworld']:
+                    env = _env_dict.MT50_V2[config['env']]()
+                    env._partially_observable = False
+                    env._freeze_rand_vec = False
+                    env._set_task_called = True
+                else:
+                    env = gym.make(config['env'])
+                env.seed(config['seed'])
+                np.random.seed(config['seed'])
 
-                nn_agent = nn_util.NNAgentEuclideanStandardized('metaworld-coffee-pull-v2_50.pkl', plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, window=window_num)
+                nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, window=window_num)
 
                 episode_rewards = []
                 success = 0
@@ -36,33 +54,32 @@ for candidate_num in candidates:
                         t_start = time.perf_counter()
                         # action = nn_agent.get_action_from_obs(nn_agent.obs_list[0])
                         # action = nn_agent.find_nearest_sequence()
-                        action = nn_agent.find_nearest_sequence_dynamic_time_warping()
+                        # action = nn_agent.old_find_nearest_sequence_dynamic_time_warping()
                         # action = nn_agent.linearly_regress()
-                        # action = nn_agent.linearly_regress_dynamic_time_warping()
+                        action = nn_agent.linearly_regress_dynamic_time_warping()
                         # t_post_action = time.perf_counter()
                         # print(f"Time to get action: {t_post_action - t_start}")
                         observation, reward, done, info = env.step(action)
-                        # t_env_step = time.perf_counter()
+                        t_env_step = time.perf_counter()
                         # print(f"Time to step env: {t_env_step - t_post_action}")
                         nn_agent.update_distances(observation)
-                        # t_update = time.perf_counter()
-                        # print(f"Time to update distances: {t_update - t_env_step}")
+                        t_update = time.perf_counter()
+                        print(f"Time to update distances: {t_update - t_env_step}")
 
                         episode_reward += reward
                         if False:
                             env.render()
                         if done:
                             break
-                        if steps >= 500:
+                        if config['metaworld'] and steps >= 500:
                             break
                         steps += 1
                         t_end = time.perf_counter()
                         # print(f"At step {steps}, total time: {t_end - t_start}")
                     success += info['success'] if 'success' in info else 0
                     episode_rewards.append(episode_reward)
-                    print(episode_reward)
                     trial += 1
-                    if trial >= 10:
+                    if trial >= 100:
                         break
 
                 print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {decay_num}, window {window_num}: {np.mean(episode_rewards)}, {success}")
