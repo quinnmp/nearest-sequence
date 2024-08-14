@@ -5,14 +5,16 @@ data:
   pkl: "data/hopper-expert-v2_25.pkl"
 policy:
   k_neighbors:
-    - 100
+    - 250
+    - 350
   lookback: 
+    - 25
     - 50
+    - 75
   decay_rate:
     - -3
   dtw_window: 
     - 0
-    - 2
     - 5
     - 10
-    - 15
+    - 20

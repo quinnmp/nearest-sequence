@@ -1,5 +1,7 @@
 import os
 os.environ["D4RL_SUPPRESS_IMPORT_ERROR"] = "1"
+import gym
+gym.logger.set_level(40)
 import nn_util
 import numpy as np
 import metaworld
@@ -7,7 +9,6 @@ import metaworld.envs.mujoco.env_dict as _env_dict
 import time
 import yaml
 import argparse
-import gym
 import d4rl
 
 DEBUG = False
@@ -56,7 +57,7 @@ for candidate_num in candidates:
                         # action = nn_agent.find_nearest_neighbor(observation)
                         # action = nn_agent.find_nearest_sequence(observation)
                         # action = nn_agent.find_nearest_sequence_dynamic_time_warping(observation)
-                        action = nn_agent.linearly_regress(observation)
+                        # action = nn_agent.linearly_regress(observation)
                         action = nn_agent.linearly_regress_dynamic_time_warping(observation)
                         t_post_action = time.perf_counter()
                         observation, reward, done, info = env.step(action)
