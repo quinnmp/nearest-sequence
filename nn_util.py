@@ -175,9 +175,9 @@ class NNAgentEuclidean(NNAgent):
             distances = cdist(weighted_obs_history, weighted_obs_matrix, 'euclidean')
 
             i_array = np.arange(1, max_lookback + 1, dtype=float)[:, np.newaxis]
-            distances *= np.power(i_array, self.decay)
+            decayed_distances = distances * np.power(i_array, self.decay)
             
-            dtw_result = self._compute_dtw(distances, max_lookback, self.window)
+            dtw_result = self._compute_dtw(decayed_distances, max_lookback, self.window)
 
             accum_distance[i] = dtw_result / max_lookback
 
@@ -218,6 +218,7 @@ class NNAgentEuclidean(NNAgent):
             X[i] = self.obs_matrix[traj_num][obs_num]
             Y[i] = self.expert_data[traj_num]['actions'][obs_num]
         
+        print(accum_distance[0])
         X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
         query_point = np.concatenate(([1], self.obs_history[0]))
 
@@ -227,7 +228,7 @@ class NNAgentEuclidean(NNAgent):
         return query_point @ theta
 
     def linearly_regress_dynamic_time_warping(self, current_ob):
-        self.update_obs_history(current_ob)
+        # self.update_obs_history(current_ob)
         t_start = time.perf_counter()
         
         flattened_matrix = self.obs_matrix.flatten().reshape(-1, self.obs_matrix.shape[2])
@@ -257,7 +258,7 @@ class NNAgentEuclidean(NNAgent):
 
             decayed_distances = distances * np.power(i_array, self.decay)
 
-            dtw_result = self._compute_dtw(distances, max_lookback, self.window)
+            dtw_result = self._compute_dtw(decayed_distances, max_lookback, self.window)
             
             t_loop_done = time.perf_counter()
 
@@ -275,6 +276,7 @@ class NNAgentEuclidean(NNAgent):
                 print(f"Loop: {(t_loop_done - t_init) / t_total}%")
                 print(f"Accumulation: {(t_neighbor_done - t_loop_done) / t_total}%")
 
+        print(accum_distance[0])
         X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
         query_point = np.concatenate(([1], self.obs_history[0]))
 
