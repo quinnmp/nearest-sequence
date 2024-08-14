@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from numba import jit
 
-DEBUG = True
+DEBUG = False
 
 def calculate_inverse_covariance_obs_matrix(expert_data):
     observations = np.concatenate([traj['observations'] for traj in expert_data])
@@ -205,17 +205,18 @@ class NNAgentEuclidean(NNAgent):
         t_start = time.perf_counter()
         
         flattened_matrix = self.obs_matrix.flatten().reshape(-1, self.obs_matrix.shape[2])
-        distances = cdist(current_ob.reshape(1, self.obs_matrix.shape[2]), flattened_matrix, metric='euclidean')
+        distances = cdist(current_ob.reshape(1, -1), flattened_matrix, metric='euclidean')
         
         nearest_neighbors = np.argpartition(distances.flatten(), kth=self.candidates)[:self.candidates]
 
-        accum_distance = []
+        accum_distance = np.zeros(self.candidates)
         mask = np.ones(len(self.expert_data[0]['observations'][0]))
-        X = np.zeros((0, len(self.expert_data[0]['observations'][0])))
-        Y = np.zeros((0, len(self.expert_data[0]['actions'][0])))
+        X = np.zeros((self.candidates, len(self.expert_data[0]['observations'][0])))
+        Y = np.zeros((self.candidates, len(self.expert_data[0]['actions'][0])))
+
         t_init_done = time.perf_counter()
         
-        for neighbor in nearest_neighbors:
+        for i, neighbor in enumerate(nearest_neighbors):
             t_neighbor_start = time.perf_counter()
             traj_num = neighbor // self.obs_matrix.shape[1]
             obs_num = neighbor % self.obs_matrix.shape[1]
@@ -234,10 +235,11 @@ class NNAgentEuclidean(NNAgent):
             
             t_loop_done = time.perf_counter()
 
-            accum_distance.append(dtw_result / max_lookback)
+            accum_distance[i] = dtw_result / max_lookback
 
-            X = np.vstack((X, self.obs_matrix[traj_num][obs_num]))
-            Y = np.vstack((Y, self.expert_data[traj_num]['actions'][obs_num]))
+            X[i] = self.obs_matrix[traj_num][obs_num]
+            Y[i] = self.expert_data[traj_num]['actions'][obs_num]
+
             t_neighbor_done = time.perf_counter()
             t_total = t_neighbor_done - t_neighbor_start
             if DEBUG:
