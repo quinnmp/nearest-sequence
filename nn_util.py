@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from numba import jit
 
-DEBUG = False
+DEBUG = True
 
 def calculate_inverse_covariance_obs_matrix(expert_data):
     observations = np.concatenate([traj['observations'] for traj in expert_data])
@@ -167,25 +167,28 @@ class NNAgentEuclidean(NNAgent):
 
         return self.get_action_from_obs(nearest_neighbors[np.argmin(accum_distance)])
 
-    def linearly_regress(self):
-        nearest_neighbors = self.obs_list[:self.candidates]
+    def linearly_regress(self, current_ob):
+        flattened_matrix = self.obs_matrix.flatten().reshape(-1, self.obs_matrix.shape[2])
+        distances = cdist(current_ob.reshape(1, self.obs_matrix.shape[2]), flattened_matrix, metric='euclidean')
+        
+        nearest_neighbors = np.argpartition(distances.flatten(), kth=self.candidates)[:self.candidates]
+
         accum_distance = []
         mask = np.ones(len(self.expert_data[0]['observations'][0]))
-        # mask = [1, 1, 1, 1, 1, 1, 0, 0.5, 0.5, 0.5, 0.5, 1, 1, 0, 0.5, 0.5, 0.5, 0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1]
-        # mask = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1]
         X = np.zeros((0, len(self.expert_data[0]['observations'][0])))
         Y = np.zeros((0, len(self.expert_data[0]['actions'][0])))
 
         for neighbor in nearest_neighbors:
+            traj_num = neighbor // self.obs_matrix.shape[1]
+            obs_num = neighbor % self.obs_matrix.shape[1]
             accum_distance.append(0)
-            traj = neighbor.traj_num
-            max_lookback = min(self.lookback, min(neighbor.obs_num + 1, len(self.obs_history)))
+            max_lookback = min(self.lookback, min(obs_num + 1, len(self.obs_history)))
             for i in range(max_lookback):
-                accum_distance[-1] += distance.euclidean(self.obs_history[i] * mask, self.obs_matrix[traj][neighbor.obs_num - i].obs * mask) * ((i + 1) ** -0.3)
+                accum_distance[-1] += distance.euclidean(self.obs_history[i] * mask, self.obs_matrix[traj_num][obs_num - i] * mask) * ((i + 1) ** -0.3)
             accum_distance[-1] / max_lookback
 
-            X = np.vstack((X, self.obs_matrix[traj][neighbor.obs_num].obs))
-            Y = np.vstack((Y, self.get_action_from_obs(self.obs_matrix[traj][neighbor.obs_num])))
+            X = np.vstack((X, self.obs_matrix[traj_num][obs_num]))
+            Y = np.vstack((Y, self.expert_data[traj_num]['actions'][obs_num]))
 
         X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
         query_point = np.concatenate(([1], self.obs_history[0]))
@@ -197,8 +200,9 @@ class NNAgentEuclidean(NNAgent):
 
     def linearly_regress_dynamic_time_warping(self, current_ob):
         self.update_obs_history(current_ob)
-        # if len(self.obs_history) == 1:
-        #   return self.linearly_regress()
+        if len(self.obs_history) == 1:
+          return self.linearly_regress(current_ob)
+        t_start = time.perf_counter()
         
         flattened_matrix = self.obs_matrix.flatten().reshape(-1, self.obs_matrix.shape[2])
         distances = cdist(current_ob.reshape(1, self.obs_matrix.shape[2]), flattened_matrix, metric='euclidean')
@@ -217,11 +221,10 @@ class NNAgentEuclidean(NNAgent):
             obs_num = neighbor % self.obs_matrix.shape[1]
             max_lookback = min(self.lookback, min(obs_num + 1, len(self.obs_history)))
 
-            t_init = time.perf_counter()
-
             weighted_obs_history = self.obs_history[:max_lookback] * mask
             weighted_obs_matrix = self.obs_matrix[traj_num][obs_num - max_lookback + 1:obs_num + 1] * mask
 
+            t_init = time.perf_counter()
             distances = cdist(weighted_obs_history, weighted_obs_matrix, 'euclidean')
 
             i_array = np.arange(1, max_lookback + 1, dtype=float)[:, np.newaxis]
@@ -243,8 +246,6 @@ class NNAgentEuclidean(NNAgent):
                 print(f"Init: {(t_init - t_neighbor_start) / t_total}%")
                 print(f"Loop: {(t_loop_done - t_init) / t_total}%")
                 print(f"Accumulation: {(t_neighbor_done - t_loop_done) / t_total}%")
-        t_end = time.perf_counter()
-        breakpoint()
 
         X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
         query_point = np.concatenate(([1], self.obs_history[0]))
@@ -252,7 +253,9 @@ class NNAgentEuclidean(NNAgent):
         X_weights = X.T * accum_distance
         theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
         
-        # print(f"Total time: {t_end - t_init_done}")
+        t_end = time.perf_counter()
+        # print(f"Neighbor time: {t_neighbor_done - t_init_done}")
+        # print(f"Total time: {t_end - t_start}")
         return query_point @ theta
 
     @staticmethod

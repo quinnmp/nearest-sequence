@@ -58,7 +58,6 @@ for candidate_num in candidates:
                         # action = nn_agent.old_find_nearest_sequence_dynamic_time_warping()
                         # action = nn_agent.linearly_regress()
                         action = nn_agent.linearly_regress_dynamic_time_warping(observation)
-                        print(f"action: {action}")
                         t_post_action = time.perf_counter()
                         observation, reward, done, info = env.step(action)
                         t_env_step = time.perf_counter()
@@ -81,8 +80,8 @@ for candidate_num in candidates:
 
                     success += info['success'] if 'success' in info else 0
                     episode_rewards.append(episode_reward)
+                    print(episode_reward)
                     trial += 1
-                    print(trial)
                     if trial >= 100:
                         break
 
