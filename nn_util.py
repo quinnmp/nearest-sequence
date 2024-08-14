@@ -220,7 +220,7 @@ class NNAgentEuclidean(NNAgent):
             t_init = time.perf_counter()
 
             weighted_obs_history = self.obs_history[:max_lookback] * mask
-            weighted_obs_matrix = self.obs_matrix[traj_num][obs_num + 1 - max_lookback + 1:obs_num + 1]
+            weighted_obs_matrix = self.obs_matrix[traj_num][obs_num - max_lookback + 1:obs_num + 1] * mask
 
             distances = cdist(weighted_obs_history, weighted_obs_matrix, 'euclidean')
 
@@ -244,6 +244,7 @@ class NNAgentEuclidean(NNAgent):
                 print(f"Loop: {(t_loop_done - t_init) / t_total}%")
                 print(f"Accumulation: {(t_neighbor_done - t_loop_done) / t_total}%")
         t_end = time.perf_counter()
+        breakpoint()
 
         X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
         query_point = np.concatenate(([1], self.obs_history[0]))
