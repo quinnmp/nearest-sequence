@@ -53,11 +53,10 @@ for candidate_num in candidates:
                     steps = 0
                     while True:
                         t_start = time.perf_counter()
-                        # action = nn_agent.get_action_from_obs(nn_agent.obs_list[0])
-                        # action = nn_agent.find_nearest_sequence()
-                        # action = nn_agent.old_find_nearest_sequence_dynamic_time_warping()
+                        # action = nn_agent.find_nearest_neighbor(observation)
+                        action = nn_agent.find_nearest_sequence(observation)
                         # action = nn_agent.linearly_regress()
-                        action = nn_agent.linearly_regress_dynamic_time_warping(observation)
+                        # action = nn_agent.linearly_regress_dynamic_time_warping(observation)
                         t_post_action = time.perf_counter()
                         observation, reward, done, info = env.step(action)
                         t_env_step = time.perf_counter()
@@ -80,9 +79,9 @@ for candidate_num in candidates:
 
                     success += info['success'] if 'success' in info else 0
                     episode_rewards.append(episode_reward)
-                    print(episode_reward)
                     trial += 1
-                    if trial >= 100:
+                    print(trial)
+                    if trial >= 10:
                         break
 
-                print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {decay_num}, window {window_num}: {np.mean(episode_rewards)}, {success}")
+                print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {decay_num}, window {window_num}: {np.mean(episode_rewards)}, {np.std(episode_rewards)}")

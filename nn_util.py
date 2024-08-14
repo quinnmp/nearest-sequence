@@ -87,40 +87,73 @@ class NNAgentMahalanobis(NNAgent):
         self.update_obs_history(current_ob)
 
     def find_nearest_sequence(self):
-        nearest_neighbors = self.obs_list[:self.candidates]
-        accum_distance = []
+        self.update_obs_history(current_ob)
+        if len(self.obs_history) == 1:
+          return self.find_nearest_neighbor(current_ob)
+        t_start = time.perf_counter()
+        
+        flattened_matrix = self.obs_matrix.flatten().reshape(-1, self.obs_matrix.shape[2])
+        distances = cdist(current_ob.reshape(1, -1), flattened_matrix, metric='euclidean')
+        
+        nearest_neighbors = np.argpartition(distances.flatten(), kth=self.candidates)[:self.candidates]
 
         for neighbor in nearest_neighbors:
-            accum_distance.append(0)
-            traj = neighbor.traj_num
-            max_lookback = min(self.lookback, min(neighbor.obs_num + 1, len(self.obs_history)))
-            for i in range(min(self.lookback, len(self.obs_history))):
-                delta = self.obs_history[i] - self.obs_matrix[traj][max(0, neighbor.obs_num - i)].obs
-                accum_distance[-1] += np.sqrt(np.einsum('ij,jk,ik->i', delta.reshape(1, -1), self.inv_cov_mat, delta.reshape(1, -1))) * (1 / (i + 1))
-            accum_distance[-1] / max_lookback
+            traj_num = neighbor // self.obs_matrix.shape[1]
+            obs_num = neighbor % self.obs_matrix.shape[1]
+            max_lookback = min(self.lookback, min(obs_num + 1, len(self.obs_history)))
+
+            weighted_obs_history = self.obs_history[:max_lookback] * mask
+            weighted_obs_matrix = self.obs_matrix[traj_num][obs_num - max_lookback + 1:obs_num + 1] * mask
+
+            diff = weighted_obs_history - weighted_obs_matrix
 
         return nearest_neighbors[np.argmin(accum_distance)]
 
 class NNAgentEuclidean(NNAgent):
-    def find_nearest_sequence(self):
-        if self.obs_history.ndim == 1:
-            return self.get_action_from_obs(self.obs_list[0])
+    def find_nearest_neighbor(self, current_ob):
+        flattened_matrix = self.obs_matrix.flatten().reshape(-1, self.obs_matrix.shape[2])
+        distances = cdist(current_ob.reshape(1, -1), flattened_matrix, metric='euclidean')
+        nearest_neighbor = np.argmin(distances)
+        print(nearest_neighbor)
+        traj_num = nearest_neighbor // self.obs_matrix.shape[1]
+        obs_num = nearest_neighbor % self.obs_matrix.shape[1]
 
-        nearest_neighbors = self.obs_list[:self.candidates]
-        accum_distance = []
+        return self.expert_data[traj_num]['actions'][obs_num]
+
+    def find_nearest_sequence(self, current_ob):
+        self.update_obs_history(current_ob)
+        if len(self.obs_history) == 1:
+            return self.find_nearest_neighbor(current_ob)
+        
+        flattened_matrix = self.obs_matrix.flatten().reshape(-1, self.obs_matrix.shape[2])
+        distances = cdist(current_ob.reshape(1, -1), flattened_matrix, metric='euclidean')
+        
+        nearest_neighbors = np.argpartition(distances.flatten(), kth=self.candidates)[:self.candidates]
+
+        accum_distance = np.zeros(self.candidates)
         mask = np.ones(len(self.expert_data[0]['observations'][0]))
-        # mask = [1, 1, 1, 1, 1, 1, 0, 0.5, 0.5, 0.5, 0.5, 1, 1, 0, 0.5, 0.5, 0.5, 0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1]
-        # mask = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1]
 
-        for neighbor in nearest_neighbors:
-            accum_distance.append(0)
-            traj = neighbor.traj_num
-            max_lookback = min(self.lookback, min(neighbor.obs_num + 1, len(self.obs_history)))
-            for i in range(max_lookback):
-                accum_distance[-1] += distance.euclidean(self.obs_history[i] * mask, self.obs_matrix[traj][neighbor.obs_num - i].obs * mask) * (1 / ((1) ** 2))
-            accum_distance[-1] / max_lookback
+        for i, neighbor in enumerate(nearest_neighbors):
+            traj_num = neighbor // self.obs_matrix.shape[1]
+            obs_num = neighbor % self.obs_matrix.shape[1]
+            max_lookback = min(self.lookback, min(obs_num + 1, len(self.obs_history)))
 
-        return self.get_action_from_obs(nearest_neighbors[np.argmin(accum_distance)])
+            weighted_obs_history = self.obs_history[:max_lookback] * mask
+            weighted_obs_matrix = np.flip(self.obs_matrix[traj_num][obs_num - max_lookback + 1:obs_num + 1] * mask)
+
+            distances = cdist(weighted_obs_history, weighted_obs_matrix, 'euclidean')
+            
+            i_array = np.arange(1, max_lookback + 1, dtype=float)[:, np.newaxis]
+            distances *= np.power(i_array, self.decay)
+
+            accum_distance[i] = np.mean(distances)
+
+        nearest_sequence = nearest_neighbors[np.argmin(accum_distance)]
+        print(nearest_sequence)
+        traj_num = nearest_sequence // self.obs_matrix.shape[1]
+        obs_num = nearest_sequence % self.obs_matrix.shape[1]
+
+        return self.expert_data[traj_num]['actions'][obs_num]
     
     def find_nearest_sequence_dynamic_time_warping(self):
         if len(self.obs_history) == 1:
@@ -223,7 +256,7 @@ class NNAgentEuclidean(NNAgent):
             max_lookback = min(self.lookback, min(obs_num + 1, len(self.obs_history)))
 
             weighted_obs_history = self.obs_history[:max_lookback] * mask
-            weighted_obs_matrix = self.obs_matrix[traj_num][obs_num - max_lookback + 1:obs_num + 1] * mask
+            weighted_obs_matrix = np.flip(self.obs_matrix[traj_num][obs_num - max_lookback + 1:obs_num + 1] * mask)
 
             t_init = time.perf_counter()
             distances = cdist(weighted_obs_history, weighted_obs_matrix, 'euclidean')
@@ -295,6 +328,14 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
         save_expert_data(expert_data, new_path)
 
         super().__init__(new_path, plot=plot, candidates=candidates, lookback=lookback, decay=decay, window=window)
+
+    def find_nearest_neighbor(self, current_ob):
+        standardized_ob = (current_ob - self.mins) / self.maxes
+        return super().find_nearest_neighbor(standardized_ob)
+
+    def find_nearest_sequence(self, current_ob):
+        standardized_ob = (current_ob - self.mins) / self.maxes
+        return super().find_nearest_sequence(standardized_ob)
 
     def linearly_regress_dynamic_time_warping(self, current_ob):
         standardized_ob = (current_ob - self.mins) / self.maxes
