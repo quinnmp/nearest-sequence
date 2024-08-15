@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from numba import jit
 
-DEBUG = True
+DEBUG = False
 
 def calculate_inverse_covariance_obs_matrix(expert_data):
     observations = np.concatenate([traj['observations'] for traj in expert_data])
@@ -196,38 +196,25 @@ class NNAgentEuclidean(NNAgent):
         
         nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates]
 
-        accum_distance = np.zeros(self.candidates)
+        traj_nums = nearest_neighbors // self.obs_matrix.shape[1]
+        obs_nums = nearest_neighbors % self.obs_matrix.shape[1]
+        
+        max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, len(self.obs_history)))
+        
         mask = np.ones(len(self.expert_data[0]['observations'][0]))
-        X = np.zeros((self.candidates, len(self.expert_data[0]['observations'][0])))
-        Y = np.zeros((self.candidates, len(self.expert_data[0]['actions'][0])))
-
-        t_init_done = time.perf_counter()
-        for i, neighbor in enumerate(nearest_neighbors):
-            t_neighbor_start = time.perf_counter()
-            traj_num = neighbor // self.obs_matrix.shape[1]
-            obs_num = neighbor % self.obs_matrix.shape[1]
-            max_lookback = min(self.lookback, min(obs_num + 1, len(self.obs_history)))
-
-            weighted_obs_history = self.obs_history[:max_lookback] * mask
-            weighted_obs_matrix = (self.obs_matrix[traj_num][obs_num - max_lookback + 1:obs_num + 1] * mask)[::-1, :]
-
-            t_section = time.perf_counter()
-            distances = cdist(weighted_obs_history, weighted_obs_matrix, 'euclidean')
-            i_array = np.arange(1, max_lookback + 1, dtype=float)
-            
-            decayed_distances = distances * np.power(i_array, self.decay)
-            
-            accum_distance[i] = np.sum(decayed_distances.diagonal()) / max_lookback
-
-            X[i] = self.obs_matrix[traj_num][obs_num]
-            Y[i] = self.expert_data[traj_num]['actions'][obs_num]
-
-            t_neighbor_done = time.perf_counter()
-            t_total = t_neighbor_done - t_neighbor_start
-            if DEBUG:
-                print(f"Neighbor total: {t_total}")
-                print(f"Section: {(t_section - t_neighbor_start) / t_total}%")
-        t_neighbor_end = time.perf_counter()
+        weighted_obs_history = self.obs_history * mask
+        
+        i_array = np.arange(1, self.lookback + 1, dtype=float)
+        decay_factors = np.power(i_array, self.decay)
+        
+        accum_distance = np.zeros(self.candidates)
+        X = self.obs_matrix[traj_nums, obs_nums]
+        Y = np.array([self.expert_data[tn]['actions'][on] for tn, on in zip(traj_nums, obs_nums)])
+        
+        for i, (tn, on, max_lb) in enumerate(zip(traj_nums, obs_nums, max_lookbacks)):
+            weighted_obs_matrix = (self.obs_matrix[tn, on - max_lb + 1:on + 1] * mask)[::-1]
+            distances = np.linalg.norm(weighted_obs_history[:max_lb] - weighted_obs_matrix, axis=1)
+            accum_distance[i] = np.sum(distances * decay_factors[:max_lb]) / max_lb
         
         X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
         query_point = np.concatenate(([1], self.obs_history[0]))

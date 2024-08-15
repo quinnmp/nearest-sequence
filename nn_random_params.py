@@ -11,7 +11,7 @@ import yaml
 import argparse
 import d4rl
 
-DEBUG = False
+DEBUG = True
 
 parser = argparse.ArgumentParser()
 parser.add_argument("config_path", help="Path to config file")
@@ -65,6 +65,7 @@ while True:
             # action = nn_agent.find_nearest_sequence(observation)
             # action = nn_agent.find_nearest_sequence_dynamic_time_warping(observation)
             action = nn_agent.linearly_regress(observation)
+            print(action)
             # action = nn_agent.linearly_regress_dynamic_time_warping(observation)
             t_post_action = time.perf_counter()
             observation, reward, done, info = env.step(action)
