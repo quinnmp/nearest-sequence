@@ -11,7 +11,7 @@ import yaml
 import argparse
 import d4rl
 
-DEBUG = True
+DEBUG = False
 
 parser = argparse.ArgumentParser()
 parser.add_argument("config_path", help="Path to config file")
@@ -27,18 +27,20 @@ lookback = config['policy']['lookback']
 decay = config['policy']['decay_rate']
 window = config['policy']['dtw_window']
 
-best_score = 3435
-candidate_num = 144
+# 1196 - best NN
+# 3450 - best NS
+best_score = 0
+candidate_num = 0
 lookback_num = 1
-decay_num = 1
-window_num = 1
+decay_num = 0
+window_num = 0
 
 np.random.seed(config['seed'])
 while True:
-    candidate_num = round(np.random.rand() * 200) + 1 
-    lookback_num = round(np.random.rand() * 100) + 1 
-    decay_num = round(np.random.rand() * -3, 1) 
-    # window_num = round(np.random.rand() * 50) + 1 
+    candidate_num += 1
+    # lookback_num = round(np.random.rand() * 50) + 1
+    # decay_num = round(np.random.rand() * -6, 1) + 3
+    # window_num = round(np.random.rand() * 6)
     if config['metaworld']:
         env = _env_dict.MT50_V2[config['env']]()
         env._partially_observable = False
@@ -65,7 +67,6 @@ while True:
             # action = nn_agent.find_nearest_sequence(observation)
             # action = nn_agent.find_nearest_sequence_dynamic_time_warping(observation)
             action = nn_agent.linearly_regress(observation)
-            print(action)
             # action = nn_agent.linearly_regress_dynamic_time_warping(observation)
             t_post_action = time.perf_counter()
             observation, reward, done, info = env.step(action)
@@ -90,7 +91,7 @@ while True:
         success += info['success'] if 'success' in info else 0
         episode_rewards.append(episode_reward)
         trial += 1
-        if trial >= 10:
+        if trial >= 100:
             break
 
     if np.mean(episode_rewards) > best_score:

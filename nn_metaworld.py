@@ -82,7 +82,7 @@ for candidate_num in candidates:
                     success += info['success'] if 'success' in info else 0
                     episode_rewards.append(episode_reward)
                     trial += 1
-                    if trial >= 10:
+                    if trial >= 100:
                         break
 
                 print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {decay_num}, window {window_num}: {np.mean(episode_rewards)}, {np.std(episode_rewards)}")

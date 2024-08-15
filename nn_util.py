@@ -211,10 +211,13 @@ class NNAgentEuclidean(NNAgent):
         X = self.obs_matrix[traj_nums, obs_nums]
         Y = np.array([self.expert_data[tn]['actions'][on] for tn, on in zip(traj_nums, obs_nums)])
         
+        t_section_start = time.perf_counter()
         for i, (tn, on, max_lb) in enumerate(zip(traj_nums, obs_nums, max_lookbacks)):
             weighted_obs_matrix = (self.obs_matrix[tn, on - max_lb + 1:on + 1] * mask)[::-1]
             distances = np.linalg.norm(weighted_obs_history[:max_lb] - weighted_obs_matrix, axis=1)
+
             accum_distance[i] = np.sum(distances * decay_factors[:max_lb]) / max_lb
+        t_section_end = time.perf_counter()
         
         X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
         query_point = np.concatenate(([1], self.obs_history[0]))
@@ -223,59 +226,41 @@ class NNAgentEuclidean(NNAgent):
         theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
         
         t_end = time.perf_counter()
-        # print(f"Neighbor time: {t_neighbor_end - t_init_done}")
+        t_total = t_end - t_start
+        # print(f"Section time: {(t_section_end - t_section_start) / t_total}")
         # print(f"Total time: {t_end - t_start}")
         return query_point @ theta
 
     def linearly_regress_dynamic_time_warping(self, current_ob):
         self.update_obs_history(current_ob)
-        t_start = time.perf_counter()
         
         flattened_matrix = self.obs_matrix.flatten().reshape(-1, self.obs_matrix.shape[2])
         all_distances = cdist(current_ob.reshape(1, -1), flattened_matrix, metric='euclidean')
         
         nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates]
 
-        accum_distance = np.zeros(self.candidates)
-        mask = np.ones(len(self.expert_data[0]['observations'][0]))
-        X = np.zeros((self.candidates, len(self.expert_data[0]['observations'][0])))
-        Y = np.zeros((self.candidates, len(self.expert_data[0]['actions'][0])))
-
-        t_init_done = time.perf_counter()
+        traj_nums = nearest_neighbors // self.obs_matrix.shape[1]
+        obs_nums = nearest_neighbors % self.obs_matrix.shape[1]
         
-        for i, neighbor in enumerate(nearest_neighbors):
-            t_neighbor_start = time.perf_counter()
-            traj_num = neighbor // self.obs_matrix.shape[1]
-            obs_num = neighbor % self.obs_matrix.shape[1]
-            max_lookback = min(self.lookback, min(obs_num + 1, len(self.obs_history)))
+        max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, len(self.obs_history)))
 
-            weighted_obs_history = self.obs_history[:max_lookback] * mask
-            weighted_obs_matrix = (self.obs_matrix[traj_num][obs_num - max_lookback + 1:obs_num + 1] * mask)[::-1, :]
+        mask = np.ones(len(self.expert_data[0]['observations'][0]))
+        weighted_obs_history = self.obs_history * mask
 
-            t_init = time.perf_counter()
-            distances = cdist(weighted_obs_history, weighted_obs_matrix, 'euclidean')
-            i_array = np.arange(1, max_lookback + 1, dtype=float)
+        i_array = np.arange(1, self.lookback + 1, dtype=float)
+        decay_factors = np.power(i_array, self.decay)
 
-            decayed_distances = distances * np.power(i_array, self.decay)
-
-            dtw_result = self._compute_dtw(decayed_distances, max_lookback, self.window)
+        accum_distance = np.zeros(self.candidates)
+        X = self.obs_matrix[traj_nums, obs_nums]
+        Y = np.array([self.expert_data[tn]['actions'][on] for tn, on in zip(traj_nums, obs_nums)])
+        
+        for i, (tn, on, max_lb) in enumerate(zip(traj_nums, obs_nums, max_lookbacks)):
+            weighted_obs_matrix = (self.obs_matrix[tn, on - max_lb + 1:on + 1] * mask)[::-1]
             
-            t_loop_done = time.perf_counter()
-
-            accum_distance[i] = dtw_result / max_lookback
-
-            X[i] = self.obs_matrix[traj_num][obs_num]
-            Y[i] = self.expert_data[traj_num]['actions'][obs_num]
-
-            t_neighbor_done = time.perf_counter()
-            t_total = t_neighbor_done - t_neighbor_start
-            if DEBUG:
-                print(f"Neighbor total: {t_total}")
-                # print(f"Init section: {(t_init_section - t_neighbor_start) / (t_init - t_neighbor_start)}")
-                print(f"Init: {(t_init - t_neighbor_start) / t_total}%")
-                print(f"Loop: {(t_loop_done - t_init) / t_total}%")
-                print(f"Accumulation: {(t_neighbor_done - t_loop_done) / t_total}%")
-
+            # Vectorized distance calculation
+            distances = np.linalg.norm((weighted_obs_history[:max_lb, None] - weighted_obs_matrix[None, :]), axis=2)
+            
+            accum_distance[i] = self._compute_dtw(distances * decay_factors[:max_lb], max_lb, self.window) / max_lb
         X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
         query_point = np.concatenate(([1], self.obs_history[0]))
 
@@ -319,7 +304,7 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
                 expert_data[i]['observations'][j] = (o - self.mins) / self.maxes
 
         new_path = expert_data_path[:-4] + '_normalized.pkl'
-        save_expert_data(expert_data[:2], new_path)
+        save_expert_data(expert_data[:1], new_path)
 
         super().__init__(new_path, plot=plot, candidates=candidates, lookback=lookback, decay=decay, window=window)
 
