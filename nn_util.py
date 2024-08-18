@@ -34,6 +34,28 @@ def create_matrices(expert_data):
     obs_matrix = np.asarray(obs_matrix)
     return obs_matrix
 
+@jit(nopython=True)
+def fast_computation(X, Y, accum_distance, obs_history):
+    n_samples = X.shape[0]
+    
+    X = np.hstack((np.ones((n_samples, 1), dtype=np.float64), X.astype(np.float64)))
+    query_point = np.hstack((np.array([1], dtype=np.float64), obs_history[0].astype(np.float64)))
+
+    accum_distance = accum_distance.astype(np.float64)
+    Y = Y.astype(np.float64)
+
+    X_weights = X.T * accum_distance
+
+    # If pinv fails to converge, try again with a tiny amount of noise
+    # (This should be extremely uncommon)
+    try:
+        theta = np.linalg.pinv((X_weights @ X)) @ (X_weights @ Y)
+    except:
+        print("FAILED TO CONVERGE, ADDING NOISE")
+        theta = np.linalg.pinv((X_weights @ X) + 1e-8) @ (X_weights @ Y)
+    
+    return query_point @ theta
+
 class NNAgent:
     def __init__(self, expert_data_path, plot=False, candidates=10, lookback=20, decay=-1, window=10):
         self.expert_data = load_expert_data(expert_data_path)
@@ -217,19 +239,15 @@ class NNAgentEuclidean(NNAgent):
             distances = np.linalg.norm(weighted_obs_history[:max_lb] - weighted_obs_matrix, axis=1)
 
             accum_distance[i] = np.sum(distances * decay_factors[:max_lb]) / max_lb
-        t_section_end = time.perf_counter()
-        
-        X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
-        query_point = np.concatenate(([1], self.obs_history[0]))
 
-        X_weights = X.T * accum_distance
-        theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
+        t_section_end = time.perf_counter()
+        action = fast_computation(X, Y, accum_distance, self.obs_history)
         
         t_end = time.perf_counter()
-        t_total = t_end - t_start
-        # print(f"Section time: {(t_section_end - t_section_start) / t_total}")
-        # print(f"Total time: {t_end - t_start}")
-        return query_point @ theta
+        if DEBUG:
+            t_total = t_end - t_start
+            print(f"Section time: {(t_section_end - t_section_start) / t_total}")
+        return action
 
     def linearly_regress_dynamic_time_warping(self, current_ob):
         self.update_obs_history(current_ob)
@@ -304,7 +322,7 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
                 expert_data[i]['observations'][j] = (o - self.mins) / self.maxes
 
         new_path = expert_data_path[:-4] + '_normalized.pkl'
-        save_expert_data(expert_data[:1], new_path)
+        save_expert_data(expert_data, new_path)
 
         super().__init__(new_path, plot=plot, candidates=candidates, lookback=lookback, decay=decay, window=window)
 

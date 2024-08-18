@@ -2,7 +2,7 @@ seed: 42
 metaworld: false
 env: "ant-expert-v2"
 data:
-  pkl: "data/ant-expert-v2_10.pkl"
+  pkl: "data/ant-expert-v2-clean_10.pkl"
 policy:
   k_neighbors:
     - 200

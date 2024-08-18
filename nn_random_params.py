@@ -27,20 +27,20 @@ lookback = config['policy']['lookback']
 decay = config['policy']['decay_rate']
 window = config['policy']['dtw_window']
 
-# 1196 - best NN
-# 3450 - best NS
 best_score = 0
-candidate_num = 0
-lookback_num = 1
-decay_num = 0
+candidate_num = candidates[0]
+lookback_num = lookback[0]
+decay_num = decay[0]
 window_num = 0
 
 np.random.seed(config['seed'])
 while True:
-    candidate_num += 1
+    # candidate_num += 1
+    # candidate_num = round(np.random.rand() * 100) + 250 
     # lookback_num = round(np.random.rand() * 50) + 1
     # decay_num = round(np.random.rand() * -6, 1) + 3
-    # window_num = round(np.random.rand() * 6)
+    # window_num = round(np.random.rand() * 25)
+    window_num += 1
     if config['metaworld']:
         env = _env_dict.MT50_V2[config['env']]()
         env._partially_observable = False
@@ -57,6 +57,8 @@ while True:
     trial = 0
     while True:
         observation = env.reset()
+        if 'ant' in config['env']:
+            observation = observation[:27]
         nn_agent.obs_history = np.array([])
 
         episode_reward = 0.0
@@ -66,10 +68,12 @@ while True:
             # action = nn_agent.find_nearest_neighbor(observation)
             # action = nn_agent.find_nearest_sequence(observation)
             # action = nn_agent.find_nearest_sequence_dynamic_time_warping(observation)
-            action = nn_agent.linearly_regress(observation)
-            # action = nn_agent.linearly_regress_dynamic_time_warping(observation)
+            # action = nn_agent.linearly_regress(observation)
+            action = nn_agent.linearly_regress_dynamic_time_warping(observation)
             t_post_action = time.perf_counter()
             observation, reward, done, info = env.step(action)
+            if 'ant' in config['env']:
+                observation = observation[:27]
             t_env_step = time.perf_counter()
 
             episode_reward += reward
@@ -84,9 +88,9 @@ while True:
             t_total = t_end - t_start
             if DEBUG:
                 print(f"Step total: {t_total}")
-                print(f"Action: {(t_post_action - t_start) / t_total}%")
-                print(f"Env step: {(t_env_step - t_post_action) / t_total}%")
-                print(f"Finishing up: {(t_end - t_env_step) / t_total}%")
+                # print(f"Action: {(t_post_action - t_start) / t_total}%")
+                # print(f"Env step: {(t_env_step - t_post_action) / t_total}%")
+                # print(f"Finishing up: {(t_end - t_env_step) / t_total}%")
 
         success += info['success'] if 'success' in info else 0
         episode_rewards.append(episode_reward)

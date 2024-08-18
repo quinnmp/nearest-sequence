@@ -1,13 +1,14 @@
 import pickle
 import numpy as np
 
-IN_PATH = "grasp_cube_100_xyz_first_10.pkl"
-OUT_PATH = "grasp_cube_100_xyz_first_2.pkl"
+IN_PATH = "data/ant-expert-v2_10.pkl"
+OUT_PATH = "data/ant-expert-v2-clean_10.pkl"
 
 with open(IN_PATH, 'rb') as f:
     data = pickle.load(f)
 
-new_data = data[:2]
+for i in range(len(data)):
+    data[i]['observations'] = data[i]['observations'][:, :27]
 
 with open(OUT_PATH, 'wb') as f:
-    pickle.dump(new_data, f)
+    pickle.dump(data, f)

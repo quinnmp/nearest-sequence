@@ -48,6 +48,8 @@ for candidate_num in candidates:
                 trial = 0
                 while True:
                     observation = env.reset()
+                    if 'ant' in config['env']:
+                        observation = observation[:27]
                     nn_agent.obs_history = np.array([])
 
                     episode_reward = 0.0
@@ -57,10 +59,12 @@ for candidate_num in candidates:
                         # action = nn_agent.find_nearest_neighbor(observation)
                         # action = nn_agent.find_nearest_sequence(observation)
                         # action = nn_agent.find_nearest_sequence_dynamic_time_warping(observation)
-                        # action = nn_agent.linearly_regress(observation)
-                        action = nn_agent.linearly_regress_dynamic_time_warping(observation)
+                        action = nn_agent.linearly_regress(observation)
+                        # action = nn_agent.linearly_regress_dynamic_time_warping(observation)
                         t_post_action = time.perf_counter()
                         observation, reward, done, info = env.step(action)
+                        if 'ant' in config['env']:
+                            observation = observation[:27]
                         t_env_step = time.perf_counter()
 
                         episode_reward += reward
