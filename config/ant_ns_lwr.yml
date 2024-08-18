@@ -1,0 +1,14 @@
+seed: 42
+metaworld: false
+env: "ant-expert-v2"
+data:
+  pkl: "data/ant-expert-v2-clean_10.pkl"
+policy:
+  k_neighbors:
+    - 253
+  lookback: 
+    - 46
+  decay_rate:
+    - 1.4
+  dtw_window: 
+    - 0
