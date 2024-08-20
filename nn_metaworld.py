@@ -59,8 +59,8 @@ for candidate_num in candidates:
                         # action = nn_agent.find_nearest_neighbor(observation)
                         # action = nn_agent.find_nearest_sequence(observation)
                         # action = nn_agent.find_nearest_sequence_dynamic_time_warping(observation)
-                        action = nn_agent.linearly_regress(observation)
-                        # action = nn_agent.linearly_regress_dynamic_time_warping(observation)
+                        # action = nn_agent.linearly_regress(observation)
+                        action = nn_agent.linearly_regress_dynamic_time_warping(observation)
                         t_post_action = time.perf_counter()
                         observation, reward, done, info = env.step(action)
                         if 'ant' in config['env']:

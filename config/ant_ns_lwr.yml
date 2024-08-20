@@ -11,4 +11,4 @@ policy:
   decay_rate:
     - 1.4
   dtw_window: 
-    - 0
+    - 18

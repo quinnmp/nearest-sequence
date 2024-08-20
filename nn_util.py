@@ -322,7 +322,7 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
                 expert_data[i]['observations'][j] = (o - self.mins) / self.maxes
 
         new_path = expert_data_path[:-4] + '_normalized.pkl'
-        save_expert_data(expert_data, new_path)
+        save_expert_data(expert_data[:5], new_path)
 
         super().__init__(new_path, plot=plot, candidates=candidates, lookback=lookback, decay=decay, window=window)
 

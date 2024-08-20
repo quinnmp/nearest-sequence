@@ -36,7 +36,7 @@ window_num = 0
 np.random.seed(config['seed'])
 while True:
     # candidate_num += 1
-    # candidate_num = round(np.random.rand() * 100) + 250 
+    # candidate_num = round(np.random.rand() * 40) + 70
     # lookback_num = round(np.random.rand() * 50) + 1
     # decay_num = round(np.random.rand() * -6, 1) + 3
     # window_num = round(np.random.rand() * 25)
