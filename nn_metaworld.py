@@ -27,6 +27,18 @@ lookback = config['policy']['lookback']
 decay = config['policy']['decay_rate']
 window = config['policy']['dtw_window']
 
+def crop_obs_for_env(obs, env):
+    if env == "ant-expert-v2":
+        return obs[:27]
+    if env == "coffee-pull-v2" or env == "coffee-push-v2":
+        return np.concatenate((obs[:11], obs[18:29], obs[-3:len(obs)]))
+    if env == "button-press-topdown-v2":
+        return np.concatenate((obs[:9], obs[18:27], obs[-2:len(obs)]))
+    if env == "drawer-close-v2":
+        return np.concatenate((obs[:7], obs[18:25], obs[-3:len(obs)]))
+    else:
+        return obs
+
 for candidate_num in candidates:
     for lookback_num in lookback:
         for decay_num in decay:
@@ -47,9 +59,8 @@ for candidate_num in candidates:
                 success = 0
                 trial = 0
                 while True:
-                    observation = env.reset()
-                    if 'ant' in config['env']:
-                        observation = observation[:27]
+                    observation = crop_obs_for_env(env.reset(), config['env'])
+
                     nn_agent.obs_history = np.array([])
 
                     episode_reward = 0.0
@@ -59,12 +70,11 @@ for candidate_num in candidates:
                         # action = nn_agent.find_nearest_neighbor(observation)
                         # action = nn_agent.find_nearest_sequence(observation)
                         # action = nn_agent.find_nearest_sequence_dynamic_time_warping(observation)
-                        # action = nn_agent.linearly_regress(observation)
-                        action = nn_agent.linearly_regress_dynamic_time_warping(observation)
+                        action = nn_agent.linearly_regress(observation)
+                        # action = nn_agent.linearly_regress_dynamic_time_warping(observation)
                         t_post_action = time.perf_counter()
                         observation, reward, done, info = env.step(action)
-                        if 'ant' in config['env']:
-                            observation = observation[:27]
+                        observation = crop_obs_for_env(observation, config['env'])
                         t_env_step = time.perf_counter()
 
                         episode_reward += reward

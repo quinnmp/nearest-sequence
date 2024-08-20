@@ -28,19 +28,33 @@ decay = config['policy']['decay_rate']
 window = config['policy']['dtw_window']
 
 best_score = 0
-candidate_num = candidates[0]
-lookback_num = lookback[0]
-decay_num = decay[0]
+candidate_num = 150
+lookback_num = 1
+decay_num = 0
 window_num = 0
 
 np.random.seed(config['seed'])
+
+def crop_obs_for_env(obs, env):
+    if env == "ant-expert-v2":
+        return obs[:27]
+    if env == "coffee-pull-v2" or env == "coffee-push-v2":
+        return np.concatenate((obs[:11], obs[18:29], obs[-3:len(obs)]))
+    if env == "button-press-topdown-v2":
+        return np.concatenate((obs[:9], obs[18:27], obs[-2:len(obs)]))
+    if env == "drawer-close-v2":
+        return np.concatenate((obs[:7], obs[18:25], obs[-3:len(obs)]))
+    else:
+        return obs
+
 while True:
-    # candidate_num += 1
-    # candidate_num = round(np.random.rand() * 40) + 70
-    # lookback_num = round(np.random.rand() * 50) + 1
-    # decay_num = round(np.random.rand() * -6, 1) + 3
+    np.random.seed(int(time.time()))
+    # candidate_num += 5
+    candidate_num = round(np.random.rand() * 40) + 150
+    lookback_num = round(np.random.rand() * 50) + 1
+    decay_num = round(np.random.rand() * -6, 1) + 3
     # window_num = round(np.random.rand() * 25)
-    window_num += 1
+    # window_num += 1
     if config['metaworld']:
         env = _env_dict.MT50_V2[config['env']]()
         env._partially_observable = False
@@ -49,6 +63,7 @@ while True:
     else:
         env = gym.make(config['env'])
     env.seed(config['seed'])
+    np.random.seed(config['seed'])
 
     nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, window=window_num)
 
@@ -56,9 +71,8 @@ while True:
     success = 0
     trial = 0
     while True:
-        observation = env.reset()
-        if 'ant' in config['env']:
-            observation = observation[:27]
+        observation = crop_obs_for_env(env.reset(), config['env'])
+
         nn_agent.obs_history = np.array([])
 
         episode_reward = 0.0
@@ -68,12 +82,12 @@ while True:
             # action = nn_agent.find_nearest_neighbor(observation)
             # action = nn_agent.find_nearest_sequence(observation)
             # action = nn_agent.find_nearest_sequence_dynamic_time_warping(observation)
-            # action = nn_agent.linearly_regress(observation)
-            action = nn_agent.linearly_regress_dynamic_time_warping(observation)
+            action = nn_agent.linearly_regress(observation)
+            # action = nn_agent.linearly_regress_dynamic_time_warping(observation)
             t_post_action = time.perf_counter()
             observation, reward, done, info = env.step(action)
-            if 'ant' in config['env']:
-                observation = observation[:27]
+            observation = crop_obs_for_env(observation, config['env'])
+
             t_env_step = time.perf_counter()
 
             episode_reward += reward
@@ -102,4 +116,4 @@ while True:
         best_score = np.mean(episode_rewards)
         print(f"**NEW BEST {best_score}**")
         
-    print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {decay_num}, window {window_num}: {np.mean(episode_rewards)}, {np.std(episode_rewards)}")
+    print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {round(decay_num, 2):.2f}, window {window_num}: {round(np.mean(episode_rewards), 2):.2f}, {round(np.std(episode_rewards), 2):.2f}")

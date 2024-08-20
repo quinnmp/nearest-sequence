@@ -2,7 +2,7 @@ seed: 42
 metaworld: false
 env: "walker2d-expert-v2"
 data:
-  pkl: "data/walker2d-expert-v2_20.pkl"
+  pkl: "data/walker2d-expert-v2_5.pkl"
 policy:
   k_neighbors:
     - 105
@@ -11,4 +11,4 @@ policy:
   decay_rate:
     - 2.3
   dtw_window: 
-    - 0
+    - 2

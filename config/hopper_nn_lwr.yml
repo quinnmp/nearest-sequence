@@ -2,7 +2,7 @@ seed: 42
 metaworld: false
 env: "hopper-expert-v2"
 data:
-  pkl: "data/hopper-expert-v2_25.pkl"
+  pkl: "data/hopper-expert-v2_10.pkl"
 policy:
   k_neighbors:
     - 200

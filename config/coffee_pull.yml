@@ -2,7 +2,7 @@ seed: 42
 metaworld: true
 env: "coffee-pull-v2"
 data:
-  pkl: "data/metaworld-coffee-pull-v2_50.pkl"
+  pkl: "data/metaworld-coffee-pull-v2_25_shortened.pkl"
 policy:
   k_neighbors:
     - 200
