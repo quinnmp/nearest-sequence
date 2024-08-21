@@ -5,10 +5,10 @@ data:
   pkl: "data/halfcheetah-expert-v2_50.pkl"
 policy:
   k_neighbors:
-    - 200
+    - 119
   lookback: 
-    - 50
+    - 48
   decay_rate:
-    - -0.5
+    - 2.4
   dtw_window: 
-    - 25
+    - 5

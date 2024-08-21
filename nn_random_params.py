@@ -50,10 +50,10 @@ def crop_obs_for_env(obs, env):
 while True:
     np.random.seed(int(time.time()))
     # candidate_num += 5
-    candidate_num = round(np.random.rand() * 40) + 150
-    lookback_num = round(np.random.rand() * 50) + 1
+    candidate_num = round(np.random.rand() * 300) + 0
+    lookback_num = round(np.random.rand() * 200) + 0
     decay_num = round(np.random.rand() * -6, 1) + 3
-    # window_num = round(np.random.rand() * 25)
+    window_num = round(np.random.rand() * 50)
     # window_num += 1
     if config['metaworld']:
         env = _env_dict.MT50_V2[config['env']]()
