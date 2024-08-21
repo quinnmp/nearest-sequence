@@ -216,7 +216,7 @@ class NNAgentEuclidean(NNAgent):
         flattened_matrix = self.obs_matrix.flatten().reshape(-1, self.obs_matrix.shape[2])
         all_distances = cdist(current_ob.reshape(1, -1), flattened_matrix, metric='euclidean')
         
-        nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates]
+        nearest_neighbors = np.sort(np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates])
 
         traj_nums = nearest_neighbors // self.obs_matrix.shape[1]
         obs_nums = nearest_neighbors % self.obs_matrix.shape[1]
@@ -241,13 +241,64 @@ class NNAgentEuclidean(NNAgent):
             accum_distance[i] = np.sum(distances * decay_factors[:max_lb]) / max_lb
 
         t_section_end = time.perf_counter()
-        action = fast_computation(X, Y, accum_distance, self.obs_history)
+        X = np.c_[np.ones(len(X)), X]
+        query_point = np.r_[1, self.obs_history[0]]
+
+        X_weights = X.T * accum_distance
+        theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
         
         t_end = time.perf_counter()
         if DEBUG:
             t_total = t_end - t_start
             print(f"Section time: {(t_section_end - t_section_start) / t_total}")
-        return action
+        return query_point @ theta
+
+    def sanity_linearly_regress(self, current_ob):
+        # Push the current observation to the history
+        self.update_obs_history(current_ob)
+        # Just get a list of all expert observations
+        flattened_matrix = self.obs_matrix.flatten().reshape(-1, self.obs_matrix.shape[2])
+        
+        # Calculate all distances
+        all_distances = np.linalg.norm(flattened_matrix - current_ob, axis=1)
+        sorted_distances = np.argsort(all_distances)
+        nearest_neighbors = sorted_distances[:self.candidates]
+
+        X = []
+        Y = []
+        accum_distance = []
+
+        for neighbor in sorted(nearest_neighbors):
+            traj_num = neighbor // self.obs_matrix.shape[1]
+            obs_num = neighbor % self.obs_matrix.shape[1]
+
+            max_lookback = min(self.lookback, min(obs_num + 1, len(self.obs_history)))
+
+            obs_matrix_slice = (self.obs_matrix[traj_num][obs_num - max_lookback + 1:obs_num + 1])[::-1]
+            obs_history_slice = self.obs_history[:max_lookback]
+            distances = np.linalg.norm(obs_history_slice - obs_matrix_slice, axis=1)
+
+            i_array = np.arange(1, max_lookback + 1, dtype=float)
+            decay_factors = np.power(i_array, self.decay)
+
+            decayed_distances = distances * decay_factors
+
+            accum_distance.append(np.sum(decayed_distances) / max_lookback)
+            X.append(self.obs_matrix[traj_num][obs_num])
+            Y.append(self.expert_data[traj_num]['actions'][obs_num])
+
+        X = np.array(X)
+        Y = np.array(Y)
+        accum_distance = np.array(accum_distance)
+
+        X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
+        query_point = np.concatenate(([1], self.obs_history[0]))
+
+        X_weights = X.T * accum_distance
+        theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
+        
+        return query_point @ theta
+
 
     def linearly_regress_dynamic_time_warping(self, current_ob):
         self.update_obs_history(current_ob)
@@ -344,6 +395,10 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
     def linearly_regress(self, current_ob):
         standardized_ob = (current_ob - self.mins) / self.maxes
         return super().linearly_regress(standardized_ob)
+
+    def sanity_linearly_regress(self, current_ob):
+        standardized_ob = (current_ob - self.mins) / self.maxes
+        return super().sanity_linearly_regress(standardized_ob)
 
     def linearly_regress_dynamic_time_warping(self, current_ob):
         standardized_ob = (current_ob - self.mins) / self.maxes

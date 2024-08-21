@@ -48,12 +48,12 @@ def crop_obs_for_env(obs, env):
         return obs
 
 while True:
-    np.random.seed(int(time.time()))
+    # np.random.seed(int(time.time()))
     # candidate_num += 5
-    candidate_num = round(np.random.rand() * 300) + 0
+    candidate_num = round(np.random.rand() * 150) + 0
     lookback_num = round(np.random.rand() * 200) + 0
     decay_num = round(np.random.rand() * -6, 1) + 3
-    window_num = round(np.random.rand() * 50)
+    # window_num = round(np.random.rand() * 50)
     # window_num += 1
     if config['metaworld']:
         env = _env_dict.MT50_V2[config['env']]()
@@ -83,6 +83,8 @@ while True:
             # action = nn_agent.find_nearest_sequence(observation)
             # action = nn_agent.find_nearest_sequence_dynamic_time_warping(observation)
             action = nn_agent.linearly_regress(observation)
+            # action = nn_agent.sanity_linearly_regress(observation)
+            # print(action)
             # action = nn_agent.linearly_regress_dynamic_time_warping(observation)
             t_post_action = time.perf_counter()
             observation, reward, done, info = env.step(action)
@@ -109,7 +111,7 @@ while True:
         success += info['success'] if 'success' in info else 0
         episode_rewards.append(episode_reward)
         trial += 1
-        if trial >= 100:
+        if trial >= 10:
             break
 
     if np.mean(episode_rewards) > best_score:
