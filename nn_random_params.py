@@ -28,9 +28,9 @@ decay = config['policy']['decay_rate']
 window = config['policy']['dtw_window']
 
 best_score = 0
-candidate_num = 150
-lookback_num = 1
-decay_num = 0
+candidate_num = 218
+lookback_num = 75
+decay_num = 2.2
 window_num = 0
 
 np.random.seed(config['seed'])
@@ -48,12 +48,14 @@ def crop_obs_for_env(obs, env):
         return obs
 
 while True:
-    # np.random.seed(int(time.time()))
+    seed = int(time.time())
+    # np.random.seed(seed)
+    print(f"PARAM SEED: {seed}")
     # candidate_num += 5
-    candidate_num = round(np.random.rand() * 150) + 0
-    lookback_num = round(np.random.rand() * 200) + 0
-    decay_num = round(np.random.rand() * -6, 1) + 3
-    # window_num = round(np.random.rand() * 50)
+    candidate_num = round(np.random.rand() * 10) + 215
+    lookback_num = round(np.random.rand() * 20) + 60
+    decay_num = round(np.random.rand() * 1.5, 1) + 1.0
+    window_num = round(np.random.rand() * 20)
     # window_num += 1
     if config['metaworld']:
         env = _env_dict.MT50_V2[config['env']]()
@@ -77,20 +79,16 @@ while True:
 
         episode_reward = 0.0
         steps = 0
+        t_start = time.perf_counter()
         while True:
-            t_start = time.perf_counter()
             # action = nn_agent.find_nearest_neighbor(observation)
             # action = nn_agent.find_nearest_sequence(observation)
             # action = nn_agent.find_nearest_sequence_dynamic_time_warping(observation)
-            action = nn_agent.linearly_regress(observation)
+            # action = nn_agent.linearly_regress(observation)
             # action = nn_agent.sanity_linearly_regress(observation)
-            # print(action)
-            # action = nn_agent.linearly_regress_dynamic_time_warping(observation)
-            t_post_action = time.perf_counter()
+            action = nn_agent.linearly_regress_dynamic_time_warping(observation)
             observation, reward, done, info = env.step(action)
             observation = crop_obs_for_env(observation, config['env'])
-
-            t_env_step = time.perf_counter()
 
             episode_reward += reward
             if False:
@@ -100,18 +98,15 @@ while True:
             if config['metaworld'] and steps >= 500:
                 break
             steps += 1
-            t_end = time.perf_counter()
-            t_total = t_end - t_start
-            if DEBUG:
-                print(f"Step total: {t_total}")
-                # print(f"Action: {(t_post_action - t_start) / t_total}%")
-                # print(f"Env step: {(t_env_step - t_post_action) / t_total}%")
-                # print(f"Finishing up: {(t_end - t_env_step) / t_total}%")
+        t_end = time.perf_counter()
+        t_total = t_end - t_start
+        if DEBUG:
+            print(f"Trial total: {t_total}")
 
         success += info['success'] if 'success' in info else 0
         episode_rewards.append(episode_reward)
         trial += 1
-        if trial >= 10:
+        if trial >= 100:
             break
 
     if np.mean(episode_rewards) > best_score:

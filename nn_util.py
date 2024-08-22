@@ -210,13 +210,12 @@ class NNAgentEuclidean(NNAgent):
         return self.expert_data[traj_num]['actions'][obs_num]
 
     def linearly_regress(self, current_ob):
-        t_start = time.perf_counter()
         self.update_obs_history(current_ob)
         
-        flattened_matrix = self.obs_matrix.flatten().reshape(-1, self.obs_matrix.shape[2])
+        flattened_matrix = self.obs_matrix.reshape(-1, self.obs_matrix.shape[2])
         all_distances = cdist(current_ob.reshape(1, -1), flattened_matrix, metric='euclidean')
         
-        nearest_neighbors = np.sort(np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates])
+        nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates]
 
         traj_nums = nearest_neighbors // self.obs_matrix.shape[1]
         obs_nums = nearest_neighbors % self.obs_matrix.shape[1]
@@ -230,28 +229,23 @@ class NNAgentEuclidean(NNAgent):
         decay_factors = np.power(i_array, self.decay)
         
         accum_distance = np.zeros(self.candidates)
-        X = self.obs_matrix[traj_nums, obs_nums]
-        Y = np.array([self.expert_data[tn]['actions'][on] for tn, on in zip(traj_nums, obs_nums)])
         
-        t_section_start = time.perf_counter()
         for i, (tn, on, max_lb) in enumerate(zip(traj_nums, obs_nums, max_lookbacks)):
             weighted_obs_matrix = (self.obs_matrix[tn, on - max_lb + 1:on + 1] * mask)[::-1]
             distances = np.linalg.norm(weighted_obs_history[:max_lb] - weighted_obs_matrix, axis=1)
 
             accum_distance[i] = np.sum(distances * decay_factors[:max_lb]) / max_lb
 
-        t_section_end = time.perf_counter()
-        X = np.c_[np.ones(len(X)), X]
-        query_point = np.r_[1, self.obs_history[0]]
-
+        X = np.c_[np.ones(len(traj_nums)), self.obs_matrix[traj_nums, obs_nums]]
+        Y = np.array([self.expert_data[tn]['actions'][on] for tn, on in zip(traj_nums, obs_nums)])
         X_weights = X.T * accum_distance
-        theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
+        try:
+            theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
+        except:
+            print("FAILED TO CONVERGE, ADDING NOISE")
+            theta = np.linalg.pinv(X_weights @ (X + 1e-8)) @ X_weights @ Y
         
-        t_end = time.perf_counter()
-        if DEBUG:
-            t_total = t_end - t_start
-            print(f"Section time: {(t_section_end - t_section_start) / t_total}")
-        return query_point @ theta
+        return np.r_[1, self.obs_history[0]] @ theta
 
     def sanity_linearly_regress(self, current_ob):
         # Push the current observation to the history
@@ -262,13 +256,13 @@ class NNAgentEuclidean(NNAgent):
         # Calculate all distances
         all_distances = np.linalg.norm(flattened_matrix - current_ob, axis=1)
         sorted_distances = np.argsort(all_distances)
-        nearest_neighbors = sorted_distances[:self.candidates]
+        nearest_neighbors = np.sort(sorted_distances[:self.candidates])
 
         X = []
         Y = []
         accum_distance = []
 
-        for neighbor in sorted(nearest_neighbors):
+        for neighbor in nearest_neighbors:
             traj_num = neighbor // self.obs_matrix.shape[1]
             obs_num = neighbor % self.obs_matrix.shape[1]
 
@@ -289,6 +283,8 @@ class NNAgentEuclidean(NNAgent):
 
         X = np.array(X)
         Y = np.array(Y)
+
+        # Round to ensure consistency
         accum_distance = np.array(accum_distance)
 
         X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
@@ -303,10 +299,10 @@ class NNAgentEuclidean(NNAgent):
     def linearly_regress_dynamic_time_warping(self, current_ob):
         self.update_obs_history(current_ob)
         
-        flattened_matrix = self.obs_matrix.flatten().reshape(-1, self.obs_matrix.shape[2])
+        flattened_matrix = self.obs_matrix.reshape(-1, self.obs_matrix.shape[2])
         all_distances = cdist(current_ob.reshape(1, -1), flattened_matrix, metric='euclidean')
         
-        nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates]
+        nearest_neighbors = np.sort(np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates])
 
         traj_nums = nearest_neighbors // self.obs_matrix.shape[1]
         obs_nums = nearest_neighbors % self.obs_matrix.shape[1]
@@ -320,26 +316,23 @@ class NNAgentEuclidean(NNAgent):
         decay_factors = np.power(i_array, self.decay)
 
         accum_distance = np.zeros(self.candidates)
-        X = self.obs_matrix[traj_nums, obs_nums]
-        Y = np.array([self.expert_data[tn]['actions'][on] for tn, on in zip(traj_nums, obs_nums)])
+
         
         for i, (tn, on, max_lb) in enumerate(zip(traj_nums, obs_nums, max_lookbacks)):
             weighted_obs_matrix = (self.obs_matrix[tn, on - max_lb + 1:on + 1] * mask)[::-1]
-            
-            # Vectorized distance calculation
             distances = np.linalg.norm((weighted_obs_history[:max_lb, None] - weighted_obs_matrix[None, :]), axis=2)
             
             accum_distance[i] = self._compute_dtw(distances * decay_factors[:max_lb], max_lb, self.window) / max_lb
-        X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
-        query_point = np.concatenate(([1], self.obs_history[0]))
-
+        X = np.c_[np.ones(len(traj_nums)), self.obs_matrix[traj_nums, obs_nums]]
+        Y = np.array([self.expert_data[tn]['actions'][on] for tn, on in zip(traj_nums, obs_nums)])
         X_weights = X.T * accum_distance
-        theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
-        
-        t_end = time.perf_counter()
-        # print(f"Neighbor time: {t_neighbor_done - t_init_done}")
-        # print(f"Total time: {t_end - t_start}")
-        return query_point @ theta
+        try:
+            theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
+        except:
+            print("FAILED TO CONVERGE, ADDING NOISE")
+            theta = np.linalg.pinv((X_weights @ X) + 1e-8) @ X_weights @ Y
+
+        return np.r_[1, self.obs_history[0]] @ theta
 
     @staticmethod
     @jit(nopython=True)

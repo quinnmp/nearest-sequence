@@ -2,8 +2,8 @@ import pickle
 import numpy as np
 import copy
 
-IN_PATH = "data/metaworld-drawer-close-v2.pkl"
-OUT_PATH = "data/metaworld-drawer-close-v2_50_shortened.pkl"
+IN_PATH = "data/metaworld-coffee-pull-v2_50.pkl"
+OUT_PATH = "data/metaworld-coffee-pull-v2_25.pkl"
 
 with open(IN_PATH, 'rb') as f:
     data = pickle.load(f)
@@ -20,4 +20,4 @@ for i in range(len(data)):
     print(new_data[i]['observations'].shape) 
 
 with open(OUT_PATH, 'wb') as f:
-    pickle.dump(new_data, f)
+    pickle.dump(data[:25], f)
