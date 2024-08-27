@@ -28,9 +28,9 @@ decay = config['policy']['decay_rate']
 window = config['policy']['dtw_window']
 
 best_score = 0
-candidate_num = 218
-lookback_num = 75
-decay_num = 2.2
+candidate_num = 0
+lookback_num = 1
+decay_num = 0
 window_num = 0
 
 np.random.seed(config['seed'])
@@ -49,13 +49,12 @@ def crop_obs_for_env(obs, env):
 
 while True:
     seed = int(time.time())
-    # np.random.seed(seed)
-    print(f"PARAM SEED: {seed}")
-    # candidate_num += 5
-    candidate_num = round(np.random.rand() * 10) + 215
-    lookback_num = round(np.random.rand() * 20) + 60
-    decay_num = round(np.random.rand() * 1.5, 1) + 1.0
-    window_num = round(np.random.rand() * 20)
+    np.random.seed(seed)
+    candidate_num += 1
+    # candidate_num = round(np.random.rand() * 50) + 70
+    # lookback_num = round(np.random.rand() * 50) + 1
+    # decay_num = round(np.random.rand() * -6.0, 1) + 3.0
+    # window_num = round(np.random.rand() * 20)
     # window_num += 1
     if config['metaworld']:
         env = _env_dict.MT50_V2[config['env']]()
@@ -84,9 +83,9 @@ while True:
             # action = nn_agent.find_nearest_neighbor(observation)
             # action = nn_agent.find_nearest_sequence(observation)
             # action = nn_agent.find_nearest_sequence_dynamic_time_warping(observation)
-            # action = nn_agent.linearly_regress(observation)
+            action = nn_agent.linearly_regress(observation)
             # action = nn_agent.sanity_linearly_regress(observation)
-            action = nn_agent.linearly_regress_dynamic_time_warping(observation)
+            # action = nn_agent.linearly_regress_dynamic_time_warping(observation)
             observation, reward, done, info = env.step(action)
             observation = crop_obs_for_env(observation, config['env'])
 

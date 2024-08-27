@@ -5,10 +5,10 @@ data:
   pkl: "data/metaworld-drawer-close-v2_50_shortened.pkl"
 policy:
   k_neighbors:
-    - 200
+    - 1
   lookback: 
-    - 50
+    - 1
   decay_rate:
-    - -0.5
+    - 0
   dtw_window: 
-    - 25
+    - 0

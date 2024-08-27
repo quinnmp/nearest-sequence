@@ -5,10 +5,10 @@ data:
   pkl: "data/metaworld-button-press-top-down-v2_50_shortened.pkl"
 policy:
   k_neighbors:
-    - 200
+    - 214
   lookback: 
-    - 50
+    - 62
   decay_rate:
-    - -0.5
+    - 2.4
   dtw_window: 
-    - 25
+    - 0
