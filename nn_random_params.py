@@ -11,7 +11,7 @@ import yaml
 import argparse
 import d4rl
 
-DEBUG = False
+DEBUG = True
 
 parser = argparse.ArgumentParser()
 parser.add_argument("config_path", help="Path to config file")
@@ -28,9 +28,9 @@ decay = config['policy']['decay_rate']
 window = config['policy']['dtw_window']
 
 best_score = 0
-candidate_num = 0
-lookback_num = 1
-decay_num = 0
+candidate_num = 650
+lookback_num = 250
+decay_num = -4.0
 window_num = 0
 
 np.random.seed(config['seed'])
@@ -50,7 +50,7 @@ def crop_obs_for_env(obs, env):
 while True:
     seed = int(time.time())
     np.random.seed(seed)
-    candidate_num += 1
+    # candidate_num += 1
     # candidate_num = round(np.random.rand() * 50) + 70
     # lookback_num = round(np.random.rand() * 50) + 1
     # decay_num = round(np.random.rand() * -6.0, 1) + 3.0
@@ -101,6 +101,7 @@ while True:
         t_total = t_end - t_start
         if DEBUG:
             print(f"Trial total: {t_total}")
+            print(f"Trial score: {episode_reward}")
 
         success += info['success'] if 'success' in info else 0
         episode_rewards.append(episode_reward)

@@ -7,7 +7,7 @@ import copy
 from scipy.spatial import distance
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
-from numba import jit
+from numba import jit, njit
 
 DEBUG = False
 
@@ -68,6 +68,11 @@ class NNAgent:
         self.lookback = lookback
         self.decay = decay
         self.window = window
+
+        # Precompute constants
+        self.flattened_matrix = np.ascontiguousarray(self.obs_matrix.reshape(-1, self.obs_matrix.shape[2]))
+        self.i_array = np.arange(1, self.lookback + 1, dtype=float)
+        self.decay_factors = np.power(self.i_array, self.decay)
 
         if plot:
             self.plot = nn_plot.NNPlot(self.expert_data)
@@ -212,29 +217,21 @@ class NNAgentEuclidean(NNAgent):
     def linearly_regress(self, current_ob):
         self.update_obs_history(current_ob)
         
-        flattened_matrix = self.obs_matrix.reshape(-1, self.obs_matrix.shape[2])
-        all_distances = cdist(current_ob.reshape(1, -1), flattened_matrix, metric='euclidean')
+        all_distances = cdist(current_ob.reshape(1, -1), self.flattened_matrix, metric='euclidean')
         
         nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates]
 
-        traj_nums = nearest_neighbors // self.obs_matrix.shape[1]
-        obs_nums = nearest_neighbors % self.obs_matrix.shape[1]
+        traj_nums, obs_nums = np.divmod(nearest_neighbors, self.obs_matrix.shape[1])
         
         max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, len(self.obs_history)))
         
-        mask = np.ones(len(self.expert_data[0]['observations'][0]))
-        weighted_obs_history = self.obs_history * mask
-        
-        i_array = np.arange(1, self.lookback + 1, dtype=float)
-        decay_factors = np.power(i_array, self.decay)
-        
         accum_distance = np.zeros(self.candidates)
         
-        for i, (tn, on, max_lb) in enumerate(zip(traj_nums, obs_nums, max_lookbacks)):
-            weighted_obs_matrix = (self.obs_matrix[tn, on - max_lb + 1:on + 1] * mask)[::-1]
-            distances = np.linalg.norm(weighted_obs_history[:max_lb] - weighted_obs_matrix, axis=1)
-
-            accum_distance[i] = np.sum(distances * decay_factors[:max_lb]) / max_lb
+        for i in range(self.candidates):
+            tn, on, max_lb = traj_nums[i], obs_nums[i], max_lookbacks[i]
+            obs_matrix_slice = self.obs_matrix[tn, on - max_lb + 1:on + 1][::-1]
+            distances = np.linalg.norm(self.obs_history[:max_lb] - obs_matrix_slice, axis=1)
+            accum_distance[i] = np.sum(distances * self.decay_factors[:max_lb]) / max_lb
 
         X = np.c_[np.ones(len(traj_nums)), self.obs_matrix[traj_nums, obs_nums]]
         Y = np.array([self.expert_data[tn]['actions'][on] for tn, on in zip(traj_nums, obs_nums)])

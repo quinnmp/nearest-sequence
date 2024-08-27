@@ -5,10 +5,10 @@ data:
   pkl: "data/walker2d-expert-v2_20.pkl"
 policy:
   k_neighbors:
-    - 72
+    - 89
   lookback: 
-    - 1
+    - 29
   decay_rate:
-    - 0
+    - -2.20
   dtw_window: 
     - 0
