@@ -8,7 +8,7 @@ from scipy.spatial import distance
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from numba import jit, njit
-
+from scipy.linalg import lstsq
 DEBUG = False
 
 def calculate_inverse_covariance_obs_matrix(expert_data):
@@ -27,12 +27,27 @@ def save_expert_data(data, path):
 def create_matrices(expert_data):
     max_length = max((len(traj['observations']) for traj in expert_data))
     obs_matrix = []
+    act_matrix = []
 
     for traj in expert_data:
         obs_matrix.append(np.pad(traj['observations'], [(0, max_length - len(traj['observations'])), (0, 0)], mode='constant', constant_values=np.inf))
+        act_matrix.append(np.pad(traj['actions'], [(0, max_length - len(traj['actions'])), (0, 0)], mode='constant', constant_values=np.inf))
 
     obs_matrix = np.asarray(obs_matrix)
-    return obs_matrix
+    act_matrix = np.asarray(act_matrix)
+    return obs_matrix, act_matrix
+
+@njit
+def compute_accum_distance(traj_nums, obs_nums, max_lookbacks, obs_history, obs_matrix, decay_factors):
+    accum_distance = np.zeros(len(traj_nums))
+    
+    for i in range(len(traj_nums)):
+        tn, on, max_lb = traj_nums[i], obs_nums[i], max_lookbacks[i]
+        obs_matrix_slice = obs_matrix[tn, on - max_lb + 1:on + 1][::-1]
+        distances = np.sqrt(((obs_history[:max_lb] - obs_matrix_slice) ** 2).sum(axis=1))
+        accum_distance[i] = np.sum(distances * decay_factors[:max_lb]) / max_lb
+        
+    return accum_distance
 
 @jit(nopython=True)
 def fast_computation(X, Y, accum_distance, obs_history):
@@ -60,7 +75,7 @@ class NNAgent:
     def __init__(self, expert_data_path, plot=False, candidates=10, lookback=20, decay=-1, window=10):
         self.expert_data = load_expert_data(expert_data_path)
 
-        self.obs_matrix = create_matrices(self.expert_data)
+        self.obs_matrix, self.act_matrix = create_matrices(self.expert_data)
 
         self.obs_history = np.array([])
 
@@ -225,24 +240,19 @@ class NNAgentEuclidean(NNAgent):
         
         max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, len(self.obs_history)))
         
-        accum_distance = np.zeros(self.candidates)
+        accum_distance = compute_accum_distance(traj_nums, obs_nums, max_lookbacks, self.obs_history, self.obs_matrix, self.decay_factors)
         
-        for i in range(self.candidates):
-            tn, on, max_lb = traj_nums[i], obs_nums[i], max_lookbacks[i]
-            obs_matrix_slice = self.obs_matrix[tn, on - max_lb + 1:on + 1][::-1]
-            distances = np.linalg.norm(self.obs_history[:max_lb] - obs_matrix_slice, axis=1)
-            accum_distance[i] = np.sum(distances * self.decay_factors[:max_lb]) / max_lb
-
         X = np.c_[np.ones(len(traj_nums)), self.obs_matrix[traj_nums, obs_nums]]
-        Y = np.array([self.expert_data[tn]['actions'][on] for tn, on in zip(traj_nums, obs_nums)])
+        Y = self.act_matrix[traj_nums, obs_nums]
         X_weights = X.T * accum_distance
+
         try:
             theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
-        except:
+        except np.linalg.LinAlgError:
             print("FAILED TO CONVERGE, ADDING NOISE")
             theta = np.linalg.pinv(X_weights @ (X + 1e-8)) @ X_weights @ Y
-        
-        return np.r_[1, self.obs_history[0]] @ theta
+
+        return np.dot(np.r_[1, self.obs_history[0]], theta)
 
     def sanity_linearly_regress(self, current_ob):
         # Push the current observation to the history
@@ -292,7 +302,6 @@ class NNAgentEuclidean(NNAgent):
         
         return query_point @ theta
 
-
     def linearly_regress_dynamic_time_warping(self, current_ob):
         self.update_obs_history(current_ob)
         
@@ -314,7 +323,6 @@ class NNAgentEuclidean(NNAgent):
 
         accum_distance = np.zeros(self.candidates)
 
-        
         for i, (tn, on, max_lb) in enumerate(zip(traj_nums, obs_nums, max_lookbacks)):
             weighted_obs_matrix = (self.obs_matrix[tn, on - max_lb + 1:on + 1] * mask)[::-1]
             distances = np.linalg.norm((weighted_obs_history[:max_lb, None] - weighted_obs_matrix[None, :]), axis=2)
@@ -322,7 +330,9 @@ class NNAgentEuclidean(NNAgent):
             accum_distance[i] = self._compute_dtw(distances * decay_factors[:max_lb], max_lb, self.window) / max_lb
         X = np.c_[np.ones(len(traj_nums)), self.obs_matrix[traj_nums, obs_nums]]
         Y = np.array([self.expert_data[tn]['actions'][on] for tn, on in zip(traj_nums, obs_nums)])
+
         X_weights = X.T * accum_distance
+        
         try:
             theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
         except:

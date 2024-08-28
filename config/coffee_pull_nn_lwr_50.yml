@@ -2,10 +2,10 @@ seed: 42
 metaworld: true
 env: "coffee-pull-v2"
 data:
-  pkl: "data/metaworld-coffee-pull-v2_10_shortened.pkl"
+  pkl: "data/metaworld-coffee-pull-v2_50_shortened.pkl"
 policy:
   k_neighbors:
-    - 424
+    - 180
   lookback: 
     - 1
   decay_rate:
