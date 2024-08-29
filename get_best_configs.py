@@ -9,7 +9,7 @@ args, _ = parser.parse_known_args()
 with open(args.results_path, 'rb') as f:
     results = pickle.load(f)
 
-best_episodes = np.argsort(results['scores'])[-10:]
+best_episodes = np.argsort(results['scores'])[-20:]
 
 best_candidates = []
 best_lookbacks = []

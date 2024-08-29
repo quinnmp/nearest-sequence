@@ -5,7 +5,7 @@ data:
   pkl: "data/metaworld-coffee-pull-v2_20_shortened.pkl"
 policy:
   k_neighbors:
-    - 180
+    - 957
   lookback: 
     - 1
   decay_rate:

@@ -25,9 +25,9 @@ print(config)
 
 best_score = 0
 
-candidates = [421, 427, 415, 420, 418, 429, 426, 424, 423, 425]
-lookbacks = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
-decays = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+candidates = [836]
+lookbacks = [72]
+decays = [2.3]
 windows = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 
 def crop_obs_for_env(obs, env):
