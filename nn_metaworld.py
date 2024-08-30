@@ -10,6 +10,7 @@ import time
 import yaml
 import argparse
 import d4rl
+import pickle
 
 DEBUG = False
 
@@ -99,4 +100,6 @@ for candidate_num in candidates:
                     if trial >= 100:
                         break
 
+                with open("results/" + args.config_path[7:-4] + "_" + str(candidate_num) + "_" + str(lookback_num) + "_" + str(decay_num) + "_result.pkl", 'wb') as f:
+                    pickle.dump(episode_rewards, f)
                 print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {decay_num}, window {window_num}: {np.mean(episode_rewards)}, {np.std(episode_rewards)}")

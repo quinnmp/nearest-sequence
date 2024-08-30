@@ -1,56 +1,94 @@
 import numpy as np
+from scipy import stats
 import matplotlib.pyplot as plt
+import os
+import sys
+import pickle
+current = os.path.dirname(os.path.realpath(__file__))
+parent = os.path.dirname(current)
+sys.path.append(parent)
+results_folder = os.path.join(current, "figures")
+
+SMALLEST_SIZE = 10
+SMALL_SIZE = 16
+BIGGER_SIZE = 15
+plt.rc('font', size=SMALLEST_SIZE, family='Times New Roman')
+plt.rc('axes', titlesize=SMALL_SIZE)
+plt.rc('axes', labelsize=SMALL_SIZE)
+plt.rc('xtick', labelsize=SMALL_SIZE)
+plt.rc('ytick', labelsize=SMALL_SIZE)
+plt.rc('legend', fontsize=SMALLEST_SIZE)
+plt.rc('figure', titlesize=BIGGER_SIZE, figsize=(7/4,21/16))
+
 
 # Sample data
-x = [1, 2, 3, 4, 5, 10, 15, 20]
+x = [0.2, 0.4, 0.6, 0.8, 1.0]
 
-means = [
-    # CCIL
-    [3689.50, 4890.17, 4742.31, 4984.78, 4604.16, 4962.62, 5002.16, 4978.49],
-    # BC
-    [265.21, 743.09, 2419.20, 1675.41, 1589.86, 1616.39, 4013.99, 5020.78],
+data = [
     # NS+LWR
-    [487.11, 1271.05, 2500.10, 4095.27, 4835.67, 4967.93, 4993.63, 4982.96],
+    ['../results/coffee_pull_ns_lwr_10_466_9_1.3_result.pkl',
+     '../results/coffee_pull_ns_lwr_20_937_59_1.4_result.pkl',
+     '../results/coffee_pull_ns_lwr_30_',
+     '../results/coffee_pull_ns_lwr_40_',
+     '../results/coffee_pull_ns_lwr_50_'],
     # NN+LWR
-    [437.80, 1126.45, 2060.16, 3945.99, 4296.24, 4978.98, 5001.57, 4985.97]
+    ['../results/coffee_pull_nn_lwr_10_424_1_0_result.pkl',
+     '../results/coffee_pull_nn_lwr_20_957_1_0_result.pkl',
+     '../results/coffee_pull_nn_lwr_30_169_1_0_result.pkl',
+     '../results/coffee_pull_nn_lwr_40_882_1_0_result.pkl',
+     '../results/coffee_pull_nn_lwr_50_203_1_0_result.pkl'],
+    # CCIL
+    ['../results/coffee_pull_ccil_10.pkl',
+     '../results/coffee_pull_ccil_20.pkl',
+     '../results/coffee_pull_ccil_30.pkl',
+     '../results/coffee_pull_ccil_40.pkl',
+     '../results/coffee_pull_ccil_50.pkl']
+    # BC
+    ['../results/coffee_pull_bc_10.pkl',
+     '../results/coffee_pull_bc_20.pkl',
+     '../results/coffee_pull_bc_30.pkl',
+     '../results/coffee_pull_bc_40.pkl',
+     '../results/coffee_pull_bc_50.pkl']
 ]
 
-stds = [
-    # CCIL
-    [1818.89, 501.72, 791.56, 5.67, 1042.12, 5.76, 11.79, 11.2],
-    # BC
-    [17.04, 821.36, 346.67, 912.79, 1480.52, 1635.54, 1536.64, 17.87],
-    # NS+LWR
-    [931.30, 1700.54, 2165.04, 1600.85, 627.87, 15.76, 12.4, 13.90],
-    # NN+LWR
-    [201.68, 1629.98, 2110.85, 1686.09, 1468.08, 13.60, 7.99, 16.68]
-]
+means = []
+confidence_bounds = []
+
+for algorithm in data:
+    means.append([])
+    confidence_bounds.append([])
+    for file in algorithm:
+        with open(file, 'rb') as f:
+            data = pickle.load(f)
+        means[-1].append(np.mean(data))
+        t_value = stats.t.ppf((1 + 0.95) / 2, len(data) - 1)
 
 # Colors for each line
-colors = ['blue', 'red', 'green', 'purple']
-labels = ['CCIL', 'BC', 'NS+LWR', 'NN+LWR']
+colors = ['#d00', '#b3cfff', '#a5b', 'green']
+labels = ['NS+LWR', 'NN+LWR', 'CCIL', 'BC']
 
 # Create the plot
 plt.figure(figsize=(12, 8))
+ax = plt.subplot()
+ax.spines[['right', 'top']].set_visible(False)
 
 for i in range(4):
-    # Convert to numpy arrays and remove None values
     x_array = np.array(x[:len([m for m in means[i] if m is not None])])
     means_array = np.array([m for m in means[i] if m is not None])
     stds_array = np.array([s for s, m in zip(stds[i], means[i]) if m is not None])
     
-    # Plot the mean line
-    plt.plot(x_array, means_array, color=colors[i], label=labels[i], marker='o')
+    ax.plot(x_array, means_array, color=colors[i], label=labels[i], marker='o', markerfacecolor="#fff", markeredgewidth=3, markersize=10, linewidth=3, zorder=4-i)
+    ax.fill_between(x_array, means_array - bounds_array, means_array + bounds_array, 
+                color=colors[i], alpha=0.2)
     
-    # Plot the standard deviation area
-    # plt.fill_between(x_array, means_array - stds_array, means_array + stds_array, 
-    #                 color=colors[i], alpha=0.2)
-
-plt.title('Performance Comparison of Different Algorithms')
-plt.xlabel('Number of Trajectories')
+plt.title('Performance Comparison of Different IL Algorithms vs. Data Proportion')
+plt.xlabel('Proportion of Expert Data')
 plt.ylabel('Mean Score')
-plt.ylim(0, 5500)
+plt.ylim(0, 4500)
+plt.xlim(0.2, 1.0075)
 plt.legend()
-plt.xticks(x, [str(i) for i in x])  # Set x-ticks to original values
+plt.xticks(x, [str(i) for i in x])
 
+plt.savefig(os.path.join(results_folder, f"png/ablation_data_size.png"), transparent=True, pad_inches=0, bbox_inches="tight", dpi=300)
+plt.savefig(os.path.join(results_folder, f"pdf/ablation_data_size.pdf"), format="pdf", transparent=True, pad_inches=0, bbox_inches="tight")
 plt.show()

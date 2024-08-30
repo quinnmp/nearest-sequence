@@ -37,9 +37,9 @@ def crop_obs_for_env(obs, env):
     else:
         return obs
 space = [
-    Integer(150, 1200, name='candidate_num'),
-    Integer(1, 151, name='lookback_num'),
-    Real(-3.0, 3.0, name='decay_num'),
+    Integer(600, 900, name='candidate_num'),
+    Integer(2, 251, name='lookback_num'),
+    Integer(0, 100, name='decay_num'),
 ]
 
 @use_named_args(space)
@@ -54,10 +54,10 @@ def objective(candidate_num, lookback_num, decay_num, window_num=0):
     env.seed(config['seed'])
     np.random.seed(config['seed'])
 
-    nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=int(candidate_num), lookback=int(lookback_num), decay=decay_num, window=int(window_num))
+    nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=int(candidate_num), lookback=int(lookback_num), decay=int(decay_num), window=int(window_num))
 
     episode_rewards = []
-    for i in range(10):
+    for i in range(100):
         observation = crop_obs_for_env(env.reset(), config['env'])
         nn_agent.obs_history = np.array([])
         episode_reward = 0.0
@@ -84,7 +84,7 @@ def objective(candidate_num, lookback_num, decay_num, window_num=0):
 
         episode_rewards.append(episode_reward)
 
-    print(np.mean(episode_rewards))
+    print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {round(decay_num/10, 2):.2f}, window {window_num}: {round(np.mean(episode_rewards), 2):.2f}, {round(np.std(episode_rewards), 2):.2f}")
     return np.mean(episode_rewards)
 
 def run_optimization(random_state=None):
@@ -92,10 +92,10 @@ def run_optimization(random_state=None):
         lambda params: -objective(params),  # Negate for minimization
         space,
         n_calls=100,
-        n_random_starts=20,
+        n_random_starts=10,
         n_jobs=-1,  # Use all available cores
+        acq_func="EI",
         random_state=random_state,
-        callback=[DeltaXStopper(delta=0.01)]
     )
 
 # Run multiple optimizations
