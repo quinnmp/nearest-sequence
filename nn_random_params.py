@@ -57,10 +57,10 @@ def crop_obs_for_env(obs, env):
 while True:
     seed = int(time.time())
     np.random.seed(seed)
-    # candidate_num += 1
-    candidate_num = round(np.random.rand() * 850) + 150
-    lookback_num = round(np.random.rand() * 150) + 2
-    decay_num = round(np.random.rand() * -6.0, 1) + 3
+    candidate_num += 1
+    # candidate_num = round(np.random.rand() * 850) + 150
+    # lookback_num = round(np.random.rand() * 150) + 2
+    # decay_num = round(np.random.rand() * -6.0, 1) + 3
     # window_num = round(np.random.rand() * 20)
     # window_num += 1
     if config['metaworld']:

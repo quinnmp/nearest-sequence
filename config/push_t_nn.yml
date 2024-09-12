@@ -1,0 +1,14 @@
+seed: 1000
+metaworld: false
+env: "push_t"
+data:
+  pkl: "data/pusht.pkl"
+policy:
+  k_neighbors:
+    - 2
+  lookback: 
+    - 1
+  decay_rate:
+    - 0
+  dtw_window: 
+    - 0

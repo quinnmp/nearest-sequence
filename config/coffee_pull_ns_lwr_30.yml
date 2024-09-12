@@ -9,6 +9,6 @@ policy:
   lookback: 
     - 168
   decay_rate:
-    - 3.7
+    - 37
   dtw_window: 
     - 0

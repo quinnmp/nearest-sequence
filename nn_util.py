@@ -37,17 +37,18 @@ def create_matrices(expert_data):
     act_matrix = np.asarray(act_matrix)
     return obs_matrix, act_matrix
 
-@njit
-def compute_accum_distance(traj_nums, obs_nums, max_lookbacks, obs_history, obs_matrix, decay_factors):
+# @njit
+def compute_accum_distance(traj_nums, obs_nums, max_lookbacks, obs_history, obs_matrix, decay_factors, weights, tau):
     accum_distance = np.zeros(len(traj_nums))
     
     for i in range(len(traj_nums)):
         tn, on, max_lb = traj_nums[i], obs_nums[i], max_lookbacks[i]
-        obs_matrix_slice = obs_matrix[tn, on - max_lb + 1:on + 1][::-1]
-        distances = np.sqrt(((obs_history[:max_lb] - obs_matrix_slice) ** 2).sum(axis=1))
-        accum_distance[i] = np.sum(distances * decay_factors[:max_lb]) / max_lb
-        
-    return accum_distance
+        obs_matrix_slice = (obs_matrix[tn, on - max_lb + 1:on + 1] * weights)[::-1]
+        log_distances = np.sum(((obs_history[:max_lb] * weights) - obs_matrix_slice) ** 2, axis=1) / (-2 * (tau ** 2))
+        accum_distance[i] = np.sum(log_distances * decay_factors[:max_lb]) / max_lb
+    max_log_distance = np.min(accum_distance)
+    distances = np.exp(accum_distance / max_log_distance)
+    return distances * -1
 
 @jit(nopython=True)
 def fast_computation(X, Y, accum_distance, obs_history):
@@ -72,7 +73,7 @@ def fast_computation(X, Y, accum_distance, obs_history):
     return query_point @ theta
 
 class NNAgent:
-    def __init__(self, expert_data_path, plot=False, candidates=10, lookback=20, decay=-1, window=10):
+    def __init__(self, expert_data_path, plot=False, candidates=10, lookback=20, decay=-1, window=10, weights=np.array([]), tau=1.0):
         self.expert_data = load_expert_data(expert_data_path)
 
         self.obs_matrix, self.act_matrix = create_matrices(self.expert_data)
@@ -83,11 +84,17 @@ class NNAgent:
         self.lookback = lookback
         self.decay = decay
         self.window = window
+        self.tau = tau
 
         # Precompute constants
         self.flattened_matrix = np.ascontiguousarray(self.obs_matrix.reshape(-1, self.obs_matrix.shape[2]))
         self.i_array = np.arange(1, self.lookback + 1, dtype=float)
         self.decay_factors = np.power(self.i_array, self.decay)
+
+        if len(weights) > 0:
+            self.weights = weights
+        else:
+            self.weights = np.ones(len(self.obs_matrix[0][0]))
 
         if plot:
             self.plot = nn_plot.NNPlot(self.expert_data)
@@ -240,7 +247,7 @@ class NNAgentEuclidean(NNAgent):
         
         max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, len(self.obs_history)))
         
-        accum_distance = compute_accum_distance(traj_nums, obs_nums, max_lookbacks, self.obs_history, self.obs_matrix, self.decay_factors)
+        accum_distance = compute_accum_distance(traj_nums, obs_nums, max_lookbacks, self.obs_history, self.obs_matrix, self.decay_factors, self.weights, self.tau)
         
         X = np.c_[np.ones(len(traj_nums)), self.obs_matrix[traj_nums, obs_nums]]
         Y = self.act_matrix[traj_nums, obs_nums]
@@ -249,10 +256,48 @@ class NNAgentEuclidean(NNAgent):
         try:
             theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
         except np.linalg.LinAlgError:
-            print("FAILED TO CONVERGE, ADDING NOISE")
-            theta = np.linalg.pinv(X_weights @ (X + 1e-8)) @ X_weights @ Y
+            try:
+                # print("FAILED TO CONVERGE, ADDING NOISE")
+                theta = np.linalg.pinv(X_weights @ (X + 1e-8)) @ X_weights @ Y
+            except:
+                # print("Something went wrong, likely a very large number (> e+150) was encountered. Returning arbitrary action.")
+                return self.act_matrix[0][0]
 
-        return np.dot(np.r_[1, self.obs_history[0]], theta)
+        return np.dot(np.r_[1, current_ob], theta)
+
+    def sanity_neighbor_linearly_regress(self, current_ob):
+        all_distances = cdist(current_ob.reshape(1, -1), self.flattened_matrix, metric='euclidean')
+        
+        nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates]
+
+        traj_nums, obs_nums = np.divmod(nearest_neighbors, self.obs_matrix.shape[1])
+        
+        accum_distance = np.zeros(len(traj_nums))
+        
+        for i in range(len(traj_nums)):
+            tn, on = traj_nums[i], obs_nums[i]
+            distances = np.sum((current_ob - self.obs_matrix[tn][on]) ** 2)
+            accum_distance[i] = -distances / (2 * (self.tau ** 2))
+
+        # Normalize for numerical stability
+        accum_distance /= np.sum(accum_distance) * -1
+        accum_distance = np.exp(accum_distance)
+        
+        X = np.c_[np.ones(len(traj_nums)), self.obs_matrix[traj_nums, obs_nums]]
+        Y = self.act_matrix[traj_nums, obs_nums]
+        X_weights = X.T * accum_distance
+
+        try:
+            theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
+        except np.linalg.LinAlgError:
+            try:
+                # print("FAILED TO CONVERGE, ADDING NOISE")
+                theta = np.linalg.pinv(X_weights @ (X + 1e-8)) @ X_weights @ Y
+            except:
+                # print("Something went wrong, likely a very large number (> e+150) was encountered. Returning arbitrary action.")
+                return self.act_matrix[0][0]
+
+        return np.dot(np.r_[1, current_ob], theta)
 
     def sanity_linearly_regress(self, current_ob):
         # Push the current observation to the history
@@ -297,7 +342,7 @@ class NNAgentEuclidean(NNAgent):
         X = np.concatenate((np.ones((X.shape[0], 1)), X), axis=1)
         query_point = np.concatenate(([1], self.obs_history[0]))
 
-        X_weights = X.T * accum_distance
+        X_weights = X.T * (accum_distance * -1)
         theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
         
         return query_point @ theta
@@ -336,8 +381,12 @@ class NNAgentEuclidean(NNAgent):
         try:
             theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
         except:
-            print("FAILED TO CONVERGE, ADDING NOISE")
-            theta = np.linalg.pinv((X_weights @ X) + 1e-8) @ X_weights @ Y
+            try:
+                print("FAILED TO CONVERGE, ADDING NOISE")
+                theta = np.linalg.pinv((X_weights @ X) + 1e-8) @ X_weights @ Y
+            except:
+                print("Something went wrong, likely a very large number (> e+150) was encountered. Returning arbitrary action.")
+                return self.act_matrix[0][0]
 
         return np.r_[1, self.obs_history[0]] @ theta
 
@@ -357,7 +406,7 @@ class NNAgentEuclidean(NNAgent):
         return dtw[-1, -1]
 
 class NNAgentEuclideanStandardized(NNAgentEuclidean):
-    def __init__(self, expert_data_path, plot=False, candidates=10, lookback=20, decay=-1, window=10):
+    def __init__(self, expert_data_path, plot=False, candidates=10, lookback=20, decay=-1, window=10, weights=np.array([]), tau=1.0):
         expert_data = load_expert_data(expert_data_path)
         observations = np.concatenate([traj['observations'] for traj in expert_data])
         
@@ -375,7 +424,7 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
         new_path = expert_data_path[:-4] + '_normalized.pkl'
         save_expert_data(expert_data, new_path)
 
-        super().__init__(new_path, plot=plot, candidates=candidates, lookback=lookback, decay=decay, window=window)
+        super().__init__(new_path, plot=plot, candidates=candidates, lookback=lookback, decay=decay, window=window, weights=weights, tau=tau)
 
     def find_nearest_neighbor(self, current_ob, normalize=True):
         if normalize:
@@ -395,6 +444,10 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
     def linearly_regress(self, current_ob):
         standardized_ob = (current_ob - self.mins) / self.maxes
         return super().linearly_regress(standardized_ob)
+
+    def sanity_neighbor_linearly_regress(self, current_ob):
+        standardized_ob = (current_ob - self.mins) / self.maxes
+        return super().sanity_neighbor_linearly_regress(standardized_ob)
 
     def sanity_linearly_regress(self, current_ob):
         standardized_ob = (current_ob - self.mins) / self.maxes
