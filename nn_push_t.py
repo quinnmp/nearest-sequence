@@ -42,8 +42,8 @@ def crop_obs_for_env(obs, env):
     else:
         return obs
 
-candidates = np.arange(500) + 1
-tau = [0.001, 0.01, 1.0, 10.0]
+candidates = np.arange(100) * 10
+tau = [0.01]
 
 for tau_num, candidate_num, lookback_num, decay_num, window_num in product(tau, candidates, lookback, decay, window):
     env = PushTEnv()
@@ -63,8 +63,7 @@ for tau_num, candidate_num, lookback_num, decay_num, window_num in product(tau, 
         episode_reward = 0.0
         steps = 0
         while True:
-            t_start = time.perf_counter()
-            action = nn_agent.sanity_neighbor_linearly_regress(observation)
+            action = nn_agent.linearly_regress(observation)
             observation, reward, done, truncated, info = env.step(action)
             observation = crop_obs_for_env(observation, config['env'])
 

@@ -38,7 +38,9 @@ def crop_obs_for_env(obs, env):
     else:
         return obs
 space = [
-    Integer(1, 200, name='candidate_num'),
+    Integer(1, 1000, name='candidate_num'),
+    Integer(1, 150, name='lookback_num'),
+    Integer(-30, 30, name='decay_num'),
 #    Integer(1, 200, name='lookback_num'),
 #    Integer(-100, 100, name='decay_num'),
 #    Real(0, 1, name='obs1'),
@@ -64,7 +66,7 @@ def objective(obs1=1, obs2=1, obs3=1, obs4=1, obs5=1, candidate_num=100, lookbac
     nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=int(candidate_num), lookback=int(lookback_num), decay=int(decay_num)/10, window=int(window_num), weights=np.array([obs1, obs2, obs3, obs4, obs5]))
 
     episode_rewards = []
-    for i in range(50):
+    for i in range(10):
         env.seed(i)
         observation = crop_obs_for_env(env.reset()[0], config['env'])
         nn_agent.obs_history = np.array([])

@@ -2,7 +2,7 @@ seed: 1000
 metaworld: false
 env: "push_t"
 data:
-  pkl: "data/pusht.pkl"
+  pkl: "data/push_t_parsed.pkl"
 policy:
   k_neighbors:
     - 200

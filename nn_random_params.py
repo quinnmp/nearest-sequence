@@ -57,7 +57,7 @@ def crop_obs_for_env(obs, env):
 while True:
     seed = int(time.time())
     np.random.seed(seed)
-    candidate_num += 1
+    candidate_num += 10
     # candidate_num = round(np.random.rand() * 850) + 150
     # lookback_num = round(np.random.rand() * 150) + 2
     # decay_num = round(np.random.rand() * -6.0, 1) + 3
@@ -73,7 +73,7 @@ while True:
     env.seed(config['seed'])
     np.random.seed(config['seed'])
 
-    nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, window=window_num)
+    nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, window=window_num, tau=10)
 
     episode_rewards = []
     success = 0
@@ -81,7 +81,6 @@ while True:
     try:
         while True:
             observation = crop_obs_for_env(env.reset(), config['env'])
-
             nn_agent.obs_history = np.array([])
 
             episode_reward = 0.0
@@ -91,7 +90,7 @@ while True:
                 # action = nn_agent.find_nearest_neighbor(observation)
                 # action = nn_agent.find_nearest_sequence(observation)
                 # action = nn_agent.find_nearest_sequence_dynamic_time_warping(observation)
-                action = nn_agent.linearly_regress(observation)
+                action = nn_agent.sanity_neighbor_linearly_regress(observation)
                 # action = nn_agent.sanity_linearly_regress(observation)
                 # action = nn_agent.linearly_regress_dynamic_time_warping(observation)
                 observation, reward, done, info = env.step(action)
@@ -113,7 +112,7 @@ while True:
             success += info['success'] if 'success' in info else 0
             episode_rewards.append(episode_reward)
             trial += 1
-            if trial >= 25:
+            if trial >= 10:
                 break
 
 

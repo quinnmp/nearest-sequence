@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import nn_plot
 import copy
 from scipy.spatial import distance
+from scipy.spatial import KDTree
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from numba import jit, njit
@@ -44,16 +45,14 @@ def compute_accum_distance(traj_nums, obs_nums, max_lookbacks, obs_history, obs_
     for i in range(len(traj_nums)):
         tn, on, max_lb = traj_nums[i], obs_nums[i], max_lookbacks[i]
         obs_matrix_slice = (obs_matrix[tn, on - max_lb + 1:on + 1] * weights)[::-1]
-        log_distances = np.sum(((obs_history[:max_lb] * weights) - obs_matrix_slice) ** 2, axis=1) / (-2 * (tau ** 2))
-        accum_distance[i] = np.sum(log_distances * decay_factors[:max_lb]) / max_lb
-    max_log_distance = np.min(accum_distance)
-    distances = np.exp(accum_distance / max_log_distance)
-    return distances * -1
+        diff = obs_history[:max_lb] * weights - obs_matrix_slice
+        distances = np.sqrt(np.sum(diff ** 2)) * decay_factors[:max_lb]
+        accum_distance[i] = np.sum(distances) / max_lb
+    return accum_distance
 
 @jit(nopython=True)
 def fast_computation(X, Y, accum_distance, obs_history):
     n_samples = X.shape[0]
-    
     X = np.hstack((np.ones((n_samples, 1), dtype=np.float64), X.astype(np.float64)))
     query_point = np.hstack((np.array([1], dtype=np.float64), obs_history[0].astype(np.float64)))
 
@@ -265,27 +264,34 @@ class NNAgentEuclidean(NNAgent):
 
         return np.dot(np.r_[1, current_ob], theta)
 
-    def sanity_neighbor_linearly_regress(self, current_ob):
+    def find_knn_and_distances(self, current_ob):
+        self.update_obs_history(current_ob)
+        
         all_distances = cdist(current_ob.reshape(1, -1), self.flattened_matrix, metric='euclidean')
         
         nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates]
 
         traj_nums, obs_nums = np.divmod(nearest_neighbors, self.obs_matrix.shape[1])
+        neighbor_states = self.obs_matrix[traj_nums, obs_nums]
         
-        accum_distance = np.zeros(len(traj_nums))
+        max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, len(self.obs_history)))
         
-        for i in range(len(traj_nums)):
-            tn, on = traj_nums[i], obs_nums[i]
-            distances = np.sum((current_ob - self.obs_matrix[tn][on]) ** 2)
-            accum_distance[i] = -distances / (2 * (self.tau ** 2))
+        accum_distance = compute_accum_distance(traj_nums, obs_nums, max_lookbacks, self.obs_history, self.obs_matrix, self.decay_factors, self.weights, self.tau)
+        
+        return neighbor_states, accum_distance
 
-        # Normalize for numerical stability
-        accum_distance /= np.sum(accum_distance) * -1
-        accum_distance = np.exp(accum_distance)
-        
+    def sanity_neighbor_linearly_regress(self, current_ob):
+        all_distances = cdist(current_ob.reshape(1, -1), self.flattened_matrix, metric='euclidean')[0]
+
+        nearest_neighbors = np.argpartition(all_distances, kth=self.candidates)[:self.candidates]
+        traj_nums, obs_nums = np.divmod(nearest_neighbors, self.obs_matrix.shape[1])
+
         X = np.c_[np.ones(len(traj_nums)), self.obs_matrix[traj_nums, obs_nums]]
         Y = self.act_matrix[traj_nums, obs_nums]
-        X_weights = X.T * accum_distance
+
+        # Negate distances so that closer points have higher weights
+        weights = -all_distances[nearest_neighbors]
+        X_weights = X.T * weights
 
         try:
             theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
@@ -444,6 +450,10 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
     def linearly_regress(self, current_ob):
         standardized_ob = (current_ob - self.mins) / self.maxes
         return super().linearly_regress(standardized_ob)
+
+    def find_knn_and_distances(self, current_ob):
+        standardized_ob = (current_ob - self.mins) / self.maxes
+        return super().find_knn_and_distances(standardized_ob)
 
     def sanity_neighbor_linearly_regress(self, current_ob):
         standardized_ob = (current_ob - self.mins) / self.maxes

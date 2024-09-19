@@ -97,7 +97,7 @@ for candidate_num in candidates:
                     success += info['success'] if 'success' in info else 0
                     episode_rewards.append(episode_reward)
                     trial += 1
-                    if trial >= 100:
+                    if trial >= 10:
                         break
 
                 with open("results/" + args.config_path[7:-4] + "_" + str(candidate_num) + "_" + str(lookback_num) + "_" + str(decay_num) + "_result.pkl", 'wb') as f:

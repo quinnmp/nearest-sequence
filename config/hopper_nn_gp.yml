@@ -1,0 +1,15 @@
+seed: 42
+metaworld: false
+env: "hopper-expert-v2"
+data:
+  # pkl: "data/hopper-expert-v2_25.pkl"
+  pkl: "data/hopper-expert-v2_25_normalized.pkl"
+policy:
+  k_neighbors:
+    - 200
+  lookback:
+    - 1
+  decay_rate:
+    - 0
+  dtw_window: 
+    - 0
