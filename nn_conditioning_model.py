@@ -9,7 +9,9 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import argparse
 import yaml
 import pickle
+from numba import jit, njit
 from sklearn.model_selection import KFold
+import math
 
 def load_expert_data(path):
     with open(path, 'rb') as input_file:
@@ -23,35 +25,52 @@ def create_matrices(expert_data):
 
     idx = 0
     for traj in expert_data:
+        # We will eventually be flattening all trajectories into a single list,
+        # so keep track of trajectory start indices
         traj_starts.append(idx)
         idx += len(traj['observations'])
+
+        # Create matrices for all observations and actions where each row is a trajectory
+        # and each column is an single state or action within that trajectory
         obs_matrix.append(traj['observations'])
         act_matrix.append(traj['actions'])
 
-    obs_matrix = np.asarray(obs_matrix)
-    act_matrix = np.asarray(act_matrix)
     traj_starts = np.asarray(traj_starts)
-    breakpoint()
     return obs_matrix, act_matrix, traj_starts
 
+@njit
+def compute_accum_distance(nearest_neighbors, max_lookbacks, flattened_obs_matrix, decay_factors, state_idx):
+    neighbor_distances = np.zeros(len(nearest_neighbors))
+    
+    for i in range(len(neighbor_distances)):
+        nb, max_lb = nearest_neighbors[i], max_lookbacks[i]
+
+        # Reverse so that more recent states have lower indices
+        state_matrix_slice = (flattened_obs_matrix[state_idx - max_lb + 1:state_idx + 1])[::-1]
+        obs_matrix_slice = (flattened_obs_matrix[nb - max_lb + 1:nb + 1])[::-1]
+
+        # Simple Euclidean distance
+        # Decay factors ensure more recent observations have more impact on cummulative distance calculation
+        distances = np.sqrt(np.sum((state_matrix_slice - obs_matrix_slice) ** 2)) * decay_factors[:max_lb]
+
+        # Average, this is to avoid states with lower lookback having lower cummulative distance
+        # I'm not happy with this - it's a sloppy solution and isn't treating all trajectories equally due to decay
+        neighbor_distances[i] = np.sum(distances) / max_lb
+
+    return neighbor_distances
+
 class KNNConditioningModel(nn.Module):
-    def __init__(self, state_dim, action_dim, k, hidden_dims=[512, 512, 64], dropout_rate=0.07882694623077187):
+    def __init__(self, state_dim, action_dim, k, final_neighbors_ratio=1, hidden_dims=[128, 128], dropout_rate=0.05):
         super(KNNConditioningModel, self).__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.k = k
-        self.input_dim = k * (state_dim + 1)  # k states + k distances
-
-        print(f"STATE DIMENSION: {self.state_dim}")
-        print(f"ACTION/OUTPUT DIMENSION: {self.action_dim}")
-        print(f"INPUT DIMENSION DIMENSION: {self.input_dim}")
-
-        # Dimensionality reduction layer
-        self.projection = nn.Linear(self.input_dim, hidden_dims[0])
+        self.final_neighbors_ratio = final_neighbors_ratio
+        self.input_dim = math.floor(k * final_neighbors_ratio) * (state_dim + 1)  # k states + k distances
 
         layers = []
-        in_dim = hidden_dims[0]
-        for hidden_dim in hidden_dims[1:]:
+        in_dim = self.input_dim
+        for hidden_dim in hidden_dims:
             layers.extend([
                 nn.Linear(in_dim, hidden_dim),
                 nn.ReLU(),
@@ -62,76 +81,76 @@ class KNNConditioningModel(nn.Module):
         layers.append(nn.Linear(hidden_dims[-1], action_dim))
         
         self.model = nn.Sequential(*layers)
-        self.residual_connection = nn.Linear(hidden_dims[0], action_dim)
     
     def forward(self, states, distances):
-        states = states.view(-1, self.k, self.state_dim)
+        states = states.view(-1, math.floor(self.k * self.final_neighbors_ratio), self.state_dim)
         
-        distances = distances.view(-1, self.k, 1)
+        distances = distances.view(-1, math.floor(self.k * self.final_neighbors_ratio), 1)
         
+        # Interleave states and distances to query point for locality in input
         interleaved = torch.cat([states, distances], dim=2).view(-1, self.input_dim)
 
-        reduced_input = self.projection(interleaved)
-
-        output = self.model(reduced_input)
-        residual_output = self.residual_connection(reduced_input)
-        return output + residual_output
+        output = self.model(interleaved)
+        return output
 
 class KNNExpertDataset(Dataset):
-    def __init__(self, expert_data_path, candidates, lookback=1, decay=0):
+    def __init__(self, expert_data_path, candidates, final_neighbors_ratio=1.0, lookback=1, decay=0):
         self.expert_data = load_expert_data(expert_data_path)
 
         self.obs_matrix, self.act_matrix, self.traj_starts = create_matrices(self.expert_data)
         
         self.candidates = candidates
+        self.final_neighbors_ratio = final_neighbors_ratio
         self.lookback = lookback
         self.decay = decay
 
-        self.flattened_matrix = self.obs_matrix.flatten()
+        self.flattened_obs_matrix = np.concatenate(self.obs_matrix)
+        self.reshaped_obs_matrix = self.flattened_obs_matrix.reshape(-1, len(self.obs_matrix[0][0]))
         self.i_array = np.arange(1, self.lookback + 1, dtype=float)
         self.decay_factors = np.power(self.i_array, self.decay)
         
     def __len__(self):
-        return len(self.flattened_matrix)
+        return len(self.flattened_obs_matrix)
     
     def __getitem__(self, idx):
-        state_traj = (np.abs(self.traj_starts - idx)).argmin()
-        state_num = idx - state_traj
+        # Figure out which trajectory this index in our flattened state arraybelongs to
+        state_traj = np.searchsorted(self.traj_starts, idx, side='right') - 1
+        state_num = idx - self.traj_starts[state_traj]
 
+        # The corresponding action to this state
         action = self.act_matrix[state_traj][state_num]
 
-        all_distances = cdist(self.obs_matrix[state_traj][state_num].reshape(1, -1), self.flattened_matrix, metric='euclidean')
+        # The distance from this state to every single other state
+        all_distances = cdist(self.obs_matrix[state_traj][state_num].reshape(1, -1), self.reshaped_obs_matrix)
 
+        # Find self.candidates nearest neighbors
         nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates]
-        
-        traj_nums, obs_nums = np.divmod(nearest_neighbors, self.obs_matrix.shape[1])
-        neighbor_states = self.obs_matrix[traj_nums, obs_nums]
+    
+        # Find corresponding trajectories for each neighbor
+        traj_nums = np.searchsorted(self.traj_starts, nearest_neighbors, side='right') - 1
+        obs_nums = nearest_neighbors - self.traj_starts[traj_nums]
 
+        # Find corresponding states for each neighbor
+        neighbor_states = self.flattened_obs_matrix[nearest_neighbors]
+
+        # How far can we look back for each neighbor?
+        # This is upper bound by min(lookback hyperparameter, query point distance into its traj, neighbor distance into its traj)
         max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, state_num + 1))
 
-        neighbor_distances = np.zeros(len(traj_nums))
-        
-        for i in range(len(traj_nums)):
-            tn, on, max_lb = traj_nums[i], obs_nums[i], max_lookbacks[i]
-            state_matrix_slice = (self.obs_matrix[state_traj, state_num - max_lb + 1:state_num + 1])[::-1]
-            obs_matrix_slice = (self.obs_matrix[tn, on - max_lb + 1:on + 1])[::-1]
-            diff = state_matrix_slice - obs_matrix_slice
-            distances = np.sqrt(np.sum(diff ** 2)) * self.decay_factors[:max_lb]
-            neighbor_distances[i] = np.sum(distances) / max_lb
+        neighbor_distances = compute_accum_distance(nearest_neighbors, max_lookbacks, self.flattened_obs_matrix, self.decay_factors, idx)
+
+        # Do a final pass and pick only the top (self.final_neighbors_ratio * 100)% of neighbors based on this new accumulated distance
+        final_neighbor_num = math.floor(len(neighbor_distances) * self.final_neighbors_ratio)
+        final_neighbors = np.argpartition(neighbor_distances, kth=(final_neighbor_num - 1))[:final_neighbor_num]
+        neighbor_states = self.flattened_obs_matrix[nearest_neighbors[final_neighbors]]
 
         return (torch.FloatTensor(neighbor_states), 
-                torch.FloatTensor(neighbor_distances), 
+                torch.FloatTensor(neighbor_distances[final_neighbors]), 
                 torch.FloatTensor(action))
 
 def train_model(model, train_loader, num_epochs=100, lr=1e-4):
     criterion = nn.MSELoss()
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.0002282685157561025)
-    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10, verbose=True)
-    
-    best_val_loss = float('inf')
-    best_model = None
-    patience = 20
-    no_improve = 0
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.0002)
     
     for epoch in range(num_epochs):
         model.train()
@@ -146,18 +165,6 @@ def train_model(model, train_loader, num_epochs=100, lr=1e-4):
 
         print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss/len(train_loader):.4f}")
 
-        # scheduler.step(val_loss)
-        # if val_loss < best_val_loss:
-        #     best_val_loss = val_loss
-        #     best_model = model.state_dict()
-        #     no_improve = 0
-        # else:
-        #     no_improve += 1
-        #     if no_improve >= patience:
-        #         print("Early stopping!")
-        #         break
-
-    # model.load_state_dict(best_model)
     return model
 
 def evaluate_model(model, test_loader):
@@ -196,7 +203,7 @@ if __name__ == "__main__":
     # Hyperparameters
     batch_size = 32
     num_epochs = 100
-    learning_rate = 0.0001279014484924134
+    learning_rate = 1e-3
 
     train_loader = DataLoader(full_dataset, batch_size=batch_size, shuffle=True)
 

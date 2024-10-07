@@ -81,87 +81,89 @@ env.seed(42)
 
 episode_rewards = []
 trial = 0
-episode_reward = 0.0
-steps = 0
+
+for i in range(100):
+    episode_reward = 0.0
+    steps = 0
 # get first observation
-obs = env.reset()
+    obs = env.reset()
 
 # keep a queue of last 2 steps of observations
-obs_deque = collections.deque(
-    [obs] * obs_horizon, maxlen=obs_horizon)
-rewards = list()
-done = False
-step_idx = 0
+    obs_deque = collections.deque(
+        [obs] * obs_horizon, maxlen=obs_horizon)
+    done = False
+    step_idx = 0
 
-max_steps = 1000
-device = torch.device('cpu')
+    max_steps = 1000
+    device = torch.device('cpu')
 
-with tqdm(total=max_steps, desc="Eval PushTStateEnv") as pbar:
-    while not done:
-        B = 1
-        # stack the last obs_horizon (2) number of observations
-        obs_seq = np.stack(obs_deque)
-        # normalize observation
-        nobs = normalize_data(obs_seq, stats=stats['obs'])
-        # device transfer
-        nobs = torch.from_numpy(nobs).to(device, dtype=torch.float32)
+    with tqdm(total=max_steps, desc="Eval PushTStateEnv") as pbar:
+        while not done:
+            B = 1
+            # stack the last obs_horizon (2) number of observations
+            obs_seq = np.stack(obs_deque)
+            # normalize observation
+            nobs = normalize_data(obs_seq, stats=stats['obs'])
+            # device transfer
+            nobs = torch.from_numpy(nobs).to(device, dtype=torch.float32)
 
-        # infer action
-        with torch.no_grad():
-            # reshape observation to (B,obs_horizon*obs_dim)
-            obs_cond = nobs.unsqueeze(0).flatten(start_dim=1)
+            # infer action
+            with torch.no_grad():
+                # reshape observation to (B,obs_horizon*obs_dim)
+                obs_cond = nobs.unsqueeze(0).flatten(start_dim=1)
 
-            # initialize action from Guassian noise
-            noisy_action = torch.randn(
-                (B, pred_horizon, action_dim), device=device)
-            naction = noisy_action
+                # initialize action from Guassian noise
+                noisy_action = torch.randn(
+                    (B, pred_horizon, action_dim), device=device)
+                naction = noisy_action
 
-            # init scheduler
-            noise_scheduler.set_timesteps(num_diffusion_iters)
+                # init scheduler
+                noise_scheduler.set_timesteps(num_diffusion_iters)
 
-            for k in noise_scheduler.timesteps:
-                # predict noise
-                noise_pred = ema_noise_pred_net(
-                    sample=naction,
-                    timestep=k,
-                    global_cond=obs_cond
-                )
+                for k in noise_scheduler.timesteps:
+                    # predict noise
+                    noise_pred = ema_noise_pred_net(
+                        sample=naction,
+                        timestep=k,
+                        global_cond=obs_cond
+                    )
 
-                # inverse diffusion step (remove noise)
-                naction = noise_scheduler.step(
-                    model_output=noise_pred,
-                    timestep=k,
-                    sample=naction
-                ).prev_sample
+                    # inverse diffusion step (remove noise)
+                    naction = noise_scheduler.step(
+                        model_output=noise_pred,
+                        timestep=k,
+                        sample=naction
+                    ).prev_sample
 
-        # unnormalize action
-        naction = naction.detach().to('cpu').numpy()
-        # (B, pred_horizon, action_dim)
-        naction = naction[0]
-        action_pred = unnormalize_data(naction, stats=stats['action'])
+            # unnormalize action
+            naction = naction.detach().to('cpu').numpy()
+            # (B, pred_horizon, action_dim)
+            naction = naction[0]
+            action_pred = unnormalize_data(naction, stats=stats['action'])
 
-        # only take action_horizon number of actions
-        start = obs_horizon - 1
-        end = start + action_horizon
-        action = action_pred[start:end,:]
-        # (action_horizon, action_dim)
+            # only take action_horizon number of actions
+            start = obs_horizon - 1
+            end = start + action_horizon
+            action = action_pred[start:end,:]
+            # (action_horizon, action_dim)
 
-        # execute action_horizon number of steps
-        # without replanning
-        for i in range(len(action)):
-            # stepping env
-            obs, reward, done, info = env.step(action[i])
-            # save observations
-            obs_deque.append(obs)
-            # and reward/vis
-            rewards.append(reward)
+            # execute action_horizon number of steps
+            # without replanning
+            for i in range(len(action)):
+                # stepping env
+                obs, reward, done, info = env.step(action[i])
+                # save observations
+                obs_deque.append(obs)
+                # and reward/vis
+                episode_reward += reward
 
-            # update progress bar
-            step_idx += 1
-            pbar.update(1)
-            pbar.set_postfix(reward=reward)
-            if done:
-                break
+                # update progress bar
+                step_idx += 1
+                pbar.update(1)
+                pbar.set_postfix(reward=reward)
+                if done:
+                    episode_rewards.append(episode_reward)
+                    break
 
 # print out the maximum target coverage
-print('Score: ', max(rewards))
+print('Score: ', np.mean(episode_rewards))

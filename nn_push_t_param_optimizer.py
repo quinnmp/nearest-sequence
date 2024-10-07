@@ -38,20 +38,19 @@ def crop_obs_for_env(obs, env):
     else:
         return obs
 space = [
-    Integer(1, 1000, name='candidate_num'),
-    Integer(1, 150, name='lookback_num'),
+    Integer(10, 10000, name='candidate_num'),
+    Integer(2, 150, name='lookback_num'),
     Integer(-30, 30, name='decay_num'),
-#    Integer(1, 200, name='lookback_num'),
-#    Integer(-100, 100, name='decay_num'),
-#    Real(0, 1, name='obs1'),
-#    Real(0, 1, name='obs2'),
-#    Real(0, 1, name='obs3'),
-#    Real(0, 1, name='obs4'),
-#    Real(0, 1, name='obs5'),
+    Real(0.01, 0.9, name='final_neighbors_ratio'),
+    # Real(0, 1, name='obs1'),
+    # Real(0, 1, name='obs2'),
+    # Real(0, 1, name='obs3'),
+    # Real(0, 1, name='obs4'),
+    # Real(0, 1, name='obs5'),
 ]
 
 @use_named_args(space)
-def objective(obs1=1, obs2=1, obs3=1, obs4=1, obs5=1, candidate_num=100, lookback_num=1, decay_num=0, window_num=0):
+def objective(obs1=1, obs2=1, obs3=1, obs4=1, obs5=1, candidate_num=100, lookback_num=1, decay_num=0, window_num=0, final_neighbors_ratio=1):
     if config['metaworld']:
         env = _env_dict.MT50_V2[config['env']]()
         env._partially_observable = False
@@ -63,7 +62,7 @@ def objective(obs1=1, obs2=1, obs3=1, obs4=1, obs5=1, candidate_num=100, lookbac
         env = gym.make(config['env'])
     np.random.seed(config['seed'])
 
-    nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=int(candidate_num), lookback=int(lookback_num), decay=int(decay_num)/10, window=int(window_num), weights=np.array([obs1, obs2, obs3, obs4, obs5]))
+    nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=int(candidate_num), lookback=int(lookback_num), decay=int(decay_num)/10, window=int(window_num), weights=np.array([obs1, obs2, obs3, obs4, obs5]), final_neighbors_ratio=final_neighbors_ratio)
 
     episode_rewards = []
     for i in range(10):
@@ -97,15 +96,15 @@ def objective(obs1=1, obs2=1, obs3=1, obs4=1, obs5=1, candidate_num=100, lookbac
         max_coverage = max(step_rewards)
         episode_rewards.append(max_coverage)
 
-    print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {round(decay_num/10, 2):.2f}, window {window_num}, weights {np.array([obs1, obs2, obs3, obs4, obs5])}: {round(np.mean(episode_rewards), 4):.4f}, {round(np.std(episode_rewards), 2):.2f}")
+    print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {round(decay_num/10, 2):.2f}, ratio {final_neighbors_ratio}, weights {np.array([obs1, obs2, obs3, obs4, obs5])}: {round(np.mean(episode_rewards), 4):.4f}, {round(np.std(episode_rewards), 2):.2f}")
     return np.mean(episode_rewards)
 
 def run_optimization(random_state=None):
     return gp_minimize(
         lambda params: -objective(params),  # Negate for minimization
         space,
-        n_calls=1000,
-        n_random_starts=50,
+        n_calls=100,
+        n_random_starts=10,
         n_jobs=-1,  # Use all available cores
         acq_func="EI",
         random_state=random_state,
