@@ -12,11 +12,6 @@ from numba import jit, njit
 from scipy.linalg import lstsq
 DEBUG = False
 
-def calculate_inverse_covariance_obs_matrix(expert_data):
-    observations = np.concatenate([traj['observations'] for traj in expert_data])
-
-    return np.linalg.inv(np.cov(observations, rowvar=False))
-
 def load_expert_data(path):
     with open(path, 'rb') as input_file:
         return pickle.load(input_file)
