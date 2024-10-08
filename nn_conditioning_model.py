@@ -13,6 +13,8 @@ from numba import jit, njit
 from sklearn.model_selection import KFold
 import math
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 def load_expert_data(path):
     with open(path, 'rb') as input_file:
         return pickle.load(input_file)
@@ -72,14 +74,13 @@ class KNNConditioningModel(nn.Module):
         in_dim = self.input_dim
         for hidden_dim in hidden_dims:
             layers.extend([
-                nn.Linear(in_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout_rate)
+                nn.Linear(in_dim, hidden_dim).to(device),
+                nn.ReLU().to(device),
+                nn.Dropout(dropout_rate).to(device)
             ])
             in_dim = hidden_dim
 
-        layers.append(nn.Linear(hidden_dims[-1], action_dim))
-        
+        layers.append(nn.Linear(hidden_dims[-1], action_dim).to(device))
         self.model = nn.Sequential(*layers)
     
     def forward(self, states, distances):
@@ -144,9 +145,9 @@ class KNNExpertDataset(Dataset):
         final_neighbors = np.argpartition(neighbor_distances, kth=(final_neighbor_num - 1))[:final_neighbor_num]
         neighbor_states = self.flattened_obs_matrix[nearest_neighbors[final_neighbors]]
 
-        return (torch.FloatTensor(neighbor_states), 
-                torch.FloatTensor(neighbor_distances[final_neighbors]), 
-                torch.FloatTensor(action))
+        return (torch.FloatTensor(neighbor_states, device=device), 
+                torch.FloatTensor(neighbor_distances[final_neighbors], device=device), 
+                torch.FloatTensor(action, device=device))
 
 def train_model(model, train_loader, num_epochs=100, lr=1e-4):
     criterion = nn.MSELoss()
