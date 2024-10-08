@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from numba import jit, njit
 from scipy.linalg import lstsq
+import math
 DEBUG = False
 
 def load_expert_data(path):
@@ -24,25 +25,33 @@ def create_matrices(expert_data):
     max_length = max((len(traj['observations']) for traj in expert_data))
     obs_matrix = []
     act_matrix = []
+    traj_starts = []
 
+    idx = 0
     for traj in expert_data:
-        obs_matrix.append(np.pad(traj['observations'], [(0, max_length - len(traj['observations'])), (0, 0)], mode='constant', constant_values=np.inf))
-        act_matrix.append(np.pad(traj['actions'], [(0, max_length - len(traj['actions'])), (0, 0)], mode='constant', constant_values=np.inf))
+        # We will eventually be flattening all trajectories into a single list,
+        # so keep track of trajectory start indices
+        traj_starts.append(idx)
+        idx += len(traj['observations'])
 
-    obs_matrix = np.asarray(obs_matrix)
-    act_matrix = np.asarray(act_matrix)
-    return obs_matrix, act_matrix
+        # Create matrices for all observations and actions where each row is a trajectory
+        # and each column is an single state or action within that trajectory
+        obs_matrix.append(traj['observations'])
+        act_matrix.append(traj['actions'])
+
+    traj_starts = np.asarray(traj_starts)
+    return obs_matrix, act_matrix, traj_starts
 
 @njit
-def compute_accum_distance(nearest_neighbors, max_lookbacks, obs_history, flattened_obs_matrix, decay_factors, weights, state_idx, rot_indices):
-    neighbor_distances = np.zeros(len(traj_nums))
+def compute_accum_distance(nearest_neighbors, max_lookbacks, obs_history, flattened_obs_matrix, decay_factors, weights, rot_indices):
+    neighbor_distances = np.zeros(len(nearest_neighbors))
     rot_indices = np.asarray(rot_indices)
 
-    for i in range(len(traj_nums)):
+    for i in range(len(nearest_neighbors)):
         nb, max_lb = nearest_neighbors[i], max_lookbacks[i]
 
         # Reverse so that more recent states have lower indices
-        obs_matrix_slice = (obs_matrix[tn, on - max_lb + 1:on + 1] * weights)[::-1]
+        obs_matrix_slice = (flattened_obs_matrix[nb - max_lb + 1:nb + 1])[::-1] * weights
         obs_history_slice = obs_history[:max_lb] * weights
 
         diff = obs_history_slice - obs_matrix_slice
@@ -56,6 +65,7 @@ def compute_accum_distance(nearest_neighbors, max_lookbacks, obs_history, flatte
         # Average, this is to avoid states with lower lookback having lower cummulative distance
         # I'm not happy with this - it's a sloppy solution and isn't treating all trajectories equally due to decay
         neighbor_distances[i] = np.sum(distances) / max_lb
+
     return neighbor_distances
 
 @njit
@@ -83,7 +93,7 @@ class NNAgent:
     def __init__(self, expert_data_path, plot=False, candidates=10, lookback=20, decay=-1, window=10, weights=np.array([]), tau=1.0, final_neighbors_ratio=0.5):
         self.expert_data = load_expert_data(expert_data_path)
 
-        self.obs_matrix, self.act_matrix = create_matrices(self.expert_data)
+        self.obs_matrix, self.act_matrix, self.traj_starts = create_matrices(self.expert_data)
 
         self.obs_history = np.array([])
 
@@ -95,7 +105,9 @@ class NNAgent:
         self.final_neighbors_ratio = final_neighbors_ratio
 
         # Precompute constants
-        self.flattened_matrix = np.ascontiguousarray(self.obs_matrix.reshape(-1, self.obs_matrix.shape[2]))
+        self.flattened_obs_matrix = np.concatenate(self.obs_matrix)
+        self.flattened_act_matrix = np.concatenate(self.act_matrix)
+        self.reshaped_obs_matrix = self.flattened_obs_matrix.reshape(-1, len(self.obs_matrix[0][0]))
         self.i_array = np.arange(1, self.lookback + 1, dtype=float)
         self.decay_factors = np.power(self.i_array, self.decay)
 
@@ -249,30 +261,34 @@ class NNAgentEuclidean(NNAgent):
         self.update_obs_history(current_ob)
         
         # The distance from this observation to every single other state
-        all_distances = cdist(current_ob.reshape(1, -1), self.flattened_matrix, metric='euclidean')
+        diff = current_ob * self.weights - self.reshaped_obs_matrix * self.weights
+        diff[:, self.rot_indices] = (((diff[:, self.rot_indices] * np.pi * 2) + np.pi) % (2 * np.pi) - np.pi) / (np.pi * 2)
+        all_distances = np.sqrt(np.sum(diff ** 2, axis=1))
         
         # Find self.candidates nearest neighbors
         nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates]
 
         # Find corresponding trajectories for each neighbor
-        traj_nums, obs_nums = np.divmod(nearest_neighbors, self.obs_matrix.shape[1])
+        traj_nums = np.searchsorted(self.traj_starts, nearest_neighbors, side='right') - 1
+        obs_nums = nearest_neighbors - self.traj_starts[traj_nums]
         
         # How far can we look back for each neighbor?
         # This is upper bound by min(lookback hyperparameter, length of obs history, neighbor distance into its traj)
         max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, len(self.obs_history)))
         
-        accum_distance = compute_accum_distance(traj_nums, obs_nums, max_lookbacks, self.obs_history, self.obs_matrix, self.decay_factors, self.weights, self.tau, self.rot_indices)
+        neighbor_distances = compute_accum_distance(nearest_neighbors, max_lookbacks, self.obs_history, self.flattened_obs_matrix, self.decay_factors, self.weights, self.rot_indices)
 
         # Do a final pass and pick only the top (self.final_neighbors_ratio * 100)% of neighbors based on this new accumulated distance
-        final_neighbor_num = math.floor(len(accum_distance) * self.final_neighbors_ratio)
-        final_neighbors = np.argpartition(accum_distance, kth=final_neighbor_num)[:final_neighbor_num]
+        final_neighbor_num = math.floor(len(neighbor_distances) * self.final_neighbors_ratio)
+        final_neighbor_indices = np.argpartition(neighbor_distances, kth=final_neighbor_num - 1)[:final_neighbor_num]
+        final_neighbors = nearest_neighbors[final_neighbor_indices]
 
-        # pickle.dump([traj_nums[final_neighbors], obs_nums[final_neighbors]], open("data/most_recent_neighbors.pkl", "wb"))
+        # pickle.dump([final_neighbors], open("data/most_recent_neighbors.pkl", "wb"))
        
         # Linear regression
-        X = np.c_[np.ones(final_neighbor_num), self.obs_matrix[traj_nums[final_neighbors], obs_nums[final_neighbors]]]
-        Y = self.act_matrix[traj_nums[final_neighbors], obs_nums[final_neighbors]]
-        X_weights = X.T * accum_distance[final_neighbors]
+        X = np.c_[np.ones(final_neighbor_num), self.flattened_obs_matrix[final_neighbors]]
+        Y = self.flattened_act_matrix[final_neighbors]
+        X_weights = X.T * neighbor_distances[final_neighbor_indices]
 
         try:
             theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
@@ -486,7 +502,7 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
 
     def sanity_neighbor_linearly_regress(self, current_ob):
         standardized_ob = (current_ob - self.mins) / self.maxes
-        return super().sanity_neighbor_linearly_regress(standardized_ob)
+        return super().sanity_neighbor_.inearly_regress(standardized_ob)
 
     def sanity_linearly_regress(self, current_ob):
         standardized_ob = (current_ob - self.mins) / self.maxes

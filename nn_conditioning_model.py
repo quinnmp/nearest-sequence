@@ -41,7 +41,7 @@ def create_matrices(expert_data):
     return obs_matrix, act_matrix, traj_starts
 
 @njit
-def compute_accum_distance(nearest_neighbors, max_lookbacks, flattened_obs_matrix, decay_factors, state_idx):
+def compute_accum_distance(nearest_neighbors, max_lookbacks, flattened_obs_matrix, decay_factors, state_idx, rot_indices):
     neighbor_distances = np.zeros(len(nearest_neighbors))
     
     for i in range(len(neighbor_distances)):
@@ -95,7 +95,7 @@ class KNNConditioningModel(nn.Module):
         return output
 
 class KNNExpertDataset(Dataset):
-    def __init__(self, expert_data_path, candidates, final_neighbors_ratio=1.0, lookback=1, decay=0):
+    def __init__(self, expert_data_path, candidates, final_neighbors_ratio=1.0, lookback=1, decay=0, rot_indices=[4], weights=np.array([])):
         self.expert_data = load_expert_data(expert_data_path)
 
         self.obs_matrix, self.act_matrix, self.traj_starts = create_matrices(self.expert_data)
@@ -109,6 +109,12 @@ class KNNExpertDataset(Dataset):
         self.reshaped_obs_matrix = self.flattened_obs_matrix.reshape(-1, len(self.obs_matrix[0][0]))
         self.i_array = np.arange(1, self.lookback + 1, dtype=float)
         self.decay_factors = np.power(self.i_array, self.decay)
+        self.rot_indices = rot_indices
+
+        if len(weights) > 0:
+            self.weights = weights
+        else:
+            self.weights = np.ones(len(self.obs_matrix[0][0]))
         
     def __len__(self):
         return len(self.flattened_obs_matrix)
@@ -122,7 +128,9 @@ class KNNExpertDataset(Dataset):
         action = self.act_matrix[state_traj][state_num]
 
         # The distance from this state to every single other state
-        all_distances = cdist(self.obs_matrix[state_traj][state_num].reshape(1, -1), self.reshaped_obs_matrix)
+        diff = self.obs_matrix[state_traj][state_num] * self.weights - self.reshaped_obs_matrix * self.weights
+        diff[:, self.rot_indices] = (((diff[:, self.rot_indices] * np.pi * 2) + np.pi) % (2 * np.pi) - np.pi) / (np.pi * 2)
+        all_distances = np.sqrt(np.sum(diff ** 2, axis=1))
 
         # Find self.candidates nearest neighbors
         nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates]
@@ -138,7 +146,7 @@ class KNNExpertDataset(Dataset):
         # This is upper bound by min(lookback hyperparameter, query point distance into its traj, neighbor distance into its traj)
         max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, state_num + 1))
 
-        neighbor_distances = compute_accum_distance(nearest_neighbors, max_lookbacks, self.flattened_obs_matrix, self.decay_factors, idx)
+        neighbor_distances = compute_accum_distance(nearest_neighbors, max_lookbacks, self.flattened_obs_matrix, self.decay_factors, idx, self.rot_indices)
 
         # Do a final pass and pick only the top (self.final_neighbors_ratio * 100)% of neighbors based on this new accumulated distance
         final_neighbor_num = math.floor(len(neighbor_distances) * self.final_neighbors_ratio)

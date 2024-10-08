@@ -84,7 +84,7 @@ def objective(obs1=1, obs2=1, obs3=1, obs4=1, obs5=1, candidate_num=100, lookbac
 
             step_rewards.append(reward)
             if False:
-                env.render()
+                env.render(mode='human')
             if done:
                 break
             if config['metaworld'] and steps >= 500:

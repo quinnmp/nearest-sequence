@@ -48,7 +48,7 @@ tau = [0.01]
 for tau_num, candidate_num, lookback_num, decay_num, window_num, final_neighbors_ratio in product(tau, candidates, lookback, decay, window, final_neighbors_ratio):
     env = PushTEnv()
 
-    nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, window=window_num, tau=tau_num, final_neighbors_ratio=final_neighbors_ratio)
+    nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, window=window_num, tau=tau_num, final_neighbors_ratio=final_neighbors_ratio, weights=[1.0, 1.0, 1.0, 1.0, 1.0])
 
     episode_rewards = []
     success = 0
@@ -68,9 +68,8 @@ for tau_num, candidate_num, lookback_num, decay_num, window_num, final_neighbors
             observation = crop_obs_for_env(observation, config['env'])
 
             step_rewards.append(reward)
-            if True:
+            if False:
                 env.render(mode='human')
-                time.sleep(0.1)
             if done:
                 break
             if config['metaworld'] and steps >= 500:
