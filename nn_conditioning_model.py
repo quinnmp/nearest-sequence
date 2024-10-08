@@ -145,9 +145,9 @@ class KNNExpertDataset(Dataset):
         final_neighbors = np.argpartition(neighbor_distances, kth=(final_neighbor_num - 1))[:final_neighbor_num]
         neighbor_states = self.flattened_obs_matrix[nearest_neighbors[final_neighbors]]
 
-        return (torch.FloatTensor(neighbor_states, device=device), 
-                torch.FloatTensor(neighbor_distances[final_neighbors], device=device), 
-                torch.FloatTensor(action, device=device))
+        return (torch.tensor(neighbor_states, device=device), 
+                torch.tensor(neighbor_distances[final_neighbors], device=device), 
+                torch.tensor(action, device=device))
 
 def train_model(model, train_loader, num_epochs=100, lr=1e-4):
     criterion = nn.MSELoss()
