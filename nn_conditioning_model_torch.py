@@ -34,11 +34,10 @@ def create_matrices(expert_data):
 
         # Create matrices for all observations and actions where each row is a trajectory
         # and each column is an single state or action within that trajectory
-        act_matrix.append(traj['actions'])
         obs_matrix.append(torch.tensor(traj['observations'], dtype=torch.float32, device=device))
         act_matrix.append(torch.tensor(traj['actions'], dtype=torch.float32, device=device))
 
-    traj_starts = torch.tensor(traj_starts).to(device)
+    traj_starts = torch.tensor(traj_starts, device=device)
     return obs_matrix, act_matrix, traj_starts
 
 def compute_accum_distance(nearest_neighbors, max_lookbacks, flattened_obs_matrix, decay_factors, state_idx):
@@ -106,8 +105,7 @@ class KNNExpertDataset(Dataset):
         self.lookback = lookback
         self.decay = decay
 
-        self.flattened_obs_matrix = torch.cat([torch.from_numpy(obs).to(device).clone() if isinstance(obs, np.ndarray) 
-                                       else obs.clone().to(device) for obs in self.obs_matrix])
+        self.flattened_obs_matrix = torch.cat([torch.from_numpy(obs).to(device).clone() if isinstance(obs, np.ndarray) else obs.clone().to(device) for obs in self.obs_matrix])
         self.reshaped_obs_matrix = self.flattened_obs_matrix.reshape(-1, len(self.obs_matrix[0][0]))
         self.decay_factors = torch.tensor([pow(i, self.decay) for i in range(1, self.lookback + 1)], device=device)
         
@@ -116,7 +114,7 @@ class KNNExpertDataset(Dataset):
     
     def __getitem__(self, idx):
         # Figure out which trajectory this index in our flattened state arraybelongs to
-        state_traj = torch.searchsorted(self.traj_starts, torch.tensor(idx), right=True) - 1
+        state_traj = torch.searchsorted(self.traj_starts, torch.tensor(idx, device=device), right=True) - 1
         state_num = idx - self.traj_starts[state_traj]
 
         # The corresponding action to this state

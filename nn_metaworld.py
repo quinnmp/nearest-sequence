@@ -27,6 +27,7 @@ candidates = config['policy']['k_neighbors']
 lookback = config['policy']['lookback']
 decay = config['policy']['decay_rate']
 window = config['policy']['dtw_window']
+final_neighbors_ratio = config['policy']['ratio']
 
 def crop_obs_for_env(obs, env):
     if env == "ant-expert-v2":
@@ -54,7 +55,7 @@ for candidate_num in candidates:
                 env.seed(config['seed'])
                 np.random.seed(config['seed'])
 
-                nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, window=window_num)
+                nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, window=window_num, final_neighbors_ratio=final_neighbors_ratio)
 
                 episode_rewards = []
                 success = 0
