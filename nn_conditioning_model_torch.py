@@ -73,13 +73,13 @@ class KNNConditioningModel(nn.Module):
         in_dim = self.input_dim
         for hidden_dim in hidden_dims:
             layers.extend([
-                nn.Linear(in_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout_rate)
+                nn.Linear(in_dim, hidden_dim).to(device),
+                nn.ReLU().to(device),
+                nn.Dropout(dropout_rate).to(device)
             ])
             in_dim = hidden_dim
 
-        layers.append(nn.Linear(hidden_dims[-1], action_dim))
+        layers.append(nn.Linear(hidden_dims[-1], action_dim).to(device))
         
         self.model = nn.Sequential(*layers)
     
@@ -142,7 +142,7 @@ class KNNExpertDataset(Dataset):
 
         # How far can we look back for each neighbor?
         # This is upper bound by min(lookback hyperparameter, query point distance into its traj, neighbor distance into its traj)
-        max_lookbacks = torch.minimum(torch.tensor(self.lookback, device=neighbor_states.device), torch.minimum(obs_nums + 1, state_num + 1))
+        max_lookbacks = torch.minimum(torch.tensor(self.lookback, device=device), torch.minimum(obs_nums + 1, state_num + 1))
 
         neighbor_distances = compute_accum_distance(nearest_neighbors, max_lookbacks, self.flattened_obs_matrix, self.decay_factors, idx)
 
@@ -151,7 +151,7 @@ class KNNExpertDataset(Dataset):
         final_neighbors = torch.topk(neighbor_distances, final_neighbor_num, largest=False).indices
         neighbor_states = self.flattened_obs_matrix[nearest_neighbors[final_neighbors]]
 
-        return neighbor_states, neighbor_distances[final_neighbors], action
+        return neighbor_states.to(device), neighbor_distances[final_neighbors].to(device), action.to(device)
 
 def train_model(model, train_loader, num_epochs=100, lr=1e-4):
     criterion = nn.MSELoss()
@@ -215,7 +215,7 @@ if __name__ == "__main__":
     # Initialize model
     state_dim = full_dataset[0][0][0].shape[0]
     action_dim = full_dataset[0][2].shape[0]
-    model = KNNConditioningModel(state_dim, action_dim, candidates[0])
+    model = KNNConditioningModel(state_dim, action_dim, candidates[0]).to(device)
 
     # Train model
     model = train_model(model, train_loader, num_epochs=num_epochs, lr=learning_rate)
