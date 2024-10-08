@@ -9,7 +9,7 @@ The general flow of this algorithm. See `nn_metaworld.py` for an example of impl
 	4. Perform locally-weighted linear regression, using the cumulative distance as the weights
 	5. Output an action from the original query point using our regression model
 # Code to Look At
-	A lot of this repo is very messy at the moment. If you want to gain an understanding of this algorithm, take a look at `nn_metaworld.py` for the high-level implementation. For the actual nearest-sequence algorithm, take a look at the `nn_util` function `linearly_regress` which starts on line 247 at the time of writing.
+A lot of this repo is very messy at the moment. If you want to gain an understanding of this algorithm, take a look at `nn_metaworld.py` for the high-level implementation. For the actual nearest-sequence algorithm, take a look at the `nn_util` function `linearly_regress` which starts on line 247 at the time of writing.
 # Results
 
 ## MuJoCo
@@ -31,4 +31,3 @@ The general flow of this algorithm. See `nn_metaworld.py` for an example of impl
 | NN+LWR         | 3451.84 ± 1388.75         |                           |                           |                              |
 | NS+LWR         | **4106.33** ± 454.94      |                           |                           |                              |
 | NS+LWR+DTW     | **4106.19** ± 458.95      |                           |                           |                              |
-
