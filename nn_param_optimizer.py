@@ -37,13 +37,14 @@ def crop_obs_for_env(obs, env):
     else:
         return obs
 space = [
-    Integer(1, 100, name='candidate_num'),
-    Integer(1, 150, name='lookback_num'),
+    Integer(1, 1000, name='candidate_num'),
+    Integer(1, 50, name='lookback_num'),
     Integer(-30, 30, name='decay_num'),
+    Integer(1, 10, name='ratio')
 ]
 
 @use_named_args(space)
-def objective(candidate_num, lookback_num, decay_num, window_num=0):
+def objective(candidate_num, lookback_num, decay_num, ratio, window_num=0):
     if config['metaworld']:
         env = _env_dict.MT50_V2[config['env']]()
         env._partially_observable = False
@@ -54,7 +55,7 @@ def objective(candidate_num, lookback_num, decay_num, window_num=0):
     env.seed(config['seed'])
     np.random.seed(config['seed'])
 
-    nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=int(candidate_num), lookback=int(lookback_num), decay=int(decay_num) / 10, window=int(window_num))
+    nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=int(candidate_num), lookback=int(lookback_num), decay=int(decay_num) / 10, final_neighbors_ratio=ratio / 10, window=int(window_num))
 
     episode_rewards = []
     for i in range(10):
@@ -84,7 +85,7 @@ def objective(candidate_num, lookback_num, decay_num, window_num=0):
 
         episode_rewards.append(episode_reward)
 
-    print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {round(decay_num/10, 2):.2f}, window {window_num}: {round(np.mean(episode_rewards), 2):.2f}, {round(np.std(episode_rewards), 2):.2f}")
+    print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {round(decay_num/10, 2):.2f}, ratio {ratio}, window {window_num}: {round(np.mean(episode_rewards), 2):.2f}, {round(np.std(episode_rewards), 2):.2f}")
     return np.mean(episode_rewards)
 
 def run_optimization(random_state=None):

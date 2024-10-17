@@ -14,6 +14,17 @@ import metaworld
 import metaworld.envs.mujoco.env_dict as _env_dict
 import d4rl
 import numpy as np
+import argparse
+import yaml
+
+parser = argparse.ArgumentParser()
+parser.add_argument("config_path", help="Path to config file")
+args, _ = parser.parse_known_args()
+
+with open(args.config_path, 'r') as f:
+    config = yaml.load(f, Loader=yaml.FullLoader)
+
+print(config)
 
 def crop_obs_for_env(obs, env):
     if env == "ant-expert-v2":
@@ -29,9 +40,9 @@ def crop_obs_for_env(obs, env):
     
 def objective(trial):
     # Define the hyperparameters to optimize
-    k = trial.suggest_int('k', 5, 100)
-    # lookback = trial.suggest_int('lookback', 1, 20)
-    # decay = trial.suggest_float('decay', -3.0, -1.0)
+    k = trial.suggest_int('k', 15, 100)
+    lookback = trial.suggest_int('lookback', 1, 50)
+    decay = trial.suggest_float('decay', -3.0, 3.0)
     final_ratio = trial.suggest_float('final_ratio', 0.1, 0.9)
     batch_size = trial.suggest_categorical('batch_size', [64, 128, 256, 512, 1024])
     lr = trial.suggest_float('lr', 1e-6, 1e-2, log=True)
@@ -43,9 +54,8 @@ def objective(trial):
     ]
 
     # Load and preprocess the data
-    path = "data/metaworld-coffee-pull-v2_50_shortened_normalized.pkl"
-    # full_dataset = KNNExpertDataset(path, candidates=k, lookback=lookback, decay=decay, final_neighbors_ratio=final_ratio)
-    full_dataset = KNNExpertDataset(path, candidates=k, lookback=1, decay=0, final_neighbors_ratio=final_ratio)
+    path = config['data']['pkl'][:-4] + "_normalized.pkl"
+    full_dataset = KNNExpertDataset(path, candidates=k, lookback=lookback, decay=decay, final_neighbors_ratio=final_ratio)
     
     train_loader = DataLoader(full_dataset, batch_size=batch_size, shuffle=True)
 
@@ -53,7 +63,7 @@ def objective(trial):
     state_dim = full_dataset[0][0][0].shape[0]
     action_dim = full_dataset[0][2].shape[0]
     # nn_agent = nn_util.NNAgentEuclideanStandardized("data/metaworld-coffee-pull-v2_50_shortened.pkl", plot=False, candidates=k, lookback=lookback, decay=decay, final_neighbors_ratio=final_ratio)
-    nn_agent = nn_util.NNAgentEuclideanStandardized("data/metaworld-coffee-pull-v2_50_shortened.pkl", plot=False, candidates=k, lookback=1, decay=0, final_neighbors_ratio=final_ratio)
+    nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=k, lookback=lookback, decay=decay, final_neighbors_ratio=final_ratio)
     model = KNNConditioningModel(state_dim, action_dim, k, hidden_dims=hidden_dims, dropout_rate=dropout, final_neighbors_ratio=final_ratio)
 
     # Define loss function and optimizer
@@ -61,7 +71,7 @@ def objective(trial):
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     # Training loop
-    num_epochs = 5
+    num_epochs = 10
     for epoch in range(num_epochs):
         model.train()
         for batch in train_loader:
@@ -73,19 +83,22 @@ def objective(trial):
             optimizer.step()
 
     model.eval()
-    np.random.seed(42)
         
-    env = _env_dict.MT50_V2['coffee-pull-v2']()
-    env.seed(42)
-    env._partially_observable = False
-    env._freeze_rand_vec = False
-    env._set_task_called = True
+    if config['metaworld']:
+        env = _env_dict.MT50_V2[config['env']]()
+        env._partially_observable = False
+        env._freeze_rand_vec = False
+        env._set_task_called = True
+    else:
+        env = gym.make(config['env'])
+    env.seed(config['seed'])
+    np.random.seed(config['seed'])
     
     episode_rewards = []
     success = 0
     trial = 0
     while True:
-        observation = crop_obs_for_env(env.reset(), 'coffee-pull-v2')
+        observation = crop_obs_for_env(env.reset(), config['env'])
 
         nn_agent.obs_history = np.array([])
 
@@ -99,7 +112,7 @@ def objective(trial):
                 action = model(states, distances).numpy()[0]
 
             observation, reward, done, info = env.step(action)
-            observation = crop_obs_for_env(observation, 'coffee-pull-v2')
+            observation = crop_obs_for_env(observation, config['env'])
 
             episode_reward += reward
             if False:

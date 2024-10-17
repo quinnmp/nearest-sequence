@@ -90,7 +90,7 @@ while True:
                 # action = nn_agent.find_nearest_neighbor(observation)
                 # action = nn_agent.find_nearest_sequence(observation)
                 # action = nn_agent.find_nearest_sequence_dynamic_time_warping(observation)
-                action = nn_agent.sanity_neighbor_linearly_regress(observation)
+                action = nn_agent.linearly_regress(observation)
                 # action = nn_agent.sanity_linearly_regress(observation)
                 # action = nn_agent.linearly_regress_dynamic_time_warping(observation)
                 observation, reward, done, info = env.step(action)
@@ -112,7 +112,7 @@ while True:
             success += info['success'] if 'success' in info else 0
             episode_rewards.append(episode_reward)
             trial += 1
-            if trial >= 10:
+            if trial >= 1:
                 break
 
 

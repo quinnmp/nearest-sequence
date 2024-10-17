@@ -72,7 +72,7 @@ def compute_accum_distance(nearest_neighbors, max_lookbacks, flattened_obs_matri
             # Element-wise distance calculation
             for j in range(n):
                 dist += (state_matrix_slice[i, j] - obs_matrix_slice[i, j]) ** 2
-            all_distances += np.sqrt(dist) * decay_factors[i]
+            all_distances += dist ** 0.5 * decay_factors[i]
 
         # diff = state_matrix_slice - obs_matrix_slice
         # distances = np.sum(diff * diff, axis=1)
@@ -162,7 +162,6 @@ class KNNExpertDataset(Dataset):
     def __len__(self):
         return len(self.flattened_obs_matrix)
     
-    @profile
     def __getitem__(self, idx):
         # Figure out which trajectory this index in our flattened state arraybelongs to
         state_traj = np.searchsorted(self.traj_starts, idx, side='right') - 1
@@ -259,7 +258,7 @@ if __name__ == "__main__":
 
     # Hyperparameters
     batch_size = 1024
-    num_epochs = 100
+    num_epochs = 1
     learning_rate = 1e-3
 
     train_loader = DataLoader(full_dataset, batch_size=batch_size, shuffle=True)

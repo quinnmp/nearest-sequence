@@ -12,3 +12,5 @@ policy:
     - 2.40
   dtw_window: 
     - 0
+  ratio:
+    - 1.0

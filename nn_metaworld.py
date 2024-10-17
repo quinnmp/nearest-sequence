@@ -55,7 +55,7 @@ for candidate_num in candidates:
                 env.seed(config['seed'])
                 np.random.seed(config['seed'])
 
-                nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, window=window_num, final_neighbors_ratio=final_neighbors_ratio)
+                nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, window=window_num, final_neighbors_ratio=final_neighbors_ratio[0])
 
                 episode_rewards = []
                 success = 0
