@@ -26,33 +26,34 @@ def crop_obs_for_env(obs, env):
         return np.concatenate((obs[:7], obs[18:25], obs[-3:len(obs)]))
     else:
         return obs
+    
 def objective(trial):
     # Define the hyperparameters to optimize
-    k = trial.suggest_int('k', 5, 1000)
-    lookback = trial.suggest_int('lookback', 1, 50)
-    decay = trial.suggest_float('decay', -3.0, 3.0)
+    k = trial.suggest_int('k', 5, 100)
+    # lookback = trial.suggest_int('lookback', 1, 20)
+    # decay = trial.suggest_float('decay', -3.0, -1.0)
     final_ratio = trial.suggest_float('final_ratio', 0.1, 0.9)
-    batch_size = trial.suggest_categorical('batch_size', [32, 64, 128, 256])
+    batch_size = trial.suggest_categorical('batch_size', [64, 128, 256, 512, 1024])
     lr = trial.suggest_float('lr', 1e-6, 1e-2, log=True)
     weight_decay = trial.suggest_float('weight_decay', 1e-6, 1e-2, log=True)
     dropout = trial.suggest_float('dropout', 0, 0.5)
     hidden_dims = [
-        trial.suggest_categorical('hidden_dim1', [64, 128, 256, 512]),
-        trial.suggest_categorical('hidden_dim2', [64, 128, 256, 512]),
-        trial.suggest_categorical('hidden_dim3', [64, 128, 256, 512]),
-        trial.suggest_categorical('hidden_dim4', [64, 128, 256, 512])
+        trial.suggest_categorical('hidden_dim3', [64, 128, 256, 512, 1024, 2048]),
+        trial.suggest_categorical('hidden_dim4', [64, 128, 256, 512, 1024, 2048])
     ]
 
     # Load and preprocess the data
     path = "data/metaworld-coffee-pull-v2_50_shortened_normalized.pkl"
-    full_dataset = KNNExpertDataset(path, candidates=k, lookback=lookback, decay=decay, final_neighbors_ratio=final_ratio)
+    # full_dataset = KNNExpertDataset(path, candidates=k, lookback=lookback, decay=decay, final_neighbors_ratio=final_ratio)
+    full_dataset = KNNExpertDataset(path, candidates=k, lookback=1, decay=0, final_neighbors_ratio=final_ratio)
     
     train_loader = DataLoader(full_dataset, batch_size=batch_size, shuffle=True)
 
     # Initialize the model
     state_dim = full_dataset[0][0][0].shape[0]
     action_dim = full_dataset[0][2].shape[0]
-    nn_agent = nn_util.NNAgentEuclideanStandardized("data/metaworld-coffee-pull-v2_50_shortened.pkl", plot=False, candidates=k, lookback=lookback, decay=decay, final_neighbors_ratio=final_ratio)
+    # nn_agent = nn_util.NNAgentEuclideanStandardized("data/metaworld-coffee-pull-v2_50_shortened.pkl", plot=False, candidates=k, lookback=lookback, decay=decay, final_neighbors_ratio=final_ratio)
+    nn_agent = nn_util.NNAgentEuclideanStandardized("data/metaworld-coffee-pull-v2_50_shortened.pkl", plot=False, candidates=k, lookback=1, decay=0, final_neighbors_ratio=final_ratio)
     model = KNNConditioningModel(state_dim, action_dim, k, hidden_dims=hidden_dims, dropout_rate=dropout, final_neighbors_ratio=final_ratio)
 
     # Define loss function and optimizer
@@ -60,7 +61,7 @@ def objective(trial):
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
     # Training loop
-    num_epochs = 10
+    num_epochs = 5
     for epoch in range(num_epochs):
         model.train()
         for batch in train_loader:

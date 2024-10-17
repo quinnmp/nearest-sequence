@@ -43,9 +43,31 @@ def create_matrices(expert_data):
     return obs_matrix, act_matrix, traj_starts
 
 @njit
-def compute_accum_distance(nearest_neighbors, max_lookbacks, obs_history, flattened_obs_matrix, decay_factors, weights, rot_indices):
+def compute_accum_distance(nearest_neighbors, max_lookbacks, obs_history, flattened_obs_matrix, decay_factors, weights):
     neighbor_distances = np.zeros(len(nearest_neighbors))
-    rot_indices = np.asarray(rot_indices)
+
+    for i in range(len(nearest_neighbors)):
+        nb, max_lb = nearest_neighbors[i], max_lookbacks[i]
+
+        # Reverse so that more recent states have lower indices
+        obs_matrix_slice = (flattened_obs_matrix[nb - max_lb + 1:nb + 1])[::-1] * weights
+        obs_history_slice = obs_history[:max_lb] * weights
+
+        diff = obs_history_slice - obs_matrix_slice
+
+        # Simple Euclidean distance
+        # Decay factors ensure more recent observations have more impact on cummulative distance calculation
+        distances = np.sqrt(np.sum(diff ** 2)) * decay_factors[:max_lb]
+
+        # Average, this is to avoid states with lower lookback having lower cummulative distance
+        # I'm not happy with this - it's a sloppy solution and isn't treating all trajectories equally due to decay
+        neighbor_distances[i] = np.sum(distances) / max_lb
+
+    return neighbor_distances
+
+@njit
+def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_history, flattened_obs_matrix, decay_factors, weights, rot_indices):
+    neighbor_distances = np.zeros(len(nearest_neighbors))
 
     for i in range(len(nearest_neighbors)):
         nb, max_lb = nearest_neighbors[i], max_lookbacks[i]
@@ -107,7 +129,6 @@ class NNAgent:
         # Precompute constants
         self.flattened_obs_matrix = np.concatenate(self.obs_matrix)
         self.flattened_act_matrix = np.concatenate(self.act_matrix)
-        self.reshaped_obs_matrix = self.flattened_obs_matrix.reshape(-1, len(self.obs_matrix[0][0]))
         self.i_array = np.arange(1, self.lookback + 1, dtype=float)
         self.decay_factors = np.power(self.i_array, self.decay)
 
@@ -116,6 +137,8 @@ class NNAgent:
         else:
             self.weights = np.ones(len(self.obs_matrix[0][0]))
 
+        self.reshaped_obs_matrix = self.flattened_obs_matrix.reshape(-1, len(self.obs_matrix[0][0])) * self.weights
+        self.tree = KDTree(self.reshaped_obs_matrix)
         if plot:
             self.plot = nn_plot.NNPlot(self.expert_data)
 
@@ -305,20 +328,36 @@ class NNAgentEuclidean(NNAgent):
     def find_knn_and_distances(self, current_ob):
         self.update_obs_history(current_ob)
         
-        all_distances = cdist(current_ob.reshape(1, -1), self.flattened_matrix, metric='euclidean')
+        if len(self.rot_indices) > 0:
+            all_distances = quick_euclidean_dist_with_rot(self.obs_matrix[state_traj][state_num] * self.weights, self.reshaped_obs_matrix, self.rot_indices)
+            nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates]
+        else:
+            all_distances, nearest_neighbors = self.tree.query([current_ob * self.weights], k=self.candidates)
+            all_distances = all_distances[0]
+            nearest_neighbors = nearest_neighbors[0]
         
-        nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates]
+        # Find corresponding trajectories for each neighbor
+        traj_nums = np.searchsorted(self.traj_starts, nearest_neighbors, side='right') - 1
+        obs_nums = nearest_neighbors - self.traj_starts[traj_nums]
 
-        traj_nums, obs_nums = np.divmod(nearest_neighbors, self.obs_matrix.shape[1])
-        
+        # Find corresponding states for each neighbor
+        neighbor_states = self.flattened_obs_matrix[nearest_neighbors]
+
+        # How far can we look back for each neighbor?
+        # This is upper bound by min(lookback hyperparameter, query point distance into its traj, neighbor distance into its traj)
         max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, len(self.obs_history)))
-        
-        accum_distance = compute_accum_distance(traj_nums, obs_nums, max_lookbacks, self.obs_history, self.obs_matrix, self.decay_factors, self.weights, self.tau)
-        
-        final_neighbor_num = round(len(accum_distance) * self.final_neighbors_ratio)
-        final_neighbors = np.argpartition(accum_distance, kth=final_neighbor_num)[:final_neighbor_num]
-        neighbor_states = self.obs_matrix[traj_nums[final_neighbors], obs_nums[final_neighbors]]
-        return neighbor_states, accum_distance[final_neighbors]
+
+        if len(self.rot_indices) > 0:
+            neighbor_distances = compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, self.obs_history, self.flattened_obs_matrix, self.decay_factors, self.weights, self.rot_indices)
+        else:
+            neighbor_distances = compute_accum_distance(nearest_neighbors, max_lookbacks, self.obs_history, self.flattened_obs_matrix, self.decay_factors, self.weights)
+
+        # Do a final pass and pick only the top (self.final_neighbors_ratio * 100)% of neighbors based on this new accumulated distance
+        final_neighbor_num = math.floor(len(neighbor_distances) * self.final_neighbors_ratio)
+        final_neighbors = np.argpartition(neighbor_distances, kth=(final_neighbor_num - 1))[:final_neighbor_num]
+        neighbor_states = self.flattened_obs_matrix[nearest_neighbors[final_neighbors]]
+
+        return neighbor_states, neighbor_distances[final_neighbors]
 
     def sanity_neighbor_linearly_regress(self, current_ob):
         all_distances = cdist(current_ob.reshape(1, -1), self.flattened_matrix, metric='euclidean')[0]
@@ -452,7 +491,7 @@ class NNAgentEuclidean(NNAgent):
         return dtw[-1, -1]
 
 class NNAgentEuclideanStandardized(NNAgentEuclidean):
-    def __init__(self, expert_data_path, plot=False, candidates=10, lookback=20, decay=-1, window=10, weights=np.array([]), tau=1.0, final_neighbors_ratio=1.0, rot_indices=[4]):
+    def __init__(self, expert_data_path, plot=False, candidates=10, lookback=20, decay=-1, window=10, weights=np.array([]), tau=1.0, final_neighbors_ratio=1.0, rot_indices=np.array([])):
         expert_data = load_expert_data(expert_data_path)
         observations = np.concatenate([traj['observations'] for traj in expert_data])
 
@@ -460,8 +499,9 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
         self.maxes = np.max(observations - self.mins, axis=0)
 
         # Normalize rotational indices to [0, 2pi)
-        self.mins[rot_indices] = 0.0
-        self.maxes[rot_indices] = 2 * np.pi
+        if len(rot_indices) > 0:
+            self.mins[rot_indices] = 0.0
+            self.maxes[rot_indices] = 2 * np.pi
 
         self.maxes[self.maxes == 0] = 1
 

@@ -103,8 +103,8 @@ def run_optimization(random_state=None):
     return gp_minimize(
         lambda params: -objective(params),  # Negate for minimization
         space,
-        n_calls=100,
-        n_random_starts=10,
+        n_calls=1000,
+        n_random_starts=100,
         n_jobs=-1,  # Use all available cores
         acq_func="EI",
         random_state=random_state,
