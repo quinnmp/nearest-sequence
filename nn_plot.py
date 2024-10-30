@@ -64,8 +64,10 @@ class NNPlot:
             if show_traj:
                 colors[:, 3] = 0.1
                 colors[min_obs:obs_num, 3] = opacities
+                colors[min_obs:obs_num, 2] = 1
             else:
                 colors[:, 3] = opacities
+                colors[:, 2] = 1
             
             # Create and add Line3DCollection for trajectory
             traj_line = Line3DCollection(segments, colors=colors)

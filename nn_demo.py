@@ -4,7 +4,7 @@ import random
 
 def main():
     # Load expert data
-    nn_agent = nn_util.NNAgentEuclideanStandardized('data/grasp_cube_100.pkl', plot=True, candidates=10, lookback=10, window=0, weights=[1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    nn_agent = nn_util.NNAgentEuclideanStandardized('data/grasp_cube_100.pkl', plot=True, candidates=10, lookback=10, window=0, decay=0, weights=[1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     while True:
         for i in range(len(nn_agent.expert_data)):
             obs_noise = np.zeros(11)

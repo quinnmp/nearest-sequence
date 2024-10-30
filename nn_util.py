@@ -13,6 +13,7 @@ from scipy.linalg import lstsq
 import math
 import faiss
 import os
+import gmm_regressor
 DEBUG = False
 
 def load_expert_data(path):
@@ -353,6 +354,39 @@ class NNAgentEuclidean(NNAgent):
 
         return np.dot(np.r_[1, current_ob], theta)
 
+    def gmm_regress(self, current_ob):
+        # Firstly, update our history with the current observation
+        self.update_obs_history(current_ob)
+        
+        if len(self.rot_indices) > 0:
+            all_distances = quick_euclidean_dist_with_rot(current_ob * self.weights, self.reshaped_obs_matrix, self.rot_indices)
+            nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates]
+        else:
+            query_point = np.array([current_ob * self.weights], dtype='float32')
+            _, nearest_neighbors = self.index.search(query_point, self.candidates)
+            nearest_neighbors = np.array(nearest_neighbors[0], dtype=np.int32)
+
+        # Find corresponding trajectories for each neighbor
+        traj_nums = np.searchsorted(self.traj_starts, nearest_neighbors, side='right') - 1
+        obs_nums = nearest_neighbors - self.traj_starts[traj_nums]
+        
+        # How far can we look back for each neighbor?
+        # This is upper bound by min(lookback hyperparameter, length of obs history, neighbor distance into its traj)
+        max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, len(self.obs_history)), dtype=np.int32)
+        
+        neighbor_distances = compute_accum_distance(nearest_neighbors, max_lookbacks, self.obs_history, self.flattened_obs_matrix, self.decay_factors)
+
+        # Do a final pass and pick only the top (self.final_neighbors_ratio * 100)% of neighbors based on this new accumulated distance
+        final_neighbor_num = math.floor(len(neighbor_distances) * self.final_neighbors_ratio)
+        final_neighbor_indices = np.argpartition(neighbor_distances, kth=final_neighbor_num - 1)[:final_neighbor_num]
+        final_neighbors = nearest_neighbors[final_neighbor_indices]
+        
+        return gmm_regressor.get_action(
+            self.flattened_obs_matrix[final_neighbors],
+            self.flattened_act_matrix[final_neighbors],
+            neighbor_distances[final_neighbor_indices],
+            current_ob)
+
     def find_knn_and_distances(self, current_ob):
         self.update_obs_history(current_ob)
         
@@ -573,3 +607,7 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
     def linearly_regress_dynamic_time_warping(self, current_ob):
         standardized_ob = (current_ob - self.mins) / self.maxes
         return super().linearly_regress_dynamic_time_warping(standardized_ob)
+
+    def gmm_regress(self, current_ob):
+        standardized_ob = (current_ob - self.mins) / self.maxes
+        return super().gmm_regress(standardized_ob)
