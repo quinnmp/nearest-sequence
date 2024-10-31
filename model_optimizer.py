@@ -54,8 +54,7 @@ def objective(trial):
     ]
 
     # Load and preprocess the data
-    path = config['data']['pkl'][:-4] + "_normalized.pkl"
-    full_dataset = KNNExpertDataset(path, candidates=k, lookback=lookback, decay=decay, final_neighbors_ratio=final_ratio)
+    full_dataset = KNNExpertDataset(config['data']['pkl'], candidates=k, lookback=lookback, decay=decay, final_neighbors_ratio=final_ratio)
     
     train_loader = DataLoader(full_dataset, batch_size=batch_size, shuffle=True)
 
@@ -64,7 +63,7 @@ def objective(trial):
     action_dim = full_dataset[0][2].shape[0]
     # nn_agent = nn_util.NNAgentEuclideanStandardized("data/metaworld-coffee-pull-v2_50_shortened.pkl", plot=False, candidates=k, lookback=lookback, decay=decay, final_neighbors_ratio=final_ratio)
     nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=k, lookback=lookback, decay=decay, final_neighbors_ratio=final_ratio)
-    model = KNNConditioningModel(state_dim, action_dim, k, hidden_dims=hidden_dims, dropout_rate=dropout, final_neighbors_ratio=final_ratio)
+    model = KNNConditioningModel(state_dim, action_dim, k, full_dataset.action_scaler, hidden_dims=hidden_dims, dropout_rate=dropout, final_neighbors_ratio=final_ratio)
 
     # Define loss function and optimizer
     criterion = nn.MSELoss()
@@ -109,7 +108,7 @@ def objective(trial):
             with torch.no_grad():
                 states = torch.FloatTensor(neighbor_states).unsqueeze(0)
                 distances = torch.FloatTensor(neighbor_distances).unsqueeze(0)
-                action = model(states, distances).numpy()[0]
+                action = model(states, distances)
 
             observation, reward, done, info = env.step(action)
             observation = crop_obs_for_env(observation, config['env'])

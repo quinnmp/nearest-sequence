@@ -2,7 +2,7 @@ import os
 os.environ["D4RL_SUPPRESS_IMPORT_ERROR"] = "1"
 import gym
 gym.logger.set_level(40)
-import nn_util
+import nn_util, nn_agent
 import numpy as np
 import metaworld
 import metaworld.envs.mujoco.env_dict as _env_dict
@@ -55,7 +55,7 @@ for candidate_num in candidates:
                 env.seed(config['seed'])
                 np.random.seed(config['seed'])
 
-                nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, window=window_num, final_neighbors_ratio=final_neighbors_ratio[0])
+                nn_agent = nn_agent.NNAgentEuclideanStandardized(config['data']['pkl'], nn_util.NN_METHOD.COND, plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, window=window_num, final_neighbors_ratio=final_neighbors_ratio[0])
 
                 episode_rewards = []
                 success = 0
@@ -69,11 +69,7 @@ for candidate_num in candidates:
                     steps = 0
                     while True:
                         t_start = time.perf_counter()
-                        # action = nn_agent.find_nearest_neighbor(observation)
-                        # action = nn_agent.find_nearest_sequence(observation)
-                        # action = nn_agent.find_nearest_sequence_dynamic_time_warping(observation)
-                        action = nn_agent.gmm_regress(observation)
-                        # action = nn_agent.linearly_regress_dynamic_time_warping(observation)
+                        action = nn_agent.get_action(observation)
                         t_post_action = time.perf_counter()
                         observation, reward, done, info = env.step(action)
                         observation = crop_obs_for_env(observation, config['env'])

@@ -57,8 +57,10 @@ for candidate_num in candidates:
 
             nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num)
 
-            model = KNNConditioningModel(len(nn_agent.obs_matrix[0][0]), len(nn_agent.act_matrix[0][0]), candidate_num)
-            model.load_state_dict(torch.load('knn_conditioning_model.pth'))
+            checkpoint = model.load_state_dict(torch.load('knn_conditioning_model.pth'))
+            model = KNNConditioningModel(len(nn_agent.obs_matrix[0][0]), len(nn_agent.act_matrix[0][0]), candidate_num, checkpoint['action_scaler'])
+            model.load_state_dict(checkpoint['model_state_dict'])
+            model.eval()
             episode_rewards = []
             success = 0
             trial = 0
@@ -74,7 +76,7 @@ for candidate_num in candidates:
                     with torch.no_grad():
                         states = torch.FloatTensor(neighbor_states).unsqueeze(0)
                         distances = torch.FloatTensor(neighbor_distances).unsqueeze(0)
-                        action = model(states, distances).numpy()[0]
+                        action = model(states, distances)
 
                     observation, reward, done, info = env.step(action)
                     observation = crop_obs_for_env(observation, config['env'])
