@@ -58,7 +58,7 @@ def get_action(observations, actions, distances, query_point):
     dataset = WeightedGMMActorDataset(observations, scaled_actions, weights)
 
     batch_size = min(32, len(dataset))
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, pin_memory=True, num_workers=0, persistent_workers=False)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0, persistent_workers=False)
 
     # Define model parameters
     config = config_factory(algo_name="bc")
@@ -73,7 +73,7 @@ def get_action(observations, actions, distances, query_point):
         obs_shapes=obs_shapes,
         ac_dim=ac_dim,
         mlp_layer_dims=[512, 512],
-        num_modes=3
+        num_modes=2
     ).to(device)  # Move model to GPU
 
     optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5, betas=(0.9, 0.999))

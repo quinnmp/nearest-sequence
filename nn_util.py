@@ -380,6 +380,9 @@ class NNAgentEuclidean(NNAgent):
         final_neighbor_num = math.floor(len(neighbor_distances) * self.final_neighbors_ratio)
         final_neighbor_indices = np.argpartition(neighbor_distances, kth=final_neighbor_num - 1)[:final_neighbor_num]
         final_neighbors = nearest_neighbors[final_neighbor_indices]
+
+        if self.plot:
+            self.plot.update(traj_nums[final_neighbor_indices], obs_nums[final_neighbor_indices], self.obs_history, self.lookback)
         
         return gmm_regressor.get_action(
             self.flattened_obs_matrix[final_neighbors],
