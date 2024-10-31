@@ -41,7 +41,7 @@ def crop_obs_for_env(obs, env):
     else:
         return obs
 
-for candidate_num, lookback_num, decay_num in product(candidates, lookback, decay):
+for candidate_num, lookback_num, decay_num, ratio in product(candidates, lookback, decay, final_neighbors_ratio):
     if config['metaworld']:
         env = _env_dict.MT50_V2[config['env']]()
         env._partially_observable = False
@@ -52,7 +52,7 @@ for candidate_num, lookback_num, decay_num in product(candidates, lookback, deca
     env.seed(config['seed'])
     np.random.seed(config['seed'])
 
-    nn_agent = nn_agent.NNAgentEuclideanStandardized(config['data']['pkl'], nn_util.NN_METHOD.LWR, plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, final_neighbors_ratio=final_neighbors_ratio[0])
+    nn_agent = nn_agent.NNAgentEuclideanStandardized(config['data']['pkl'], nn_util.NN_METHOD.LWR, plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, final_neighbors_ratio=ratio)
 
     episode_rewards = []
     success = 0
@@ -84,6 +84,6 @@ for candidate_num, lookback_num, decay_num in product(candidates, lookback, deca
         if trial >= 10:
             break
 
-    with open("results/" + args.config_path[7:-4] + "_" + str(candidate_num) + "_" + str(lookback_num) + "_" + str(decay_num) + "_" + str(final_neighbors_ratio) + "_result.pkl", 'wb') as f:
+    with open("results/" + args.config_path[7:-4] + "_" + str(candidate_num) + "_" + str(lookback_num) + "_" + str(decay_num) + "_" + str(ratio) + "_result.pkl", 'wb') as f:
         pickle.dump(episode_rewards, f)
-    print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {decay_num}, ratio {final_neighbors_ratio}: {np.mean(episode_rewards)}, {np.std(episode_rewards)}")
+    print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {decay_num}, ratio {ratio}: mean {np.mean(episode_rewards)}, std {np.std(episode_rewards)}")

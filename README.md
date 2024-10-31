@@ -10,6 +10,9 @@ The general flow of this algorithm. See `nn_eval.py` for an example of implement
 	5. Output an action from the original query point using our regression model
 # Code to Look At
 A lot of this repo is very messy at the moment. If you want to gain an understanding of this algorithm, take a look at `nn_eval.py` for the high-level implementation. For the actual nearest-sequence algorithm, take a look at the `nn_agent` and `nn_util` classes.
+
+Run `python nn_eval.py config/hopper.yml` to see the program work. At the time of writing, you should eventually see
+`Candidates 100, lookback 10, decay -2, ratio 0.5: mean 3118.9415590989797, std 1001.1018004725132`
 # Results
 
 ## MuJoCo
