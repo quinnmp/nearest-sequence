@@ -48,7 +48,7 @@ tau = [0.01]
 for tau_num, candidate_num, lookback_num, decay_num, window_num, final_neighbors_ratio in product(tau, candidates, lookback, decay, window, final_neighbors_ratio):
     env = PushTEnv()
 
-    nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, window=window_num, tau=tau_num, final_neighbors_ratio=final_neighbors_ratio, weights=[1.0, 1.0, 1.0, 1.0, 1.0])
+    nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, window=window_num, tau=tau_num, final_neighbors_ratio=final_neighbors_ratio)
 
     episode_rewards = []
     success = 0
@@ -63,12 +63,12 @@ for tau_num, candidate_num, lookback_num, decay_num, window_num, final_neighbors
         episode_reward = 0.0
         steps = 0
         while True:
-            action = nn_agent.linearly_regress(observation)
+            action = nn_agent.gmm_regress(observation)
             observation, reward, done, truncated, info = env.step(action)
             observation = crop_obs_for_env(observation, config['env'])
 
             step_rewards.append(reward)
-            if False:
+            if True:
                 env.render(mode='human')
             if done:
                 break

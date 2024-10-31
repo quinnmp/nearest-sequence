@@ -5,7 +5,7 @@ data:
   pkl: "data/push_t_parsed.pkl"
 policy:
   k_neighbors:
-    - 1000
+    - 10
   lookback: 
     - 1
   decay_rate:
@@ -13,5 +13,5 @@ policy:
   dtw_window: 
     - 0
   ratio:
-    - 0.01
+    - 1.0
   

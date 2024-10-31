@@ -156,8 +156,8 @@ class NNAgent:
 
         self.reshaped_obs_matrix = self.flattened_obs_matrix.reshape(-1, len(self.obs_matrix[0][0])) * self.weights
         self.index = faiss.IndexHNSWFlat(self.reshaped_obs_matrix.shape[1], 32)
-        self.index.hnsw.efConstruction = 100
-        self.index.hnsw.efSearch = 40
+        self.index.hnsw.efConstruction = 1000
+        self.index.hnsw.efSearch = 400
 
         # Get the number of available CPU cores
         num_threads = os.cpu_count()  # Number of logical CPUs

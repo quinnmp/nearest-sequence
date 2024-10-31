@@ -7,15 +7,17 @@ from collections import OrderedDict
 from robomimic.models.policy_nets import GMMActorNetwork
 from robomimic.config import config_factory
 import robomimic.utils.obs_utils as ObsUtils
+from sklearn.preprocessing import StandardScaler
 
 # Check for GPU availability
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.set_default_dtype(torch.float32)
 
 class WeightedGMMActorDataset(Dataset):
     def __init__(self, observations, actions, weights):
-        self.observations = torch.tensor(observations, dtype=torch.float32).to(device)
-        self.actions = torch.tensor(actions, dtype=torch.float32).to(device)
-        self.weights = torch.tensor(weights, dtype=torch.float32).to(device)
+        self.observations = torch.from_numpy(observations).to(device)
+        self.actions = torch.from_numpy(actions).to(device)
+        self.weights = torch.as_tensor(weights).to(device)
 
     def __len__(self):
         return len(self.observations)
@@ -25,63 +27,70 @@ class WeightedGMMActorDataset(Dataset):
 
 # Training setup
 def train_model(model, dataloader, optimizer, epochs=10):
-    model.train()  # Set model to training mode
+    model.train()
+    scaler = torch.cuda.amp.GradScaler()
     for epoch in range(epochs):
         total_loss = 0.0
         for obs_batch, act_batch, weight_batch in dataloader:
-            # Move batches to GPU
-            obs_batch = obs_batch.to(device)
-            act_batch = act_batch.to(device)
-            weight_batch = weight_batch.to(device)
-
-            # Prepare input for model
-            obs_dict = {"obs": obs_batch}
+            with torch.cuda.amp.autocast():  # Enable automatic mixed precision
+                dist = model.forward_train({"obs": obs_batch})
+                log_probs = dist.log_prob(act_batch)
+                loss = -(log_probs * weight_batch).mean()
+                total_loss += loss.item()
             
-            # Forward pass through the model
-            dist = model.forward_train(obs_dict)
-            
-            # Compute weighted negative log-likelihood loss
-            log_probs = dist.log_prob(act_batch)
-            weighted_log_probs = log_probs * weight_batch
-            loss = -weighted_log_probs.mean()
-
-            # Backpropagation and optimization
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            total_loss += loss.item()
-
+            optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
         print(f"Epoch {epoch + 1}/{epochs}, Loss: {total_loss / len(dataloader)}")
 
 def get_action(observations, actions, distances, query_point):
+    # Scale actions to similar range as observations
+    action_scaler = StandardScaler()
+    scaled_actions = action_scaler.fit_transform(actions)
+    
+    # Normalize distances to create weights
+    eps = 1e-10
+    weights = 1 / (distances + eps)
+    weights /= weights.sum()
+
     # Define dataset and dataloader
-    dataset = WeightedGMMActorDataset(observations, actions, distances)
-    dataloader = DataLoader(dataset, batch_size=2, shuffle=True)
+    dataset = WeightedGMMActorDataset(observations, scaled_actions, weights)
+
+    batch_size = min(32, len(dataset))
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, pin_memory=True, num_workers=0, persistent_workers=False)
 
     # Define model parameters
     config = config_factory(algo_name="bc")
     config.observation.modalities.obs.low_dim = ["obs"]
     ObsUtils.initialize_obs_utils_with_config(config)
 
-    obs_shapes = OrderedDict({"obs": (len(observations[0]),)})
-    ac_dim = len(actions[0])
-    mlp_layer_dims = [1024, 1024]  # Example hidden layer sizes
+    obs_shapes = OrderedDict({"obs": (observations.shape[1],)})
+    ac_dim = actions.shape[1]
 
     # Initialize model and optimizer
     model = GMMActorNetwork(
         obs_shapes=obs_shapes,
         ac_dim=ac_dim,
-        mlp_layer_dims=mlp_layer_dims,
-        num_modes=5
+        mlp_layer_dims=[512, 512],
+        num_modes=3
     ).to(device)  # Move model to GPU
 
-    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5, betas=(0.9, 0.999))
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode='min',
+        factor=0.5,
+        patience=5,
+    )
 
     # Train the model
-    train_model(model, dataloader, optimizer)
+    train_model(model, dataloader, optimizer, epochs=100)
 
+    model.eval()
     with torch.no_grad():
-        query_tensor = torch.tensor(query_point, dtype=torch.float).unsqueeze(0).to(device)  # Move query point to GPU
-        return model.forward({"obs": query_tensor}).detach().cpu().numpy().squeeze(0)  # Move output back to CPU for numpy
+        query_tensor = torch.as_tensor(query_point, dtype=torch.float32).unsqueeze(0).to(device)
+        scaled_prediction = model.forward({"obs": query_tensor}).detach().cpu().numpy().squeeze(0)
+        prediction = action_scaler.inverse_transform(scaled_prediction.reshape(1, -1)).squeeze(0)
+        return prediction
 
