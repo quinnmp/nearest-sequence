@@ -2,7 +2,7 @@ import os
 os.environ["D4RL_SUPPRESS_IMPORT_ERROR"] = "1"
 import gym
 gym.logger.set_level(40)
-import nn_util
+import nn_util, nn_agent
 import numpy as np
 import metaworld
 import metaworld.envs.mujoco.env_dict as _env_dict
@@ -62,13 +62,13 @@ def objective(obs1=1, obs2=1, obs3=1, obs4=1, obs5=1, candidate_num=100, lookbac
         env = gym.make(config['env'])
     np.random.seed(config['seed'])
 
-    nn_agent = nn_util.NNAgentEuclideanStandardized(config['data']['pkl'], plot=False, candidates=int(candidate_num), lookback=int(lookback_num), decay=int(decay_num)/10, window=int(window_num), weights=np.array([obs1, obs2, obs3, obs4, obs5]), final_neighbors_ratio=final_neighbors_ratio)
+    agent = nn_agent.NNAgentEuclideanStandardized(config['data']['pkl'], method=nn_util.NN_METHOD.GMM, plot=False, candidates=int(candidate_num), lookback=int(lookback_num), decay=int(decay_num)/10, window=int(window_num), weights=np.array([obs1, obs2, obs3, obs4, obs5]), final_neighbors_ratio=final_neighbors_ratio)
 
     episode_rewards = []
     for i in range(10):
         env.seed(i)
         observation = crop_obs_for_env(env.reset()[0], config['env'])
-        nn_agent.obs_history = np.array([])
+        agent.obs_history = np.array([])
         steps = 0
         step_rewards = []
 
@@ -76,7 +76,7 @@ def objective(obs1=1, obs2=1, obs3=1, obs4=1, obs5=1, candidate_num=100, lookbac
             # action = nn_agent.find_nearest_neighbor(observation)
             # action = nn_agent.find_nearest_sequence(observation)
             # action = nn_agent.find_nearest_sequence_dynamic_time_warping(observation)
-            action = nn_agent.linearly_regress(observation)
+            action = agent.get_action(observation)
             # action = nn_agent.sanity_linearly_regress(observation)
             # action = nn_agent.linearly_regress_dynamic_time_warping(observation)
             observation, reward, done, truncated, info = env.step(action)

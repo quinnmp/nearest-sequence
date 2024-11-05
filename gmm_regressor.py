@@ -8,6 +8,8 @@ from robomimic.models.policy_nets import GMMActorNetwork
 from robomimic.config import config_factory
 import robomimic.utils.obs_utils as ObsUtils
 from sklearn.preprocessing import StandardScaler
+import sys
+import io
 
 # Check for GPU availability
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -42,7 +44,6 @@ def train_model(model, dataloader, optimizer, epochs=10):
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
-        print(f"Epoch {epoch + 1}/{epochs}, Loss: {total_loss / len(dataloader)}")
 
 def get_action(observations, actions, distances, query_point):
     # Scale actions to similar range as observations
@@ -61,9 +62,16 @@ def get_action(observations, actions, distances, query_point):
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0, persistent_workers=False)
 
     # Define model parameters
+
+    # Silence these config prints
+    stdout_backup = sys.stdout
+    sys.stdout = io.StringIO()
+
     config = config_factory(algo_name="bc")
     config.observation.modalities.obs.low_dim = ["obs"]
     ObsUtils.initialize_obs_utils_with_config(config)
+
+    sys.stdout = stdout_backup
 
     obs_shapes = OrderedDict({"obs": (observations.shape[1],)})
     ac_dim = actions.shape[1]
