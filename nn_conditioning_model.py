@@ -87,7 +87,7 @@ class KNNExpertDataset(Dataset):
         # The corresponding action to this state
         action = self.action_scaler.transform([self.agent.act_matrix[state_traj][state_num]])[0]
 
-        self.agent.obs_history = self.agent.obs_matrix[state_traj][:state_num]
+        self.agent.obs_history = self.agent.obs_matrix[state_traj][:state_num][::-1]
 
         neighbor_states, neighbor_distances = self.agent.get_action(self.agent.obs_matrix[state_traj][state_num])
 
