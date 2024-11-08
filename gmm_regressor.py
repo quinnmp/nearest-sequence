@@ -1,3 +1,4 @@
+import sys
 import torch
 import torch.nn.functional as F
 import torch.distributions as D
@@ -42,7 +43,7 @@ def train_model(model, dataloader, optimizer, epochs=10):
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
-        print(f"Epoch {epoch + 1}/{epochs}, Loss: {total_loss / len(dataloader)}")
+        # print(f"Epoch {epoch + 1}/{epochs}, Loss: {total_loss / len(dataloader)}")
 
 def get_action(observations, actions, distances, query_point):
     # Scale actions to similar range as observations
@@ -60,10 +61,16 @@ def get_action(observations, actions, distances, query_point):
     batch_size = min(32, len(dataset))
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0, persistent_workers=False)
 
-    # Define model parameters
-    config = config_factory(algo_name="bc")
-    config.observation.modalities.obs.low_dim = ["obs"]
-    ObsUtils.initialize_obs_utils_with_config(config)
+    original_stdout = sys.stdout
+
+    sys.stdout = open('/dev/null', 'w')
+    try:
+        config = config_factory(algo_name="bc")
+        config.observation.modalities.obs.low_dim = ["obs"]
+        ObsUtils.initialize_obs_utils_with_config(config)
+    finally:
+        sys.stdout.close()
+        sys.stdout = original_stdout
 
     obs_shapes = OrderedDict({"obs": (observations.shape[1],)})
     ac_dim = actions.shape[1]
