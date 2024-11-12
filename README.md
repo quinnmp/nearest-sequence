@@ -7,9 +7,11 @@ The general flow of this algorithm. See `nn_eval.py` for an example of implement
 3. For each observation made,
 	1. Find all direct nearest neighbors to that query point using standard Euclidean distance (`candidates')
 	2. Then, look back through the observation history and the previous states of all neighbors and calculate a cumulative distance calculation that will account for historical distance
-	3. Run another pass, picking some (0.0, 100.0] percentile of the neighbors to perform LWLR on
-	4. Perform locally-weighted linear regression, using the cumulative distance as the weights
-	5. Output an action from the original query point using our regression model
+	3. Run another pass, picking some (0.0, 100.0] percentile of the neighbors to proceed with
+    4. There are a few different modes right now:
+        - Perform locally-weighted linear linear regression to find an action (`NN_METHOD.LWR`)
+        - At initialization-time, train a model on states and distances and now query it with the current neighbors and distances (`NN_METHOD.COND`)
+        - Train a Gaussian Mixture Model with locally-weighted negative log-likelihood loss function and query it (`NN_METHOD.GMM`)
 # Hyperparameter Explanation
 - **Candidates**: The 'K' in KNN - how many candidate neighbors we want to do cumulative distance on.
 - **Lookback**: How far back we want to look (in states) into each trajectory when doing the cumulative distance function.
@@ -18,7 +20,7 @@ The general flow of this algorithm. See `nn_eval.py` for an example of implement
   - Each `i` will have its respective distance multiplied by `i^decay`.
   - Typically, we want decay to be negative (older observations have less influence).
 - **Final Neighbors Ratio**: After calculating the cumulative distance, we take the
-  (100 * `final_neighbors_ratio`)% best neighbors. This can be a cheap way to handle mult modality.
+  (100 * `final_neighbors_ratio`)% best neighbors. This can be a cheap way to handle multi-modality.
   - If there are likely two modes evenly distributed in our neighbors, and `final_neighbors_ratio` is 0.5, we will take only the 50% closest neighbors post-cumulative distance function, ideally eliminating one of the two modes.
 # Code to Look At
 If you want to gain an understanding of this algorithm, take a look at `nn_eval.py` for the high-level implementation. For the actual nearest-sequence algorithm, take a look at the `nn_agent` and `nn_util` classes.
