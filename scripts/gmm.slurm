@@ -11,7 +11,7 @@
 #SBATCH --mem=16G
 #SBATCH --time=0
 #SBATCH -o log/%j.out
-#SBATCH --mail-type=END
+#SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=quinnpfeifer@icloud.com
 source ~/.bashrc
 
