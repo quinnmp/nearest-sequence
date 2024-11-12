@@ -120,7 +120,7 @@ def get_action(observations, actions, distances, query_point):
         num_modes=2
     ).to(device)
 
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode='min',
