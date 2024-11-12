@@ -4,7 +4,7 @@ channels:
   - defaults
 dependencies:
   - python=3.8
-  - pip
+  - pip=23.1
   - pip:
     - Cython==0.29.32
     - numpy==1.22.0
@@ -23,7 +23,7 @@ dependencies:
     - tensorboard
     - scipy
     - faiss-cpu==1.8.0
-    - robomimic==0.3.3
+    - robomimic==0.3.0
     - scikit-optimize==0.10.2
 
     # Just for Push T
