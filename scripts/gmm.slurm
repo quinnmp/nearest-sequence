@@ -2,15 +2,17 @@
 
 #SBATCH --job-name=knn
 #SBATCH --account=weirdlab
-#SBATCH --partition=gpu-l40s
+#SBATCH --partition=gpu-l40
 
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=10
 #SBATCH --gpus-per-task=2
 #SBATCH --mem=16G
-#SBATCH --time=24:00:00
-#SBATCH -o log/%x_%j.out
+#SBATCH --time=0
+#SBATCH -o log/%j.out
+#SBATCH --mail-type=END
+#SBATCH --mail-user=quinnpfeifer@icloud.com
 source ~/.bashrc
 
 conda activate base
@@ -24,10 +26,5 @@ export CPATH=$CONDA_PREFIX/include:$CPATH
 export LIBRARY_PATH=$CONDA_PREFIX/lib:$LIBRARY_PATH
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 
-# For debugging
-echo "CONDA_PREFIX: $CONDA_PREFIX"
-echo "CPATH: $CPATH"
-echo "LIBRARY_PATH: $LIBRARY_PATH"
-echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
-
-python nn_eval.py config/hopper.yml
+python nn_push_t_param_optimizer.py config/push_t.yml
+# python nn_eval.py config/hopper.yml

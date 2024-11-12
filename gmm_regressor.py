@@ -9,8 +9,8 @@ from robomimic.models.policy_nets import GMMActorNetwork
 from robomimic.config import config_factory
 import robomimic.utils.obs_utils as ObsUtils
 from sklearn.preprocessing import StandardScaler
+import numpy as np
 
-# Check for GPU availability
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.set_default_dtype(torch.float32)
 
@@ -26,24 +26,52 @@ class WeightedGMMActorDataset(Dataset):
     def __getitem__(self, idx):
         return self.observations[idx], self.actions[idx], self.weights[idx]
 
-# Training setup
-def train_model(model, dataloader, optimizer, epochs=10):
+def train_model(model, train_loader, val_loader, optimizer, scheduler, epochs=10, patience=5):
     model.train()
-    scaler = torch.cuda.amp.GradScaler()
+    scaler = torch.amp.GradScaler()
+    best_val_loss = float('inf')
+    patience_counter = 0
+
     for epoch in range(epochs):
         total_loss = 0.0
-        for obs_batch, act_batch, weight_batch in dataloader:
-            with torch.cuda.amp.autocast():  # Enable automatic mixed precision
+        for obs_batch, act_batch, weight_batch in train_loader:
+            with torch.amp.autocast(device_type='cuda'):
                 dist = model.forward_train({"obs": obs_batch})
                 log_probs = dist.log_prob(act_batch)
                 loss = -(log_probs * weight_batch).mean()
                 total_loss += loss.item()
             
-            optimizer.zero_grad(set_to_none=True)  # More efficient than zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
+
+        val_loss = validate_model(model, val_loader)
+
+        scheduler.step(val_loss)
+
+        # Early stopping check
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                break
+
         # print(f"Epoch {epoch + 1}/{epochs}, Loss: {total_loss / len(dataloader)}")
+
+def validate_model(model, val_loader):
+    model.eval()
+    total_val_loss = 0.0
+    with torch.no_grad():
+        for obs_batch, act_batch, weight_batch in val_loader:
+            dist = model.forward_train({"obs": obs_batch})
+            log_probs = dist.log_prob(act_batch)
+            val_loss = -(log_probs * weight_batch).mean()
+            total_val_loss += val_loss.item()
+    model.train()
+    return total_val_loss / len(val_loader)
 
 def get_action(observations, actions, distances, query_point):
     # Scale actions to similar range as observations
@@ -55,14 +83,23 @@ def get_action(observations, actions, distances, query_point):
     weights = 1 / (distances + eps)
     weights /= weights.sum()
 
-    # Define dataset and dataloader
+    # Split data into training and validation sets
+    val_size = int(len(observations) * 0.1)
+    indices = np.arange(len(observations))
+    np.random.shuffle(indices)
+    train_indices, val_indices = indices[val_size:], indices[:val_size]
+
+    # Define datasets and dataloaders
     dataset = WeightedGMMActorDataset(observations, scaled_actions, weights)
 
-    batch_size = min(32, len(dataset))
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0, persistent_workers=False)
+    train_dataset = WeightedGMMActorDataset(observations[train_indices], scaled_actions[train_indices], weights[train_indices])
+    val_dataset = WeightedGMMActorDataset(observations[val_indices], scaled_actions[val_indices], weights[val_indices])
 
+    train_loader = DataLoader(train_dataset, batch_size=min(32, len(train_dataset)), shuffle=True, num_workers=4, persistent_workers=True)
+    val_loader = DataLoader(val_dataset, batch_size=min(32, len(val_dataset)), shuffle=False, num_workers=4, persistent_workers=True)
+
+    # Suppress robomimic logs from config factory
     original_stdout = sys.stdout
-
     sys.stdout = open('/dev/null', 'w')
     try:
         config = config_factory(algo_name="bc")
@@ -81,9 +118,9 @@ def get_action(observations, actions, distances, query_point):
         ac_dim=ac_dim,
         mlp_layer_dims=[512, 512],
         num_modes=2
-    ).to(device)  # Move model to GPU
+    ).to(device)
 
-    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5, betas=(0.9, 0.999))
+    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode='min',
@@ -92,7 +129,7 @@ def get_action(observations, actions, distances, query_point):
     )
 
     # Train the model
-    train_model(model, dataloader, optimizer, epochs=100)
+    train_model(model, train_loader, val_loader, optimizer, scheduler, epochs=100, patience=5)
 
     model.eval()
     with torch.no_grad():

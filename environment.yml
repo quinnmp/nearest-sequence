@@ -24,6 +24,12 @@ dependencies:
     - scipy
     - faiss-cpu==1.8.0
     - robomimic==0.3.3
+    - scikit-optimize==0.10.2
+
+    # Just for Push T
+    - pymunk==6.2.1
+    - Shapely==1.8.4
+    - opencv-python==4.10.0.84
     
     # GitHub dependencies
     - git+https://github.com/aravindr93/mjrl@3871d93763d3b49c4741e6daeaebbc605fe140dc

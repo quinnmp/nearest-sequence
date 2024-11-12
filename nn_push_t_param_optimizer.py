@@ -38,10 +38,10 @@ def crop_obs_for_env(obs, env):
     else:
         return obs
 space = [
-    Integer(10, 10000, name='candidate_num'),
-    Integer(2, 150, name='lookback_num'),
-    Integer(-30, 30, name='decay_num'),
-    Real(0.01, 0.9, name='final_neighbors_ratio'),
+    Integer(10, 1000, name='candidate_num'),
+    Integer(2, 50, name='lookback_num'),
+    Integer(-30, 0, name='decay_num'),
+    # Real(0.01, 0.9, name='final_neighbors_ratio'),
     # Real(0, 1, name='obs1'),
     # Real(0, 1, name='obs2'),
     # Real(0, 1, name='obs3'),
@@ -73,12 +73,7 @@ def objective(obs1=1, obs2=1, obs3=1, obs4=1, obs5=1, candidate_num=100, lookbac
         step_rewards = []
 
         while True:
-            # action = nn_agent.find_nearest_neighbor(observation)
-            # action = nn_agent.find_nearest_sequence(observation)
-            # action = nn_agent.find_nearest_sequence_dynamic_time_warping(observation)
             action = agent.get_action(observation)
-            # action = nn_agent.sanity_linearly_regress(observation)
-            # action = nn_agent.linearly_regress_dynamic_time_warping(observation)
             observation, reward, done, truncated, info = env.step(action)
             observation = crop_obs_for_env(observation, config['env'])
 
@@ -103,8 +98,8 @@ def run_optimization(random_state=None):
     return gp_minimize(
         lambda params: -objective(params),  # Negate for minimization
         space,
-        n_calls=1000,
-        n_random_starts=100,
+        n_calls=100,
+        n_random_starts=10,
         n_jobs=-1,  # Use all available cores
         acq_func="EI",
         random_state=random_state,
