@@ -55,13 +55,13 @@ class NNAgent:
         self.decay_factors = np.power(self.i_array, self.decay)
 
         if len(weights) > 0:
-            self.weights = weights
+            self.weights = weights.astype(np.float32)
         else:
             # For now, we only weigh non_rot_indices for simplicity
-            self.weights = np.ones(len(self.non_rot_indices))
+            self.weights = np.ones(self.obs_matrix[0][0].shape[0], dtype=np.float32)
 
         self.reshaped_obs_matrix = self.flattened_obs_matrix.reshape(-1, len(self.obs_matrix[0][0]))
-        self.reshaped_obs_matrix[:, self.non_rot_indices] *= self.weights
+        self.reshaped_obs_matrix[:, self.non_rot_indices] *= self.weights[self.non_rot_indices]
         self.index = faiss.IndexHNSWFlat(self.reshaped_obs_matrix.shape[1], 32)
         self.index.hnsw.efConstruction = 1000
         self.index.hnsw.efSearch = 400
@@ -98,11 +98,11 @@ class NNAgentEuclidean(NNAgent):
 
         if len(self.rot_indices) > 0:
             # If we have elements in our observation space that wraparound (rotations), we can't just do direct Euclidean distance
-            current_ob[self.non_rot_indices] *= self.weights
-            all_distances = compute_distance_with_rot(current_ob.astype(np.float32), self.reshaped_obs_matrix, self.rot_indices, self.non_rot_indices)
+            current_ob[self.non_rot_indices] *= self.weights[self.non_rot_indices]
+            all_distances = compute_distance_with_rot(current_ob.astype(np.float32), self.reshaped_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
             nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates].astype(np.int32)
         else:
-            query_point = np.array([current_ob * self.weights], dtype='float32')
+            query_point = np.array([current_ob * self.weights[self.non_rot_indices]], dtype='float32')
             distances, nearest_neighbors = self.index.search(query_point, self.candidates)
             # This indexing is decieving - we aren't taking just the first neighbor
             # We only have one query point, so we take the nearest neighbors correlating t othat query point [0]
@@ -122,7 +122,7 @@ class NNAgentEuclidean(NNAgent):
         max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, len(self.obs_history)), dtype=np.int32)
         
         if len(self.rot_indices) > 0:
-            accum_distances = compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, self.obs_history, self.flattened_obs_matrix, self.decay_factors, self.rot_indices, self.non_rot_indices)
+            accum_distances = compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, self.obs_history, self.flattened_obs_matrix, self.decay_factors, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
         else:
             accum_distances = compute_accum_distance(nearest_neighbors, max_lookbacks, self.obs_history, self.flattened_obs_matrix, self.decay_factors)
 
@@ -160,6 +160,7 @@ class NNAgentEuclidean(NNAgent):
                     print("FAILED TO CONVERGE, ADDING NOISE")
                     theta = np.linalg.pinv(X_weights @ (X + 1e-8)) @ X_weights @ Y
                 except:
+                    breakpoint()
                     print("Something went wrong, likely a very large number (> e+150) was encountered. Returning arbitrary action.")
                     return self.act_matrix[0][0]
 

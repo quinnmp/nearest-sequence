@@ -26,7 +26,7 @@ The general flow of this algorithm. See `nn_eval.py` for an example of implement
 If you want to gain an understanding of this algorithm, take a look at `nn_eval.py` for the high-level implementation. For the actual nearest-sequence algorithm, take a look at the `nn_agent` and `nn_util` classes.
 
 Run `python nn_eval.py config/hopper.yml` to see the program work. At the time of writing, you should eventually see
-`Candidates 100, lookback 10, decay -2, ratio 0.5: mean 3125.040014550429, std 1003.881015863198`
+`Candidates 100, lookback 10, decay -2, ratio 0.5: mean 3250.3180239562807, std 646.4999903889`
 # Results
 
 ## MuJoCo

@@ -68,22 +68,34 @@ def compute_accum_distance(nearest_neighbors, max_lookbacks, obs_history, flatte
 
         # Simple Euclidean distance
         # Decay factors ensure more recent observations have more impact on cummulative distance calculation
-        all_distances = 0
+        curr_distances = np.zeros(max_lb, dtype=np.float32)
         for i in range(max_lb):
             dist = 0
+
             # Element-wise distance calculation
             for j in range(n):
                 dist += (obs_history_slice[i, j] - obs_matrix_slice[i, j]) ** 2
-            all_distances += dist ** 0.5 * decay_factors[i]
+            curr_distances[i] = dist ** 0.5
 
-        # Average, this is to avoid states with lower lookback having lower cummulative distance
-        # I'm not happy with this - it's a sloppy solution and isn't treating all trajectories equally due to decay
-        neighbor_distances[neighbor] = all_distances / max_lb
+        # This line is dense, but it's just doing this:
+        # decay_factors is calculated based on the lookback hyperparameter, but sometimes we're dealing with lookbacks shorter than that
+        # Thus, we need to interpolate to make sure that we're still getting the decay_factors curve, just over less indices
+        if max_lb == 1:
+            interpolated_decay = np.array([decay_factors[0]], dtype=np.float32)
+        else:
+            interpolated_decay = np.interp(
+                np.linspace(0, len(decay_factors) - 1, max_lb),
+                np.arange(len(decay_factors)),
+                decay_factors
+            ).astype(np.float32)
+
+        for i in range(max_lb):
+            neighbor_distances[neighbor] += curr_distances[i] * interpolated_decay[i]
 
     return neighbor_distances
 
-@njit([float32[:](int32[:], int32[:], float32[:, :], float32[:,:], float32[:], int32[:], int32[:])], parallel=True)
-def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_history, flattened_obs_matrix, decay_factors, rot_indices, non_rot_indices):
+# @njit([float32[:](int32[:], int32[:], float32[:, :], float32[:,:], float32[:], int32[:], int32[:], float32[:])], parallel=True)
+def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_history, flattened_obs_matrix, decay_factors, rot_indices, non_rot_indices, rot_weights):
     m = len(nearest_neighbors)
     n = len(flattened_obs_matrix[0])
 
@@ -104,7 +116,7 @@ def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_histor
 
         # Simple Euclidean distance
         # Decay factors ensure more recent observations have more impact on cummulative distance calculation
-        all_distances = 0
+        curr_distances = np.zeros(max_lb, dtype=np.float32)
         for i in range(max_lb):
             dist = 0
 
@@ -113,22 +125,33 @@ def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_histor
                 dist += (obs_history_slice[i, j] - obs_matrix_slice[i, j]) ** 2
 
             # Handle rotational dimensions with wraparound logic
-            for j in rot_indices:
+            for k, j in enumerate(rot_indices):
                 delta = np.abs(obs_history_slice[i, j] - obs_matrix_slice[i, j])
-                delta = min(delta, 2 * np.pi - delta)
-                dist += delta ** 2
+                delta = min(delta, 2 * np.pi - delta) / 2 * np.pi
+                dist += delta ** 2 * rot_weights[k]
 
             # Multiply by decay factor
-            all_distances += dist ** 0.5 * decay_factors[i]
+            curr_distances[i] = dist ** 0.5
 
-        # Average, this is to avoid states with lower lookback having lower cummulative distance
-        # I'm not happy with this - it's a sloppy solution and isn't treating all trajectories equally due to decay
-        neighbor_distances[neighbor] = all_distances / max_lb
+        # This line is dense, but it's just doing this:
+        # decay_factors is calculated based on the lookback hyperparameter, but sometimes we're dealing with lookbacks shorter than that
+        # Thus, we need to interpolate to make sure that we're still getting the decay_factors curve, just over less indices
+        if max_lb == 1:
+            interpolated_decay = np.array([decay_factors[0]], dtype=np.float32)
+        else:
+            interpolated_decay = np.interp(
+                np.linspace(0, len(decay_factors) - 1, max_lb),
+                np.arange(len(decay_factors)),
+                decay_factors
+            ).astype(np.float32)
+
+        for i in range(max_lb):
+            neighbor_distances[neighbor] += curr_distances[i] * interpolated_decay[i]
 
     return neighbor_distances
 
-@njit([float32[:](float32[:], float32[:,:], int32[:], int32[:])], parallel=True)
-def compute_distance_with_rot(curr_ob, flattened_obs_matrix, rot_indices, non_rot_indices):
+@njit([float32[:](float32[:], float32[:,:], int32[:], int32[:], float32[:])], parallel=True)
+def compute_distance_with_rot(curr_ob, flattened_obs_matrix, rot_indices, non_rot_indices, rot_weights):
     m = len(flattened_obs_matrix)
 
     neighbor_distances = np.empty(m, dtype=np.float32)
@@ -142,10 +165,10 @@ def compute_distance_with_rot(curr_ob, flattened_obs_matrix, rot_indices, non_ro
             dist += (curr_ob[j] - nb[j]) ** 2
 
         # Handle rotational dimensions with wraparound logic
-        for j in rot_indices:
+        for k, j in enumerate(rot_indices):
             delta = np.abs(curr_ob[j] - nb[j])
             delta = min(delta, 2 * np.pi - delta) / 2 * np.pi
-            dist += delta ** 2
+            dist += delta ** 2 * rot_weights[k]
 
         neighbor_distances[neighbor] = dist ** 0.5
 
