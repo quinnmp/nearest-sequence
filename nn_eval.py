@@ -84,6 +84,10 @@ for candidate_num, lookback_num, decay_num, ratio in product(candidates, lookbac
         if trial >= 10:
             break
 
-    with open("results/" + args.config_path[7:-4] + "_" + str(candidate_num) + "_" + str(lookback_num) + "_" + str(decay_num) + "_" + str(ratio) + "_result.pkl", 'wb') as f:
+    decay_num_safe = str(decay_num).replace('.', '[dot]')
+    ratio_safe = str(ratio).replace('.', '[dot]')
+
+    os.makedirs('results', exist_ok=True)
+    with open("results/" + args.config_path[7:-4] + "_" + str(candidate_num) + "_" + str(lookback_num) + "_" + decay_num_safe + "_" + ratio_safe + "_result.pkl", 'wb') as f:
         pickle.dump(episode_rewards, f)
     print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {decay_num}, ratio {ratio}: mean {np.mean(episode_rewards)}, std {np.std(episode_rewards)}")

@@ -62,7 +62,7 @@ def objective(obs1=1, obs2=1, obs3=1, obs4=1, obs5=1, candidate_num=100, lookbac
         env = gym.make(config['env'])
     np.random.seed(config['seed'])
 
-    agent = nn_agent.NNAgentEuclideanStandardized(config['data']['pkl'], method=nn_util.NN_METHOD.GMM, plot=False, candidates=int(candidate_num), lookback=int(lookback_num), decay=int(decay_num)/10, window=int(window_num), weights=np.array([obs1, obs2, obs3, obs4, obs5]), final_neighbors_ratio=final_neighbors_ratio)
+    agent = nn_agent.NNAgentEuclideanStandardized(config['data']['pkl'], method=nn_util.NN_METHOD.GMM, plot=False, candidates=int(candidate_num), lookback=int(lookback_num), decay=int(decay_num)/10, window=int(window_num), weights=np.array([obs1, obs2, obs3, obs4]), final_neighbors_ratio=final_neighbors_ratio, rot_indices=np.array([4]))
 
     episode_rewards = []
     for i in range(10):

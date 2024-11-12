@@ -17,11 +17,23 @@ import math
 import faiss
 import os
 import gmm_regressor
-from nn_util import NN_METHOD, load_expert_data, save_expert_data, create_matrices, compute_accum_distance, compute_accum_distance_with_rot
+from nn_util import NN_METHOD, load_expert_data, save_expert_data, create_matrices, compute_accum_distance, compute_accum_distance_with_rot, compute_distance_with_rot
 DEBUG = False
 
 class NNAgent:
     def __init__(self, expert_data_path, method, plot=False, candidates=10, lookback=20, decay=-1, window=10, weights=np.array([]), final_neighbors_ratio=0.5, rot_indices=np.array([])):
+        # HYPERPARAMETER EXPLANATION:
+        # Candidates: The 'K' in KNN - how many candidate neighbors we want to do cumulative distance on
+        # Lookback: How far back we want to look (in states) into each trajectory when doing te cumulaitve distance function
+        # Decay: How exponentially we want to decrease the influence of older neighbors. For each index
+        #   Where i=1 is the most recent obs and i=10 is the 10th newest obs,
+        #   all i will each have their respective distance multiplied by i^decay 
+        #   thus, usually we want decay to be negative (older observations have less relevance)
+        # Final neighbors ratio: After we have our cumulative distance, we than take the
+        #   (100 * final_neighbors_ratio)% best neighbors. This can be a cheap way to handle multi-modality
+        #   i.e. if we think there are likely two modes evenly distributed in our neighbors,
+        #   if final_neighbors_ratio is 0.5, we will take only the 50% closest neighbors
+        #   post-cumulative distance function, ideally eliminating one of the two modes
         self.expert_data = load_expert_data(expert_data_path)
         self.method = method
 
@@ -33,7 +45,8 @@ class NNAgent:
         self.decay = decay
         self.window = window
         self.final_neighbors_ratio = final_neighbors_ratio
-        self.rot_indices = rot_indices
+        self.rot_indices = np.array(rot_indices, dtype=np.int32)
+        self.non_rot_indices = np.array([i for i in range(self.obs_matrix[0][0].shape[0]) if i not in rot_indices], dtype=np.int32)
 
         # Precompute constants
         self.flattened_obs_matrix = np.concatenate(self.obs_matrix, dtype=np.float32)
@@ -44,9 +57,11 @@ class NNAgent:
         if len(weights) > 0:
             self.weights = weights
         else:
-            self.weights = np.ones(len(self.obs_matrix[0][0]))
+            # For now, we only weigh non_rot_indices for simplicity
+            self.weights = np.ones(len(self.non_rot_indices))
 
-        self.reshaped_obs_matrix = self.flattened_obs_matrix.reshape(-1, len(self.obs_matrix[0][0])) * self.weights
+        self.reshaped_obs_matrix = self.flattened_obs_matrix.reshape(-1, len(self.obs_matrix[0][0]))
+        self.reshaped_obs_matrix[:, self.non_rot_indices] *= self.weights
         self.index = faiss.IndexHNSWFlat(self.reshaped_obs_matrix.shape[1], 32)
         self.index.hnsw.efConstruction = 1000
         self.index.hnsw.efSearch = 400
@@ -82,11 +97,15 @@ class NNAgentEuclidean(NNAgent):
         self.update_obs_history(current_ob)
 
         if len(self.rot_indices) > 0:
-            all_distances = quick_euclidean_dist_with_rot(current_ob * self.weights, self.reshaped_obs_matrix, self.rot_indices)
-            nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates]
+            # If we have elements in our observation space that wraparound (rotations), we can't just do direct Euclidean distance
+            current_ob[self.non_rot_indices] *= self.weights
+            all_distances = compute_distance_with_rot(current_ob.astype(np.float32), self.reshaped_obs_matrix, self.rot_indices, self.non_rot_indices)
+            nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates].astype(np.int32)
         else:
             query_point = np.array([current_ob * self.weights], dtype='float32')
             distances, nearest_neighbors = self.index.search(query_point, self.candidates)
+            # This indexing is decieving - we aren't taking just the first neighbor
+            # We only have one query point, so we take the nearest neighbors correlating t othat query point [0]
             nearest_neighbors = np.array(nearest_neighbors[0], dtype=np.int32)
 
         # Find corresponding trajectories for each neighbor
@@ -94,38 +113,45 @@ class NNAgentEuclidean(NNAgent):
         obs_nums = nearest_neighbors - self.traj_starts[traj_nums]
 
         if self.method == NN_METHOD.NN:
+            # If we're doing direct nearest neighbor, just return that action
             nearest_neighbor = np.argmin(distances)
             return self.act_matrix[traj_nums[nearest_neighbor]][obs_nums[nearest_neighbor]]
 
-        # How far can we look back for each neighbor?
+        # How far can we look back for each neighbor trajectory?
         # This is upper bound by min(lookback hyperparameter, length of obs history, neighbor distance into its traj)
         max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, len(self.obs_history)), dtype=np.int32)
         
-        neighbor_distances = compute_accum_distance(nearest_neighbors, max_lookbacks, self.obs_history, self.flattened_obs_matrix, self.decay_factors)
+        if len(self.rot_indices) > 0:
+            accum_distances = compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, self.obs_history, self.flattened_obs_matrix, self.decay_factors, self.rot_indices, self.non_rot_indices)
+        else:
+            accum_distances = compute_accum_distance(nearest_neighbors, max_lookbacks, self.obs_history, self.flattened_obs_matrix, self.decay_factors)
 
         if self.method == NN_METHOD.NS:
-            nearest_sequence = np.argmin(neighbor_distances)
+            # If we're doing direct nearest sequence, return that action
+            nearest_sequence = np.argmin(accum_distances)
             return self.act_matrix[traj_nums[nearest_sequence]][obs_nums[nearest_sequence]]
 
         # Do a final pass and pick only the top (self.final_neighbors_ratio * 100)% of neighbors based on this new accumulated distance
-        final_neighbor_num = math.floor(len(neighbor_distances) * self.final_neighbors_ratio)
-        final_neighbor_indices = np.argpartition(neighbor_distances, kth=final_neighbor_num - 1)[:final_neighbor_num]
+        final_neighbor_num = math.floor(len(accum_distances) * self.final_neighbors_ratio)
+        final_neighbor_indices = np.argpartition(accum_distances, kth=final_neighbor_num - 1)[:final_neighbor_num]
         final_neighbors = nearest_neighbors[final_neighbor_indices]
 
         if self.plot:
             self.plot.update(traj_nums[final_neighbor_indices], obs_nums[final_neighbor_indices], self.obs_history, self.lookback)
 
         if self.method == NN_METHOD.KNN_AND_DIST:
+            # This is the only method that doesn't actually return an action
+            # It returns neighbor states and distances for training our conditioning model
             neighbor_states = self.flattened_obs_matrix[final_neighbors]
-            return neighbor_states, neighbor_distances[final_neighbor_indices]
+            return neighbor_states, accum_distances[final_neighbor_indices]
         elif self.method == NN_METHOD.COND:
             neighbor_states = self.flattened_obs_matrix[final_neighbors]
-            return self.model(neighbor_states, neighbor_distances[final_neighbor_indices])
+            return self.model(neighbor_states, accum_distances[final_neighbor_indices])
 
         if self.method == NN_METHOD.LWR:
             X = np.c_[np.ones(final_neighbor_num), self.flattened_obs_matrix[final_neighbors]]
             Y = self.flattened_act_matrix[final_neighbors]
-            X_weights = X.T * neighbor_distances[final_neighbor_indices]
+            X_weights = X.T * accum_distances[final_neighbor_indices]
 
             try:
                 theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
@@ -142,7 +168,7 @@ class NNAgentEuclidean(NNAgent):
             return gmm_regressor.get_action(
                 self.flattened_obs_matrix[final_neighbors],
                 self.flattened_act_matrix[final_neighbors],
-                neighbor_distances[final_neighbor_indices],
+                accum_distances[final_neighbor_indices],
                 current_ob
             )
     
@@ -313,19 +339,24 @@ class NNAgentEuclidean(NNAgent):
                                        dtw[i-1, j-1]))  # match
         return dtw[-1, -1]
 
+# Standard Euclidean distance, but normalize each dimension of the observation space
 class NNAgentEuclideanStandardized(NNAgentEuclidean):
     def __init__(self, expert_data_path, method, plot=False, candidates=10, lookback=20, decay=-1, window=10, weights=np.array([]), final_neighbors_ratio=1.0, rot_indices=np.array([])):
         expert_data = load_expert_data(expert_data_path)
         observations = np.concatenate([traj['observations'] for traj in expert_data])
 
+        # Separate non-rotational dimensions
+        non_rot_indices = [i for i in range(observations.shape[1]) if i not in rot_indices]
+        non_rot_observations = observations[:, non_rot_indices]
+
         self.scaler = StandardScaler()
-        self.scaler.fit(observations)
+        self.scaler.fit(non_rot_observations)
 
         self.old_expert_data = copy.deepcopy(expert_data)
 
         for traj in expert_data:
             observations = traj['observations']
-            traj['observations'] = self.scaler.transform(observations)
+            traj['observations'][:, non_rot_indices] = self.scaler.transform(observations[:, non_rot_indices])
 
         new_path = expert_data_path[:-4] + '_standardized.pkl'
         save_expert_data(expert_data, new_path)
@@ -333,5 +364,5 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
         super().__init__(new_path, method, plot=plot, candidates=candidates, lookback=lookback, decay=decay, window=window, weights=weights, final_neighbors_ratio=final_neighbors_ratio, rot_indices=rot_indices)
 
     def get_action(self, current_ob):
-        standardized_ob = self.scaler.transform(current_ob.reshape(1, -1)).ravel()
-        return super().get_action(standardized_ob)
+        current_ob[self.non_rot_indices] = self.scaler.transform(current_ob[self.non_rot_indices].reshape(1, -1)).flatten()
+        return super().get_action(current_ob)

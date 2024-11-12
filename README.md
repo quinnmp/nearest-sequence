@@ -1,3 +1,5 @@
+# Environment Setup
+Just run `conda env create -f environment.yml` for an environment called `nearest-sequence`.
 # Rough Algorithm
 The general flow of this algorithm. See `nn_eval.py` for an example of implementation.
 1. Deploy an agent in some environment
@@ -8,11 +10,21 @@ The general flow of this algorithm. See `nn_eval.py` for an example of implement
 	3. Run another pass, picking some (0.0, 100.0] percentile of the neighbors to perform LWLR on
 	4. Perform locally-weighted linear regression, using the cumulative distance as the weights
 	5. Output an action from the original query point using our regression model
+# Hyperparameter Explanation
+- **Candidates**: The 'K' in KNN - how many candidate neighbors we want to do cumulative distance on.
+- **Lookback**: How far back we want to look (in states) into each trajectory when doing the cumulative distance function.
+- **Decay**: How exponentially we want to decrease the influence of older neighbors. For each index:
+  - i.e. `i=1` is the most recent observation, and `i=10` is the 10th newest observation.
+  - Each `i` will have its respective distance multiplied by `i^decay`.
+  - Typically, we want decay to be negative (older observations have less influence).
+- **Final Neighbors Ratio**: After calculating the cumulative distance, we take the
+  (100 * `final_neighbors_ratio`)% best neighbors. This can be a cheap way to handle mult modality.
+  - If there are likely two modes evenly distributed in our neighbors, and `final_neighbors_ratio` is 0.5, we will take only the 50% closest neighbors post-cumulative distance function, ideally eliminating one of the two modes.
 # Code to Look At
-A lot of this repo is very messy at the moment. If you want to gain an understanding of this algorithm, take a look at `nn_eval.py` for the high-level implementation. For the actual nearest-sequence algorithm, take a look at the `nn_agent` and `nn_util` classes.
+If you want to gain an understanding of this algorithm, take a look at `nn_eval.py` for the high-level implementation. For the actual nearest-sequence algorithm, take a look at the `nn_agent` and `nn_util` classes.
 
 Run `python nn_eval.py config/hopper.yml` to see the program work. At the time of writing, you should eventually see
-`Candidates 100, lookback 10, decay -2, ratio 0.5: mean 3118.9415590989797, std 1001.1018004725132`
+`Candidates 100, lookback 10, decay -2, ratio 0.5: mean 3125.040014550429, std 1003.881015863198`
 # Results
 
 ## MuJoCo
