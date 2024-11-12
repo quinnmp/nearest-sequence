@@ -5,16 +5,16 @@ channels:
 dependencies:
   - python=3.8
   - pip=23.1
+  - numpy==1.24.4
+  - Cython==0.29.32
+  - setuptools==65.5.0
+  - wheel==0.38.4
+  - cmake==3.30.5
+
   - pip:
-    - Cython==0.29.32
-    - numpy==1.22.0
-    - setuptools==65.5.0
-    - wheel==0.38.4
-    - cmake==3.30.5
-    
     - tqdm
     - tabulate
-    - torch==2.1.0
+    - torch==2.4.1
     - gym==0.19.0
     - matplotlib==3.7.2
     - pygame==2.5.0
@@ -25,6 +25,8 @@ dependencies:
     - faiss-cpu==1.8.0
     - robomimic==0.3.0
     - scikit-optimize==0.10.2
+    - numpy==1.24.4
+    - numba==0.58.1
 
     # Just for Push T
     - pymunk==6.2.1
@@ -34,6 +36,4 @@ dependencies:
     # GitHub dependencies
     - git+https://github.com/aravindr93/mjrl@3871d93763d3b49c4741e6daeaebbc605fe140dc
     - git+https://github.com/personalrobotics/d3rlpy.git@e89a7da6e4c1020f5cf999346c0ebd32e0bbc7c1#egg=d3rlpy
-    - git+https://github.com/f1tenth/f1tenth_gym.git@cd56335eda43ff4e401331c461877227474a3ed4#egg=f110_gym
     - git+https://github.com/rlworkgroup/metaworld.git@84bda2c3bd32fc03bb690d6188b22c7946cdb020
-    - git+https://github.com/personalrobotics/gym-pybullet-drones.git@2d4f34529722d57875073024e5c13fa80edf1072#egg=gym_pybullet_drones
