@@ -166,12 +166,22 @@ class NNAgentEuclidean(NNAgent):
 
             return np.dot(np.r_[1, current_ob], theta)
         elif self.method == NN_METHOD.GMM:
-            return gmm_regressor.get_action(
-                self.flattened_obs_matrix[final_neighbors],
-                self.flattened_act_matrix[final_neighbors],
-                accum_distances[final_neighbor_indices],
-                current_ob
-            )
+            if len(self.obs_history) == 1:
+                # Don't warm start on first iteration
+                return gmm_regressor.get_action(
+                    self.flattened_obs_matrix[final_neighbors],
+                    self.flattened_act_matrix[final_neighbors],
+                    accum_distances[final_neighbor_indices],
+                    current_ob,
+                    checkpoint_path=None
+                )
+            else:
+                return gmm_regressor.get_action(
+                    self.flattened_obs_matrix[final_neighbors],
+                    self.flattened_act_matrix[final_neighbors],
+                    accum_distances[final_neighbor_indices],
+                    current_ob
+                )
     
     def find_nearest_sequence_dynamic_time_warping(self, current_ob):
         self.update_obs_history(current_ob)

@@ -1,4 +1,5 @@
 import sys
+import os
 import torch
 import torch.nn.functional as F
 import torch.distributions as D
@@ -73,7 +74,7 @@ def validate_model(model, val_loader):
     model.train()
     return total_val_loss / len(val_loader)
 
-def get_action(observations, actions, distances, query_point):
+def get_action(observations, actions, distances, query_point, checkpoint_path="data/gmm_last_iteration.pth"):
     # Scale actions to similar range as observations
     action_scaler = StandardScaler()
     scaled_actions = action_scaler.fit_transform(actions)
@@ -120,6 +121,9 @@ def get_action(observations, actions, distances, query_point):
         num_modes=2
     ).to(device)
 
+    if checkpoint_path is not None and os.path.exists(checkpoint_path):
+        model.load_state_dict(torch.load(checkpoint_path, weights_only=True))
+
     optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
@@ -130,6 +134,7 @@ def get_action(observations, actions, distances, query_point):
 
     # Train the model
     train_model(model, train_loader, val_loader, optimizer, scheduler, epochs=100, patience=5)
+    torch.save(model.state_dict(), "data/gmm_last_iteration.pth")
 
     model.eval()
     with torch.no_grad():
