@@ -96,8 +96,8 @@ def get_action(observations, actions, distances, query_point, checkpoint_path="d
     train_dataset = WeightedGMMActorDataset(observations[train_indices], scaled_actions[train_indices], weights[train_indices])
     val_dataset = WeightedGMMActorDataset(observations[val_indices], scaled_actions[val_indices], weights[val_indices])
 
-    train_loader = DataLoader(train_dataset, batch_size=min(32, len(train_dataset)), shuffle=True, num_workers=4, persistent_workers=True)
-    val_loader = DataLoader(val_dataset, batch_size=min(32, len(val_dataset)), shuffle=False, num_workers=4, persistent_workers=True)
+    train_loader = DataLoader(train_dataset, batch_size=min(32, len(train_dataset)), shuffle=True, num_workers=4, persistent_workers=False)
+    val_loader = DataLoader(val_dataset, batch_size=min(32, len(val_dataset)), shuffle=False, num_workers=4, persistent_workers=False)
 
     # Suppress robomimic logs from config factory
     original_stdout = sys.stdout

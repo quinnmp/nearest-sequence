@@ -9,7 +9,7 @@
 #SBATCH --cpus-per-task=10
 #SBATCH --gpus-per-task=2
 #SBATCH --mem=16G
-#SBATCH --time=0
+#SBATCH --time=24:00:00
 #SBATCH -o log/%j.out
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=quinnpfeifer@icloud.com
