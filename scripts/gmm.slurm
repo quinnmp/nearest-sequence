@@ -2,7 +2,7 @@
 
 #SBATCH --job-name=knn
 #SBATCH --account=weirdlab
-#SBATCH --partition=gpu-l40
+#SBATCH --partition=gpu-l40s
 
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
