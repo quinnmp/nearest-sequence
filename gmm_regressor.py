@@ -9,7 +9,7 @@ from collections import OrderedDict
 from robomimic.models.policy_nets import GMMActorNetwork
 from robomimic.config import config_factory
 import robomimic.utils.obs_utils as ObsUtils
-from sklearn.preprocessing import StandardScaler
+from fast_scaler import FastScaler
 import numpy as np
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -76,7 +76,7 @@ def validate_model(model, val_loader):
 
 def get_action(observations, actions, distances, query_point, checkpoint_path="data/gmm_last_iteration.pth"):
     # Scale actions to similar range as observations
-    action_scaler = StandardScaler()
+    action_scaler = FastScaler()
     scaled_actions = action_scaler.fit_transform(actions)
     
     # Normalize distances to create weights

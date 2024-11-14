@@ -4,7 +4,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, random_split
 import numpy as np
 from scipy.spatial.distance import cdist
-from sklearn.preprocessing import StandardScaler
+from fast_scaler import FastScaler
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import argparse
 import yaml
@@ -16,8 +16,16 @@ import nn_agent, nn_util
 import math
 import faiss
 import os
+from dataclasses import dataclass
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+@dataclass
+class NeighborData:
+    states: torch.Tensor
+    actions: torch.Tensor
+    distances: torch.Tensor
+    target_action: torch.Tensor
 
 class KNNConditioningModel(nn.Module):
     def __init__(self, state_dim, action_dim, k, action_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05):
@@ -81,29 +89,37 @@ class KNNExpertDataset(Dataset):
     def __init__(self, expert_data_path, candidates=10, lookback=20, decay=-1, weights=np.array([]), final_neighbors_ratio=0.5, rot_indices=np.array([])):
         self.agent = nn_agent.NNAgentEuclideanStandardized(expert_data_path, nn_util.NN_METHOD.KNN_AND_DIST, plot=False, candidates=candidates, lookback=lookback, decay=decay, final_neighbors_ratio=final_neighbors_ratio)
 
-        self.action_scaler = StandardScaler()
+        self.action_scaler = FastScaler()
         self.action_scaler.fit(np.concatenate(self.agent.act_matrix))
+
+        self.neighbor_lookup: List[NeighborData | None] = [None] * len(self.agent.flattened_obs_matrix)
 
     def __len__(self):
         return len(self.agent.flattened_obs_matrix)
     
     def __getitem__(self, idx):
-        # Figure out which trajectory this index in our flattened state array belongs to
-        state_traj = np.searchsorted(self.agent.traj_starts, idx, side='right') - 1
-        state_num = idx - self.agent.traj_starts[state_traj]
+        if self.neighbor_lookup[idx] is None:
+            # Figure out which trajectory this index in our flattened state array belongs to
+            state_traj = np.searchsorted(self.agent.traj_starts, idx, side='right') - 1
+            state_num = idx - self.agent.traj_starts[state_traj]
 
-        # The corresponding action to this state
-        action = self.action_scaler.transform([self.agent.act_matrix[state_traj][state_num]])[0]
+            # The corresponding action to this state
+            action = self.action_scaler.transform([self.agent.act_matrix[state_traj][state_num]])[0]
 
-        self.agent.obs_history = self.agent.obs_matrix[state_traj][:state_num][::-1]
+            self.agent.obs_history = self.agent.obs_matrix[state_traj][:state_num][::-1]
 
-        neighbor_states, neighbor_actions, neighbor_distances = self.agent.get_action(self.agent.obs_matrix[state_traj][state_num])
-        neighbor_actions = self.action_scaler.transform(neighbor_actions)
+            neighbor_states, neighbor_actions, neighbor_distances = self.agent.get_action(self.agent.obs_matrix[state_traj][state_num])
+            neighbor_actions = self.action_scaler.transform(neighbor_actions)
 
-        return (torch.tensor(neighbor_states, dtype=torch.float32, device=device), 
-                torch.tensor(neighbor_actions, dtype=torch.float32, device=device), 
-                torch.tensor(neighbor_distances, dtype=torch.float32, device=device), 
-                torch.tensor(action, dtype=torch.float32, device=device))
+            self.neighbor_lookup[idx] = NeighborData(
+                states=torch.tensor(neighbor_states, dtype=torch.float32, device=device),
+                actions=torch.tensor(neighbor_actions, dtype=torch.float32, device=device),
+                distances=torch.tensor(neighbor_distances, dtype=torch.float32, device=device),
+                target_action=torch.tensor(action, dtype=torch.float32, device=device)
+            )
+
+        data = self.neighbor_lookup[idx]
+        return data.states, data.actions, data.distances, data.target_action
 
 def train_model(model, train_loader, num_epochs=100, lr=1e-3, model_path="cond_models/cond_model.pth"):
     criterion = nn.MSELoss()
@@ -119,6 +135,7 @@ def train_model(model, train_loader, num_epochs=100, lr=1e-3, model_path="cond_m
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
+            print("STEP")
 
         print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss/len(train_loader):.4f}")
 

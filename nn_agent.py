@@ -94,7 +94,7 @@ class NNAgent:
                 state_dim = full_dataset[0][0][0].shape[0]
                 action_dim = full_dataset[0][3].shape[0]
                 model = KNNConditioningModel(state_dim, action_dim, candidates, full_dataset.action_scaler, final_neighbors_ratio=final_neighbors_ratio)
-                self.model = train_model(model, train_loader, num_epochs=1, model_path=model_path)
+                self.model = train_model(model, train_loader, num_epochs=100, model_path=model_path)
 
             self.model.eval()
 
