@@ -3,36 +3,33 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.8
-  - pip=23.1
-  - numpy==1.24.4
-  - Cython==0.29.32
-  - setuptools==65.5.0
-  - wheel==0.38.4
-  - cmake==3.30.5
-
+  - python=3.10.12
+  - pip=22.0.2
+  - numpy=1.26.4
+  - Cython=0.29.32
+  - setuptools=65.5.0
+  - wheel=0.38.4
+  - cmake=3.30.5
   - pip:
-    - tqdm
-    - tabulate
-    - torch==2.4.1
+    - tqdm==4.66.5
+    - tabulate==0.9.0
+    - torch==2.1.0
     - gym==0.19.0
     - matplotlib==3.7.2
     - pygame==2.5.0
-    - PyYAML
+    - PyYAML==6.0.1
     - d4rl==1.1
-    - tensorboard
-    - scipy
-    - faiss-cpu==1.8.0
+    - tensorboard==2.17.0
+    - scipy==1.11.4
+    - faiss-cpu==1.9.0
     - robomimic==0.3.0
     - scikit-optimize==0.10.2
-    - numpy==1.24.4
-    - numba==0.58.1
-
+    - numpy==1.26.4
+    - numba==0.60.0
     # Just for Push T
     - pymunk==6.2.1
     - Shapely==1.8.4
     - opencv-python==4.10.0.84
-    
     # GitHub dependencies
     - git+https://github.com/aravindr93/mjrl@3871d93763d3b49c4741e6daeaebbc605fe140dc
     - git+https://github.com/personalrobotics/d3rlpy.git@e89a7da6e4c1020f5cf999346c0ebd32e0bbc7c1#egg=d3rlpy
