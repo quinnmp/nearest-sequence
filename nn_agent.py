@@ -9,6 +9,7 @@ from scipy.spatial import KDTree
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from nn_conditioning_model import KNNExpertDataset, KNNConditioningModel, train_model
 from torch.utils.data import Dataset, DataLoader, random_split
+import torch
 import time
 from numba import jit, njit, prange, float64, int64, float32, int32
 from scipy.linalg import lstsq
@@ -78,13 +79,24 @@ class NNAgent:
             self.plot = False
 
         if method == NN_METHOD.COND:
-            full_dataset = KNNExpertDataset(expert_data_path, candidates=candidates, lookback=lookback, decay=decay, final_neighbors_ratio=final_neighbors_ratio, rot_indices=rot_indices)
-            train_loader = DataLoader(full_dataset, shuffle=True)
+            model_path = "cond_models/" + os.path.basename(expert_data_path)[:-4] + "_cond_model.pth"
+            # Check if the model already exists
+            if os.path.exists(model_path):
+                # Load the model if it exists
+                print(f"Loading model from {model_path}")
+                self.model = torch.load(model_path, weights_only=False)
+            else:
+                # Train the model if it doesn't exist
+                print(f"Training model and saving to {model_path}")
+                full_dataset = KNNExpertDataset(expert_data_path, candidates=candidates, lookback=lookback, decay=decay, final_neighbors_ratio=final_neighbors_ratio, rot_indices=rot_indices)
+                train_loader = DataLoader(full_dataset, batch_size=1024, shuffle=True)
 
-            state_dim = full_dataset[0][0][0].shape[0]
-            action_dim = full_dataset[0][2].shape[0]
-            model = KNNConditioningModel(state_dim, action_dim, candidates, full_dataset.action_scaler, final_neighbors_ratio=final_neighbors_ratio)
-            self.model = train_model(model, train_loader)
+                state_dim = full_dataset[0][0][0].shape[0]
+                action_dim = full_dataset[0][3].shape[0]
+                model = KNNConditioningModel(state_dim, action_dim, candidates, full_dataset.action_scaler, final_neighbors_ratio=final_neighbors_ratio)
+                self.model = train_model(model, train_loader, num_epochs=1, model_path=model_path)
+
+            self.model.eval()
 
     def update_obs_history(self, current_ob):
         if len(self.obs_history) == 0:
@@ -96,6 +108,9 @@ class NNAgentEuclidean(NNAgent):
     def get_action(self, current_ob):
         self.update_obs_history(current_ob)
 
+        if self.method == NN_METHOD.KNN_AND_DIST:
+            self.candidates += 1
+
         if len(self.rot_indices) > 0:
             # If we have elements in our observation space that wraparound (rotations), we can't just do direct Euclidean distance
             current_ob[self.non_rot_indices] *= self.weights[self.non_rot_indices]
@@ -103,10 +118,19 @@ class NNAgentEuclidean(NNAgent):
             nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates].astype(np.int32)
         else:
             query_point = np.array([current_ob * self.weights[self.non_rot_indices]], dtype='float32')
-            distances, nearest_neighbors = self.index.search(query_point, self.candidates)
+            all_distances, nearest_neighbors = self.index.search(query_point, self.candidates)
             # This indexing is decieving - we aren't taking just the first neighbor
             # We only have one query point, so we take the nearest neighbors correlating t othat query point [0]
             nearest_neighbors = np.array(nearest_neighbors[0], dtype=np.int32)
+
+        if self.method == NN_METHOD.KNN_AND_DIST:
+            # Remove the nearest neighbor
+            # We only use this method when training a model on states in the dataset
+            # So the closest neighbor will be itself - unhelpful!
+            nearest_index = np.argmin(all_distances)
+            all_distances = np.delete(all_distances, nearest_index)
+            nearest_neighbors = np.delete(nearest_neighbors, nearest_index)
+            self.candidates -= 1
 
         # Find corresponding trajectories for each neighbor
         traj_nums = np.searchsorted(self.traj_starts, nearest_neighbors, side='right') - 1
@@ -143,10 +167,12 @@ class NNAgentEuclidean(NNAgent):
             # This is the only method that doesn't actually return an action
             # It returns neighbor states and distances for training our conditioning model
             neighbor_states = self.flattened_obs_matrix[final_neighbors]
-            return neighbor_states, accum_distances[final_neighbor_indices]
+            neighbor_actions = self.flattened_act_matrix[final_neighbors]
+            return neighbor_states, neighbor_actions, accum_distances[final_neighbor_indices]
         elif self.method == NN_METHOD.COND:
             neighbor_states = self.flattened_obs_matrix[final_neighbors]
-            return self.model(neighbor_states, accum_distances[final_neighbor_indices])
+            neighbor_actions = self.flattened_act_matrix[final_neighbors]
+            return self.model(neighbor_states, neighbor_actions, accum_distances[final_neighbor_indices])
 
         if self.method == NN_METHOD.LWR:
             X = np.c_[np.ones(final_neighbor_num), self.flattened_obs_matrix[final_neighbors]]
@@ -160,7 +186,6 @@ class NNAgentEuclidean(NNAgent):
                     print("FAILED TO CONVERGE, ADDING NOISE")
                     theta = np.linalg.pinv(X_weights @ (X + 1e-8)) @ X_weights @ Y
                 except:
-                    breakpoint()
                     print("Something went wrong, likely a very large number (> e+150) was encountered. Returning arbitrary action.")
                     return self.act_matrix[0][0]
 

@@ -134,7 +134,7 @@ def get_action(observations, actions, distances, query_point, checkpoint_path="d
 
     # Train the model
     train_model(model, train_loader, val_loader, optimizer, scheduler, epochs=100, patience=5)
-    torch.save(model.state_dict(), "data/gmm_last_iteration.pth")
+    torch.save(model.state_dict(), checkpoint_path)
 
     model.eval()
     with torch.no_grad():

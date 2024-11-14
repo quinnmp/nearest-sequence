@@ -26,7 +26,7 @@ class KNNConditioningModel(nn.Module):
         self.action_dim = action_dim
         self.k = k
         self.final_neighbors_ratio = final_neighbors_ratio
-        self.input_dim = math.floor(k * final_neighbors_ratio) * (state_dim + 1)  # k states + k distances
+        self.input_dim = math.floor(k * final_neighbors_ratio) * (state_dim + action_dim + 1)  # k states + k distances
         self.action_scaler = action_scaler
         self.training_mode = True
 
@@ -43,13 +43,21 @@ class KNNConditioningModel(nn.Module):
         layers.append(nn.Linear(hidden_dims[-1], action_dim).to(device))
         self.model = nn.Sequential(*layers)
     
-    def forward(self, states, distances):
+    def forward(self, states, actions, distances):
+        # Will be batchless numpy arrays at inference time
+        if isinstance(states, np.ndarray):
+            states = torch.tensor(states, dtype=torch.float32, device=device).unsqueeze(0)
+            actions = self.action_scaler.transform(actions)
+            actions = torch.tensor(actions, dtype=torch.float32, device=device).unsqueeze(0)
+            distances = torch.tensor(distances, dtype=torch.float32, device=device).unsqueeze(0)
+
         batch_size = states.size(0)
         states = states.view(batch_size, math.floor(self.k * self.final_neighbors_ratio), self.state_dim)
+        actions = actions.view(batch_size, math.floor(self.k * self.final_neighbors_ratio), self.action_dim)
         distances = distances.view(batch_size, math.floor(self.k * self.final_neighbors_ratio), 1)
         
         # Interleave states and distances to query point for locality in input
-        interleaved = torch.cat([states, distances], dim=2).view(batch_size, self.input_dim)
+        interleaved = torch.cat([states, actions, distances], dim=2).view(batch_size, self.input_dim)
         output = self.model(interleaved)
 
         if self.training_mode:
@@ -80,7 +88,7 @@ class KNNExpertDataset(Dataset):
         return len(self.agent.flattened_obs_matrix)
     
     def __getitem__(self, idx):
-        # Figure out which trajectory this index in our flattened state arraybelongs to
+        # Figure out which trajectory this index in our flattened state array belongs to
         state_traj = np.searchsorted(self.agent.traj_starts, idx, side='right') - 1
         state_num = idx - self.agent.traj_starts[state_traj]
 
@@ -89,22 +97,24 @@ class KNNExpertDataset(Dataset):
 
         self.agent.obs_history = self.agent.obs_matrix[state_traj][:state_num][::-1]
 
-        neighbor_states, neighbor_distances = self.agent.get_action(self.agent.obs_matrix[state_traj][state_num])
+        neighbor_states, neighbor_actions, neighbor_distances = self.agent.get_action(self.agent.obs_matrix[state_traj][state_num])
+        neighbor_actions = self.action_scaler.transform(neighbor_actions)
 
         return (torch.tensor(neighbor_states, dtype=torch.float32, device=device), 
+                torch.tensor(neighbor_actions, dtype=torch.float32, device=device), 
                 torch.tensor(neighbor_distances, dtype=torch.float32, device=device), 
                 torch.tensor(action, dtype=torch.float32, device=device))
 
-def train_model(model, train_loader, num_epochs=100, lr=1e-4):
+def train_model(model, train_loader, num_epochs=100, lr=1e-3, model_path="cond_models/cond_model.pth"):
     criterion = nn.MSELoss()
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.0002)
     
     for epoch in range(num_epochs):
         model.train()
         train_loss = 0.0
-        for neighbor_states, neighbor_distances, actions in train_loader:
+        for neighbor_states, neighbor_actions, neighbor_distances, actions in train_loader:
             optimizer.zero_grad()
-            predicted_actions = model(neighbor_states, neighbor_distances)
+            predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances)
             loss = criterion(predicted_actions, actions)
             loss.backward()
             optimizer.step()
@@ -112,6 +122,7 @@ def train_model(model, train_loader, num_epochs=100, lr=1e-4):
 
         print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss/len(train_loader):.4f}")
 
+    torch.save(model, model_path)
     return model
 
 def evaluate_model(model, test_loader):
@@ -158,7 +169,7 @@ if __name__ == "__main__":
 
     # Initialize model
     state_dim = full_dataset[0][0][0].shape[0]
-    action_dim = full_dataset[0][2].shape[0]
+    action_dim = full_dataset[0][3].shape[0]
     model = KNNConditioningModel(state_dim, action_dim, candidates[0], full_dataset.action_scaler, final_neighbors_ratio=final_neighbors_ratio[0])
 
     # Train model

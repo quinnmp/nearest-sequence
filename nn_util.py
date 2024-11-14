@@ -89,12 +89,18 @@ def compute_accum_distance(nearest_neighbors, max_lookbacks, obs_history, flatte
                 decay_factors
             ).astype(np.float32)
 
+        acc_distance = np.float32(0.0)
         for i in range(max_lb):
-            neighbor_distances[neighbor] += curr_distances[i] * interpolated_decay[i]
+            # Compute increment with explicit float32 casting for numeric stability
+            increment = np.float32(curr_distances[i]) * np.float32(interpolated_decay[i])
+            acc_distance = np.float32(acc_distance + increment)
+        neighbor_distances[neighbor] = acc_distance
 
+        if (neighbor_distances[neighbor] < 0 or neighbor_distances[neighbor] > 100000):
+            print(f"NEIGHBOR {neighbor_distances[neighbor]}")
     return neighbor_distances
 
-# @njit([float32[:](int32[:], int32[:], float32[:, :], float32[:,:], float32[:], int32[:], int32[:], float32[:])], parallel=True)
+@njit([float32[:](int32[:], int32[:], float32[:, :], float32[:,:], float32[:], int32[:], int32[:], float32[:])], parallel=True)
 def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_history, flattened_obs_matrix, decay_factors, rot_indices, non_rot_indices, rot_weights):
     m = len(nearest_neighbors)
     n = len(flattened_obs_matrix[0])
