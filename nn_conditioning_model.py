@@ -122,6 +122,8 @@ class KNNExpertDataset(Dataset):
         return data.states, data.actions, data.distances, data.target_action
 
 def train_model(model, train_loader, num_epochs=100, lr=1e-3, model_path="cond_models/cond_model.pth"):
+    os.makedirs(os.path.dirname(model_path), exist_ok=True)
+
     criterion = nn.MSELoss()
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.0002)
     
