@@ -22,7 +22,7 @@ from nn_util import NN_METHOD, load_expert_data, save_expert_data, create_matric
 DEBUG = False
 
 class NNAgent:
-    def __init__(self, expert_data_path, method, plot=False, candidates=10, lookback=20, decay=-1, window=10, weights=np.array([]), final_neighbors_ratio=0.5, rot_indices=np.array([])):
+    def __init__(self, expert_data_path, method, plot=False, candidates=10, lookback=20, decay=-1, window=10, weights=np.array([]), final_neighbors_ratio=0.5, rot_indices=np.array([]), cond_force_retrain=False):
         # HYPERPARAMETER EXPLANATION:
         # Candidates: The 'K' in KNN - how many candidate neighbors we want to do cumulative distance on
         # Lookback: How far back we want to look (in states) into each trajectory when doing te cumulaitve distance function
@@ -81,7 +81,7 @@ class NNAgent:
         if method == NN_METHOD.COND:
             model_path = "cond_models/" + os.path.basename(expert_data_path)[:-4] + "_cond_model.pth"
             # Check if the model already exists
-            if os.path.exists(model_path):
+            if os.path.exists(model_path) and not cond_force_retrain:
                 # Load the model if it exists
                 print(f"Loading model from {model_path}")
                 self.model = torch.load(model_path, weights_only=False)
@@ -377,7 +377,7 @@ class NNAgentEuclidean(NNAgent):
 
 # Standard Euclidean distance, but normalize each dimension of the observation space
 class NNAgentEuclideanStandardized(NNAgentEuclidean):
-    def __init__(self, expert_data_path, method, plot=False, candidates=10, lookback=20, decay=-1, window=10, weights=np.array([]), final_neighbors_ratio=1.0, rot_indices=np.array([])):
+    def __init__(self, expert_data_path, method, plot=False, candidates=10, lookback=20, decay=-1, window=10, weights=np.array([]), final_neighbors_ratio=1.0, rot_indices=np.array([]), cond_force_retrain=False):
         expert_data = load_expert_data(expert_data_path)
         observations = np.concatenate([traj['observations'] for traj in expert_data])
 
@@ -397,7 +397,7 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
         new_path = expert_data_path[:-4] + '_standardized.pkl'
         save_expert_data(expert_data, new_path)
 
-        super().__init__(new_path, method, plot=plot, candidates=candidates, lookback=lookback, decay=decay, window=window, weights=weights, final_neighbors_ratio=final_neighbors_ratio, rot_indices=rot_indices)
+        super().__init__(new_path, method, plot=plot, candidates=candidates, lookback=lookback, decay=decay, window=window, weights=weights, final_neighbors_ratio=final_neighbors_ratio, rot_indices=rot_indices, cond_force_retrain=cond_force_retrain)
 
     def get_action(self, current_ob):
         current_ob[self.non_rot_indices] = self.scaler.transform(current_ob[self.non_rot_indices].reshape(1, -1)).flatten()
