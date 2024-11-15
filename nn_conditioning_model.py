@@ -137,9 +137,6 @@ def train_model(model, train_loader, num_epochs=100, lr=1e-3, model_path="cond_m
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
-            print("STEP")
-
-        print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss/len(train_loader):.4f}")
 
     torch.save(model, model_path)
     return model

@@ -23,18 +23,6 @@ DEBUG = False
 
 class NNAgent:
     def __init__(self, expert_data_path, method, plot=False, candidates=10, lookback=20, decay=-1, window=10, weights=np.array([]), final_neighbors_ratio=0.5, rot_indices=np.array([]), cond_force_retrain=False):
-        # HYPERPARAMETER EXPLANATION:
-        # Candidates: The 'K' in KNN - how many candidate neighbors we want to do cumulative distance on
-        # Lookback: How far back we want to look (in states) into each trajectory when doing te cumulaitve distance function
-        # Decay: How exponentially we want to decrease the influence of older neighbors. For each index
-        #   Where i=1 is the most recent obs and i=10 is the 10th newest obs,
-        #   all i will each have their respective distance multiplied by i^decay 
-        #   thus, usually we want decay to be negative (older observations have less relevance)
-        # Final neighbors ratio: After we have our cumulative distance, we than take the
-        #   (100 * final_neighbors_ratio)% best neighbors. This can be a cheap way to handle multi-modality
-        #   i.e. if we think there are likely two modes evenly distributed in our neighbors,
-        #   if final_neighbors_ratio is 0.5, we will take only the 50% closest neighbors
-        #   post-cumulative distance function, ideally eliminating one of the two modes
         self.expert_data = load_expert_data(expert_data_path)
         self.method = method
 
@@ -191,22 +179,14 @@ class NNAgentEuclidean(NNAgent):
 
             return np.dot(np.r_[1, current_ob], theta)
         elif self.method == NN_METHOD.GMM:
-            if len(self.obs_history) == 1:
-                # Don't warm start on first iteration
-                return gmm_regressor.get_action(
-                    self.flattened_obs_matrix[final_neighbors],
-                    self.flattened_act_matrix[final_neighbors],
-                    accum_distances[final_neighbor_indices],
-                    current_ob,
-                    checkpoint_path=None
-                )
-            else:
-                return gmm_regressor.get_action(
-                    self.flattened_obs_matrix[final_neighbors],
-                    self.flattened_act_matrix[final_neighbors],
-                    accum_distances[final_neighbor_indices],
-                    current_ob
-                )
+            # Don't warm start on first iteration
+            return gmm_regressor.get_action(
+                self.flattened_obs_matrix[final_neighbors],
+                self.flattened_act_matrix[final_neighbors],
+                accum_distances[final_neighbor_indices],
+                current_ob,
+                from_scratch=(len(self.obs_history) == 1)
+            )
     
     def find_nearest_sequence_dynamic_time_warping(self, current_ob):
         self.update_obs_history(current_ob)

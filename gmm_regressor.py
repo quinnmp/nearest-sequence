@@ -74,10 +74,11 @@ def validate_model(model, val_loader):
     model.train()
     return total_val_loss / len(val_loader)
 
-def get_action(observations, actions, distances, query_point, checkpoint_path="data/gmm_last_iteration.pth"):
+def get_action(observations, actions, distances, query_point, checkpoint_path="data/gmm_last_iteration.pth", from_scratch=False):
     # Scale actions to similar range as observations
     action_scaler = FastScaler()
-    scaled_actions = action_scaler.fit_transform(actions)
+    action_scaler.fit(actions)
+    scaled_actions = action_scaler.transform(actions)
     
     # Normalize distances to create weights
     eps = 1e-10
@@ -121,7 +122,7 @@ def get_action(observations, actions, distances, query_point, checkpoint_path="d
         num_modes=2
     ).to(device)
 
-    if checkpoint_path is not None and os.path.exists(checkpoint_path):
+    if not from_scratch and os.path.exists(checkpoint_path):
         model.load_state_dict(torch.load(checkpoint_path, weights_only=True))
 
     optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5)
@@ -134,6 +135,8 @@ def get_action(observations, actions, distances, query_point, checkpoint_path="d
 
     # Train the model
     train_model(model, train_loader, val_loader, optimizer, scheduler, epochs=100, patience=5)
+
+    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
     torch.save(model.state_dict(), checkpoint_path)
 
     model.eval()
