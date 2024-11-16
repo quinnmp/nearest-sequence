@@ -46,60 +46,6 @@ def create_matrices(expert_data):
     traj_starts = np.asarray(traj_starts)
     return obs_matrix, act_matrix, traj_starts
 
-@njit([float32[:](int32[:], int32[:], float32[:, :], float32[:,:], float32[:])], parallel=True)
-def compute_accum_distance(nearest_neighbors, max_lookbacks, obs_history, flattened_obs_matrix, decay_factors):
-    m = len(nearest_neighbors)
-    n = len(flattened_obs_matrix[0])
-
-    total_obs = len(flattened_obs_matrix)
-
-    neighbor_distances = np.empty(m, dtype=np.float32)
-
-    # Matrix is reversed, we have to calculate from the back
-    flattened_obs_matrix = flattened_obs_matrix[::-1]
-    
-    for neighbor in prange(m):
-        nb, max_lb = nearest_neighbors[neighbor], max_lookbacks[neighbor]
-
-        obs_history_slice = obs_history[:max_lb]
-
-        start = total_obs - nb - 1
-        obs_matrix_slice = flattened_obs_matrix[start:start + max_lb]
-
-        # Simple Euclidean distance
-        # Decay factors ensure more recent observations have more impact on cummulative distance calculation
-        curr_distances = np.zeros(max_lb, dtype=np.float32)
-        for i in range(max_lb):
-            dist = 0
-
-            # Element-wise distance calculation
-            for j in range(n):
-                dist += (obs_history_slice[i, j] - obs_matrix_slice[i, j]) ** 2
-            curr_distances[i] = dist ** 0.5
-
-        # This line is dense, but it's just doing this:
-        # decay_factors is calculated based on the lookback hyperparameter, but sometimes we're dealing with lookbacks shorter than that
-        # Thus, we need to interpolate to make sure that we're still getting the decay_factors curve, just over less indices
-        if max_lb == 1:
-            interpolated_decay = np.array([decay_factors[0]], dtype=np.float32)
-        else:
-            interpolated_decay = np.interp(
-                np.linspace(0, len(decay_factors) - 1, max_lb),
-                np.arange(len(decay_factors)),
-                decay_factors
-            ).astype(np.float32)
-
-        acc_distance = np.float32(0.0)
-        for i in range(max_lb):
-            # Compute increment with explicit float32 casting for numeric stability
-            increment = np.float32(curr_distances[i]) * np.float32(interpolated_decay[i])
-            acc_distance = np.float32(acc_distance + increment)
-        neighbor_distances[neighbor] = acc_distance
-
-        if (neighbor_distances[neighbor] < 0 or neighbor_distances[neighbor] > 100000):
-            print(f"NEIGHBOR {neighbor_distances[neighbor]}")
-    return neighbor_distances
-
 @njit([float32[:](int32[:], int32[:], float32[:, :], float32[:,:], float32[:], int32[:], int32[:], float32[:])], parallel=True)
 def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_history, flattened_obs_matrix, decay_factors, rot_indices, non_rot_indices, rot_weights):
     m = len(nearest_neighbors)
@@ -151,8 +97,13 @@ def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_histor
                 decay_factors
             ).astype(np.float32)
 
+        acc_distance = np.float32(0.0)
         for i in range(max_lb):
-            neighbor_distances[neighbor] += curr_distances[i] * interpolated_decay[i]
+            # Compute increment with explicit float32 casting for numeric stability
+            increment = np.float32(curr_distances[i]) * np.float32(interpolated_decay[i])
+            acc_distance = np.float32(acc_distance + increment)
+        neighbor_distances[neighbor] = acc_distance
+
 
     return neighbor_distances
 

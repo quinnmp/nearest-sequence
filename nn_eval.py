@@ -52,7 +52,7 @@ for candidate_num, lookback_num, decay_num, ratio in product(candidates, lookbac
     env.seed(config['seed'])
     np.random.seed(config['seed'])
 
-    nn_agent = nn_agent.NNAgentEuclideanStandardized(config['data']['pkl'], nn_util.NN_METHOD.GMM, plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, final_neighbors_ratio=ratio, cond_force_retrain=True)
+    nn_agent = nn_agent.NNAgentEuclideanStandardized(config['data']['pkl'], nn_util.NN_METHOD.COND, plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, final_neighbors_ratio=ratio, cond_force_retrain=True)
 
     episode_rewards = []
     success = 0
