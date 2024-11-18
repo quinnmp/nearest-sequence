@@ -12,6 +12,7 @@ import argparse
 import d4rl
 import pickle
 from itertools import product
+from push_t_env import PushTEnv
 
 DEBUG = False
 
@@ -33,8 +34,11 @@ def nn_eval(config, nn_agent):
         env._partially_observable = False
         env._freeze_rand_vec = False
         env._set_task_called = True
+    elif config['env'] == 'push_t':
+        env = PushTEnv()
     else:
         env = gym.make(config['env'])
+
     env.seed(config['seed'])
     np.random.seed(config['seed'])
 
@@ -42,28 +46,42 @@ def nn_eval(config, nn_agent):
     success = 0
     trial = 0
     while True:
-        observation = crop_obs_for_env(env.reset(), config['env'])
+        if config['env'] == "push_t":
+            observation = crop_obs_for_env(env.reset()[0], config['env'])
+        else:
+            observation = crop_obs_for_env(env.reset(), config['env'])
 
         nn_agent.obs_history = np.array([])
 
         episode_reward = 0.0
         steps = 0
+
         while True:
             action = nn_agent.get_action(observation)
-            observation, reward, done, info = env.step(action)
+            if config['env'] == "push_t":
+                observation, reward, done, truncated, info = env.step(action)
+            else:
+                observation, reward, done, info = env.step(action)
+
             observation = crop_obs_for_env(observation, config['env'])
 
-            episode_reward += reward
+            if config['env'] == "push_t":
+                episode_reward = max(episode_reward, reward)
+            else:
+                episode_reward += reward
             if False:
                 env.render()
             if done:
                 break
             if config['metaworld'] and steps >= 500:
                 break
+            if config['env'] == "push_t" and steps > 200:
+                break
             steps += 1
 
-        success += info['success'] if 'success' in info else 0
         episode_rewards.append(episode_reward)
+
+        success += info['success'] if 'success' in info else 0
         trial += 1
         if trial >= 10:
             break
