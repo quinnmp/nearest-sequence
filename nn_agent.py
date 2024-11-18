@@ -18,7 +18,7 @@ import math
 import faiss
 import os
 import gmm_regressor
-from nn_util import NN_METHOD, load_expert_data, save_expert_data, create_matrices, compute_accum_distance, compute_accum_distance_with_rot, compute_distance_with_rot
+from nn_util import NN_METHOD, load_expert_data, save_expert_data, create_matrices, compute_accum_distance_with_rot, compute_distance_with_rot
 DEBUG = False
 
 class NNAgent:

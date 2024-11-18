@@ -118,8 +118,8 @@ def get_action(observations, actions, distances, query_point, checkpoint_path="d
     model = GMMActorNetwork(
         obs_shapes=obs_shapes,
         ac_dim=ac_dim,
-        mlp_layer_dims=[512, 512],
-        num_modes=2
+        mlp_layer_dims=[512, 256],
+        num_modes=5
     ).to(device)
 
     if not from_scratch and os.path.exists(checkpoint_path):
@@ -134,7 +134,7 @@ def get_action(observations, actions, distances, query_point, checkpoint_path="d
     )
 
     # Train the model
-    train_model(model, train_loader, val_loader, optimizer, scheduler, epochs=100, patience=5)
+    train_model(model, train_loader, val_loader, optimizer, scheduler, epochs=20, patience=10)
 
     os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
     torch.save(model.state_dict(), checkpoint_path)
