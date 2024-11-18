@@ -15,20 +15,6 @@ from itertools import product
 
 DEBUG = False
 
-parser = argparse.ArgumentParser()
-parser.add_argument("config_path", help="Path to config file")
-args, _ = parser.parse_known_args()
-
-with open(args.config_path, 'r') as f:
-    config = yaml.load(f, Loader=yaml.FullLoader)
-
-print(config)
-
-candidates = config['policy']['k_neighbors']
-lookback = config['policy']['lookback']
-decay = config['policy']['decay_rate']
-final_neighbors_ratio = config['policy']['ratio']
-
 def crop_obs_for_env(obs, env):
     if env == "ant-expert-v2":
         return obs[:27]
@@ -41,7 +27,7 @@ def crop_obs_for_env(obs, env):
     else:
         return obs
 
-for candidate_num, lookback_num, decay_num, ratio in product(candidates, lookback, decay, final_neighbors_ratio):
+def nn_eval(config, nn_agent):
     if config['metaworld']:
         env = _env_dict.MT50_V2[config['env']]()
         env._partially_observable = False
@@ -51,8 +37,6 @@ for candidate_num, lookback_num, decay_num, ratio in product(candidates, lookbac
         env = gym.make(config['env'])
     env.seed(config['seed'])
     np.random.seed(config['seed'])
-
-    nn_agent = nn_agent.NNAgentEuclideanStandardized(config['data']['pkl'], nn_util.NN_METHOD.LWR, plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, final_neighbors_ratio=ratio, cond_force_retrain=True)
 
     episode_rewards = []
     success = 0
@@ -91,3 +75,23 @@ for candidate_num, lookback_num, decay_num, ratio in product(candidates, lookbac
     with open("results/" + args.config_path[7:-4] + "_" + str(candidate_num) + "_" + str(lookback_num) + "_" + decay_num_safe + "_" + ratio_safe + "_result.pkl", 'wb') as f:
         pickle.dump(episode_rewards, f)
     print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {decay_num}, ratio {ratio}: mean {np.mean(episode_rewards)}, std {np.std(episode_rewards)}")
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("config_path", help="Path to config file")
+    args, _ = parser.parse_known_args()
+
+    with open(args.config_path, 'r') as f:
+        config = yaml.load(f, Loader=yaml.FullLoader)
+
+    print(config)
+
+    candidates = config['policy']['k_neighbors']
+    lookback = config['policy']['lookback']
+    decay = config['policy']['decay_rate']
+    final_neighbors_ratio = config['policy']['ratio']
+
+    for candidate_num, lookback_num, decay_num, ratio in product(candidates, lookback, decay, final_neighbors_ratio):
+        nn_agent = nn_agent.NNAgentEuclideanStandardized(config['data']['pkl'], nn_util.NN_METHOD.LWR, plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, final_neighbors_ratio=ratio, cond_force_retrain=True)
+
+        nn_eval(config, nn_agent)
