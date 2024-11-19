@@ -39,13 +39,14 @@ def nn_eval(config, nn_agent):
     else:
         env = gym.make(config['env'])
 
-    env.seed(config['seed'])
+    # env.seed(config['seed'])
     np.random.seed(config['seed'])
 
     episode_rewards = []
     success = 0
     trial = 0
     while True:
+        env.seed(trial)
         if config['env'] == "push_t":
             observation = crop_obs_for_env(env.reset()[0], config['env'])
         else:
