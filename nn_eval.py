@@ -86,13 +86,10 @@ def nn_eval(config, nn_agent):
         if trial >= 10:
             break
 
-    decay_num_safe = str(decay_num).replace('.', '[dot]')
-    ratio_safe = str(ratio).replace('.', '[dot]')
-
     os.makedirs('results', exist_ok=True)
-    with open("results/" + args.config_path[7:-4] + "_" + str(candidate_num) + "_" + str(lookback_num) + "_" + decay_num_safe + "_" + ratio_safe + "_result.pkl", 'wb') as f:
+    with open("results/" + str(config['env']) + "_" + str(nn_agent.candidates) + "_" + str(nn_agent.lookback) + "_" + str(nn_agent.decay) + "_" + str(nn_agent.final_neighbors_ratio) + "_result.pkl", 'wb') as f:
         pickle.dump(episode_rewards, f)
-    print(f"Candidates {candidate_num}, lookback {lookback_num}, decay {decay_num}, ratio {ratio}: mean {np.mean(episode_rewards)}, std {np.std(episode_rewards)}")
+    print(f"Candidates {nn_agent.candidates}, lookback {nn_agent.lookback}, decay {nn_agent.decay}, ratio {nn_agent.final_neighbors_ratio}: mean {np.mean(episode_rewards)}, std {np.std(episode_rewards)}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

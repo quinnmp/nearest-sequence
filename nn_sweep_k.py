@@ -2,7 +2,7 @@ from nn_eval import nn_eval
 import nn_agent, nn_util
 import yaml
 import argparse
-
+import numpy as np
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -15,6 +15,6 @@ if __name__ == "__main__":
     print(config)
 
     for k in range(10, 1000, 10):
-        nn_agent = nn_agent.NNAgentEuclideanStandardized(config['data']['pkl'], nn_util.NN_METHOD.GMM, plot=False, candidates=k, lookback=1, decay=0, final_neighbors_ratio=1.0, cond_force_retrain=True, rot_indices=np.array([4]))
+        agent = nn_agent.NNAgentEuclideanStandardized(config['data']['pkl'], nn_util.NN_METHOD.LWR, plot=False, candidates=k, lookback=1, decay=0, final_neighbors_ratio=1.0, cond_force_retrain=True, rot_indices=np.array([4]))
 
-        nn_eval(config, nn_agent)
+        nn_eval(config, agent)

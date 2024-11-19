@@ -14,8 +14,9 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=quinnpfeifer@icloud.com
 source ~/.bashrc
+cd /gscratch/weirdlab/quinn/nearest-sequence
 
-conda activate base
+conda activate nearest-sequence
 
 # Force software rendering
 export MUJOCO_GL=osmesa
