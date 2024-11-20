@@ -22,31 +22,37 @@ from nn_util import NN_METHOD, load_expert_data, save_expert_data, create_matric
 DEBUG = False
 
 class NNAgent:
-    def __init__(self, expert_data_path, method, plot=False, candidates=10, lookback=20, decay=-1, window=10, weights=np.array([]), final_neighbors_ratio=0.5, rot_indices=np.array([]), cond_force_retrain=False):
-        self.expert_data = load_expert_data(expert_data_path)
-        self.method = method
+    def __init__(self, env_cfg, policy_cfg):
+        self.env_cfg = env_cfg
+        self.policy_cfg = policy_cfg
+
+        # If this is already defined, a subclass has intentionally set it
+        if not hasattr(self, 'expert_data_path'):
+            self.expert_data_path = env_cfg.get('demo_pkl')
+        self.expert_data = load_expert_data(self.expert_data_path)
+        self.method = NN_METHOD.from_string(policy_cfg.get('method'))
 
         self.obs_matrix, self.act_matrix, self.traj_starts = create_matrices(self.expert_data)
 
         self.obs_history = np.array([], dtype=np.float32)
-        self.candidates = candidates
-        self.lookback = lookback
-        self.decay = decay
-        self.window = window
-        self.final_neighbors_ratio = final_neighbors_ratio
-        self.rot_indices = np.array(rot_indices, dtype=np.int32)
-        self.non_rot_indices = np.array([i for i in range(self.obs_matrix[0][0].shape[0]) if i not in rot_indices], dtype=np.int32)
+        self.candidates = policy_cfg.get('k_neighbors', 100)
+        self.lookback = policy_cfg.get('lookback', 10)
+        self.decay = policy_cfg.get('decay_rate', 1)
+        self.window = policy_cfg.get('dtw_window', 0)
+        self.final_neighbors_ratio = policy_cfg.get('ratio', 1)
+        self.rot_indices = np.array(env_cfg.get('rot_indices', []), dtype=np.int32)
+        self.non_rot_indices = np.array([i for i in range(self.obs_matrix[0][0].shape[0]) if i not in self.rot_indices], dtype=np.int32)
 
         # Precompute constants
         self.flattened_obs_matrix = np.concatenate(self.obs_matrix, dtype=np.float32)
         self.flattened_act_matrix = np.concatenate(self.act_matrix)
+
         self.i_array = np.arange(1, self.lookback + 1, dtype=np.float32)
         self.decay_factors = np.power(self.i_array, self.decay)
 
-        if len(weights) > 0:
-            self.weights = weights.astype(np.float32)
+        if len(env_cfg.get('weights', [])) > 0:
+            self.weights = np.array(env_cfg.get('weights'), dtype=np.float32)
         else:
-            # For now, we only weigh non_rot_indices for simplicity
             self.weights = np.ones(self.obs_matrix[0][0].shape[0], dtype=np.float32)
 
         self.reshaped_obs_matrix = self.flattened_obs_matrix.reshape(-1, len(self.obs_matrix[0][0]))
@@ -61,30 +67,31 @@ class NNAgent:
 
         # Add the data points to the index
         self.index.add(self.reshaped_obs_matrix.astype('float32'))
-        if plot:
+        if env_cfg.get('plot', False):
             self.plot = nn_plot.NNPlot(self.expert_data)
         else:
             self.plot = False
 
-        if method == NN_METHOD.COND:
-            model_path = "cond_models/" + os.path.basename(expert_data_path)[:-4] + "_cond_model.pth"
+        if self.method == NN_METHOD.COND:
+            model_path = "cond_models/" + os.path.basename(self.expert_data_path)[:-4] + "_cond_model.pth"
             # Check if the model already exists
-            if os.path.exists(model_path) and not cond_force_retrain:
+            if os.path.exists(model_path) and not policy_cfg.get('cond_force_retrain', False):
                 # Load the model if it exists
                 print(f"Loading model from {model_path}")
                 self.model = torch.load(model_path, weights_only=False)
             else:
                 # Train the model if it doesn't exist
                 print(f"Training model and saving to {model_path}")
-                full_dataset = KNNExpertDataset(expert_data_path, candidates=candidates, lookback=lookback, decay=decay, final_neighbors_ratio=final_neighbors_ratio, rot_indices=rot_indices)
-                train_loader = DataLoader(full_dataset, batch_size=1024, shuffle=True)
+                full_dataset = KNNExpertDataset(self.expert_data_path, env_cfg, policy_cfg)
+                train_loader = DataLoader(full_dataset, batch_size=policy_cfg.get('batch_size', 64), shuffle=True)
 
                 state_dim = full_dataset[0][0][0].shape[0]
                 action_dim = full_dataset[0][3].shape[0]
-                model = KNNConditioningModel(state_dim, action_dim, candidates, full_dataset.action_scaler, final_neighbors_ratio=final_neighbors_ratio)
-                self.model = train_model(model, train_loader, num_epochs=100, model_path=model_path)
+                model = KNNConditioningModel(state_dim, action_dim, self.candidates, full_dataset.action_scaler, final_neighbors_ratio=self.final_neighbors_ratio, hidden_dims=policy_cfg.get('hidden_dims', [512, 512]), dropout_rate=policy_cfg.get('dropout', 0.05))
+                self.model = train_model(model, train_loader, num_epochs=policy_cfg.get('epochs', 100), lr=policy_cfg.get('lr', 1e-3), decay=policy_cfg.get('weight_decay', 1e-5), model_path=model_path)
 
             self.model.eval()
+
 
     def update_obs_history(self, current_ob):
         if len(self.obs_history) == 0:
@@ -126,7 +133,7 @@ class NNAgentEuclidean(NNAgent):
 
         if self.method == NN_METHOD.NN:
             # If we're doing direct nearest neighbor, just return that action
-            nearest_neighbor = np.argmin(distances)
+            nearest_neighbor = np.argmin(all_distances)
             return self.act_matrix[traj_nums[nearest_neighbor]][obs_nums[nearest_neighbor]]
 
         # How far can we look back for each neighbor trajectory?
@@ -182,6 +189,7 @@ class NNAgentEuclidean(NNAgent):
                 self.flattened_act_matrix[final_neighbors],
                 accum_distances[final_neighbor_indices],
                 current_ob,
+                self.policy_cfg,
                 from_scratch=(len(self.obs_history) == 1)
             )
     
@@ -354,10 +362,12 @@ class NNAgentEuclidean(NNAgent):
 
 # Standard Euclidean distance, but normalize each dimension of the observation space
 class NNAgentEuclideanStandardized(NNAgentEuclidean):
-    def __init__(self, expert_data_path, method, plot=False, candidates=10, lookback=20, decay=-1, window=10, weights=np.array([]), final_neighbors_ratio=1.0, rot_indices=np.array([]), cond_force_retrain=False):
+    def __init__(self, env_cfg, policy_cfg):
+        expert_data_path = env_cfg.get('demo_pkl')
         expert_data = load_expert_data(expert_data_path)
         observations = np.concatenate([traj['observations'] for traj in expert_data])
 
+        rot_indices = np.array(env_cfg.get('rot_indices', []), dtype=np.int32) 
         # Separate non-rotational dimensions
         non_rot_indices = [i for i in range(observations.shape[1]) if i not in rot_indices]
         non_rot_observations = observations[:, non_rot_indices]
@@ -373,8 +383,9 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
 
         new_path = expert_data_path[:-4] + '_standardized.pkl'
         save_expert_data(expert_data, new_path)
+        self.expert_data_path = new_path
 
-        super().__init__(new_path, method, plot=plot, candidates=candidates, lookback=lookback, decay=decay, window=window, weights=weights, final_neighbors_ratio=final_neighbors_ratio, rot_indices=rot_indices, cond_force_retrain=cond_force_retrain)
+        super().__init__(env_cfg, policy_cfg)
 
     def get_action(self, current_ob):
         current_ob[self.non_rot_indices] = self.scaler.transform(current_ob[self.non_rot_indices].reshape(1, -1)).flatten()

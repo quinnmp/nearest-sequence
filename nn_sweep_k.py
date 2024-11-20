@@ -1,20 +1,25 @@
 from nn_eval import nn_eval
 import nn_agent, nn_util
 import yaml
-import argparse
+from argparse import ArgumentParser
 import numpy as np
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("config_path", help="Path to config file")
+    parser = ArgumentParser()
+    parser.add_argument("env_config_path", help="Path to environment config file")
+    parser.add_argument("policy_config_path", help="Path to policy config file")
     args, _ = parser.parse_known_args()
 
-    with open(args.config_path, 'r') as f:
-        config = yaml.load(f, Loader=yaml.FullLoader)
+    with open(args.env_config_path, 'r') as f:
+        env_cfg = yaml.load(f, Loader=yaml.FullLoader)
+    with open(args.policy_config_path, 'r') as f:
+        policy_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
-    print(config)
+    print(env_cfg)
+    print(policy_cfg)
 
     for k in range(10, 1000, 10):
-        agent = nn_agent.NNAgentEuclideanStandardized(config['data']['pkl'], nn_util.NN_METHOD.LWR, plot=False, candidates=k, lookback=1, decay=0, final_neighbors_ratio=1.0, cond_force_retrain=True, rot_indices=np.array([4]))
+        policy_cfg['k_neighbors'] = k
+        agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
 
-        nn_eval(config, agent)
+        nn_eval(env_cfg, agent)

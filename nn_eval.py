@@ -8,7 +8,7 @@ import metaworld
 import metaworld.envs.mujoco.env_dict as _env_dict
 import time
 import yaml
-import argparse
+from argparse import ArgumentParser
 import d4rl
 import pickle
 from itertools import product
@@ -29,28 +29,31 @@ def crop_obs_for_env(obs, env):
         return obs
 
 def nn_eval(config, nn_agent):
-    if config['metaworld']:
-        env = _env_dict.MT50_V2[config['env']]()
+    env_name = config['name']
+    is_metaworld = config.get('metaworld', False)
+
+    if is_metaworld:
+        env = _env_dict.MT50_V2[env_name]()
         env._partially_observable = False
         env._freeze_rand_vec = False
         env._set_task_called = True
-    elif config['env'] == 'push_t':
+    elif env_name == 'push_t':
         env = PushTEnv()
     else:
-        env = gym.make(config['env'])
+        env = gym.make(env_name)
 
     # env.seed(config['seed'])
-    np.random.seed(config['seed'])
+    np.random.seed(config.get('seed', 42))
 
     episode_rewards = []
     success = 0
     trial = 0
     while True:
         env.seed(trial)
-        if config['env'] == "push_t":
-            observation = crop_obs_for_env(env.reset()[0], config['env'])
+        if env_name == "push_t":
+            observation = crop_obs_for_env(env.reset()[0], env_name)
         else:
-            observation = crop_obs_for_env(env.reset(), config['env'])
+            observation = crop_obs_for_env(env.reset(), env_name)
 
         nn_agent.obs_history = np.array([])
 
@@ -59,24 +62,24 @@ def nn_eval(config, nn_agent):
 
         while True:
             action = nn_agent.get_action(observation)
-            if config['env'] == "push_t":
+            if env_name == "push_t":
                 observation, reward, done, truncated, info = env.step(action)
             else:
                 observation, reward, done, info = env.step(action)
 
-            observation = crop_obs_for_env(observation, config['env'])
+            observation = crop_obs_for_env(observation, env_name)
 
-            if config['env'] == "push_t":
+            if env_name == "push_t":
                 episode_reward = max(episode_reward, reward)
             else:
                 episode_reward += reward
             if False:
-                env.render()
+                env.render(mode='human')
             if done:
                 break
-            if config['metaworld'] and steps >= 500:
+            if is_metaworld and steps >= 500:
                 break
-            if config['env'] == "push_t" and steps > 200:
+            if env_name == "push_t" and steps > 200:
                 break
             steps += 1
 
@@ -88,26 +91,24 @@ def nn_eval(config, nn_agent):
             break
 
     os.makedirs('results', exist_ok=True)
-    with open("results/" + str(config['env']) + "_" + str(nn_agent.candidates) + "_" + str(nn_agent.lookback) + "_" + str(nn_agent.decay) + "_" + str(nn_agent.final_neighbors_ratio) + "_result.pkl", 'wb') as f:
+    with open("results/" + str(env_name) + "_" + str(nn_agent.candidates) + "_" + str(nn_agent.lookback) + "_" + str(nn_agent.decay) + "_" + str(nn_agent.final_neighbors_ratio) + "_result.pkl", 'wb') as f:
         pickle.dump(episode_rewards, f)
     print(f"Candidates {nn_agent.candidates}, lookback {nn_agent.lookback}, decay {nn_agent.decay}, ratio {nn_agent.final_neighbors_ratio}: mean {np.mean(episode_rewards)}, std {np.std(episode_rewards)}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("config_path", help="Path to config file")
+    parser = ArgumentParser()
+    parser.add_argument("env_config_path", help="Path to environment config file")
+    parser.add_argument("policy_config_path", help="Path to policy config file")
     args, _ = parser.parse_known_args()
 
-    with open(args.config_path, 'r') as f:
-        config = yaml.load(f, Loader=yaml.FullLoader)
+    with open(args.env_config_path, 'r') as f:
+        env_cfg = yaml.load(f, Loader=yaml.FullLoader)
+    with open(args.policy_config_path, 'r') as f:
+        policy_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
-    print(config)
+    print(env_cfg)
+    print(policy_cfg)
 
-    candidates = config['policy']['k_neighbors']
-    lookback = config['policy']['lookback']
-    decay = config['policy']['decay_rate']
-    final_neighbors_ratio = config['policy']['ratio']
+    nn_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
 
-    for candidate_num, lookback_num, decay_num, ratio in product(candidates, lookback, decay, final_neighbors_ratio):
-        nn_agent = nn_agent.NNAgentEuclideanStandardized(config['data']['pkl'], nn_util.NN_METHOD.LWR, plot=False, candidates=candidate_num, lookback=lookback_num, decay=decay_num, final_neighbors_ratio=ratio, cond_force_retrain=True)
-
-        nn_eval(config, nn_agent)
+    nn_eval(env_cfg, nn_agent)

@@ -86,8 +86,10 @@ class KNNConditioningModel(nn.Module):
         return self
 
 class KNNExpertDataset(Dataset):
-    def __init__(self, expert_data_path, candidates=10, lookback=20, decay=-1, weights=np.array([]), final_neighbors_ratio=0.5, rot_indices=np.array([])):
-        self.agent = nn_agent.NNAgentEuclideanStandardized(expert_data_path, nn_util.NN_METHOD.KNN_AND_DIST, plot=False, candidates=candidates, lookback=lookback, decay=decay, final_neighbors_ratio=final_neighbors_ratio)
+    def __init__(self, expert_data_path, env_cfg, policy_cfg):
+        policy_cfg_copy = policy_cfg.copy()
+        policy_cfg_copy['method'] = 'knn_and_dist'
+        self.agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg_copy)
 
         self.action_scaler = FastScaler()
         self.action_scaler.fit(np.concatenate(self.agent.act_matrix))
@@ -121,11 +123,11 @@ class KNNExpertDataset(Dataset):
         data = self.neighbor_lookup[idx]
         return data.states, data.actions, data.distances, data.target_action
 
-def train_model(model, train_loader, num_epochs=100, lr=1e-3, model_path="cond_models/cond_model.pth"):
+def train_model(model, train_loader, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth"):
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
 
     criterion = nn.MSELoss()
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.0002)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=decay)
     
     for epoch in range(num_epochs):
         model.train()

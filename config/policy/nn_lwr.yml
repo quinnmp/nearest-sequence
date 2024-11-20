@@ -1,0 +1,5 @@
+method: lwr
+k_neighbors: 200
+lookback: 1
+decay_rate: 0
+ratio: 1

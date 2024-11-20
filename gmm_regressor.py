@@ -74,7 +74,7 @@ def validate_model(model, val_loader):
     model.train()
     return total_val_loss / len(val_loader)
 
-def get_action(observations, actions, distances, query_point, checkpoint_path="data/gmm_last_iteration.pth", from_scratch=False):
+def get_action(observations, actions, distances, query_point, policy_cfg, checkpoint_path="data/gmm_last_iteration.pth", from_scratch=False):
     # Scale actions to similar range as observations
     action_scaler = FastScaler()
     action_scaler.fit(actions)
@@ -97,8 +97,9 @@ def get_action(observations, actions, distances, query_point, checkpoint_path="d
     train_dataset = WeightedGMMActorDataset(observations[train_indices], scaled_actions[train_indices], weights[train_indices])
     val_dataset = WeightedGMMActorDataset(observations[val_indices], scaled_actions[val_indices], weights[val_indices])
 
-    train_loader = DataLoader(train_dataset, batch_size=min(32, len(train_dataset)), shuffle=True, num_workers=0, persistent_workers=False)
-    val_loader = DataLoader(val_dataset, batch_size=min(32, len(val_dataset)), shuffle=False, num_workers=0, persistent_workers=False)
+    batch_size = policy_cfg.get('batch_size', min(32, len(train_dataset)))
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, persistent_workers=False)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0, persistent_workers=False)
 
     # Suppress robomimic logs from config factory
     original_stdout = sys.stdout
@@ -118,14 +119,14 @@ def get_action(observations, actions, distances, query_point, checkpoint_path="d
     model = GMMActorNetwork(
         obs_shapes=obs_shapes,
         ac_dim=ac_dim,
-        mlp_layer_dims=[512, 256],
-        num_modes=5
+        mlp_layer_dims=policy_cfg.get('hidden_dims', [256, 128]),
+        num_modes=policy_cfg.get('num_modes', 5)
     ).to(device)
 
     if not from_scratch and os.path.exists(checkpoint_path):
         model.load_state_dict(torch.load(checkpoint_path, weights_only=True))
 
-    optimizer = optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5)
+    optimizer = optim.AdamW(model.parameters(), lr=policy_cfg.get('lr', 1e-3), weight_decay=policy_cfg.get('weight_decay', 1e-5))
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         mode='min',
@@ -134,7 +135,7 @@ def get_action(observations, actions, distances, query_point, checkpoint_path="d
     )
 
     # Train the model
-    train_model(model, train_loader, val_loader, optimizer, scheduler, epochs=20, patience=10)
+    train_model(model, train_loader, val_loader, optimizer, scheduler, epochs=policy_cfg.get('epochs', 20), patience=policy_cfg.get('patience', 10))
 
     os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
     torch.save(model.state_dict(), checkpoint_path)
