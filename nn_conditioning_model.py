@@ -98,10 +98,10 @@ class KNNConditioningTransformerModel(nn.Module):
         self.training_mode = True
 
         # Token embedding layer
-        self.token_embed = nn.Linear(self.input_dim, embed_dim)
+        self.token_embed = nn.Linear(self.input_dim, embed_dim).to(device)
         
         # Positional encoding
-        self.positional_encoding = nn.Parameter(torch.zeros(math.floor(k * final_neighbors_ratio), embed_dim))
+        self.positional_encoding = nn.Parameter(torch.zeros(math.floor(k * final_neighbors_ratio), embed_dim).to(device))
 
         # Transformer encoder
         encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads, dim_feedforward=embed_dim*4, batch_first=True, dropout=dropout_rate)
@@ -112,7 +112,7 @@ class KNNConditioningTransformerModel(nn.Module):
             nn.Linear(embed_dim, embed_dim),
             nn.ReLU(),
             nn.Linear(embed_dim, action_dim)
-        )
+        ).to(device)
 
     def forward(self, states, actions, distances):
         if isinstance(states, np.ndarray):
@@ -135,7 +135,7 @@ class KNNConditioningTransformerModel(nn.Module):
         embedded_tokens = self.token_embed(tokens)  # Shape: [batch_size, seq_len, embed_dim]
 
         # Add positional encoding
-        positional_encoding = self.positional_encoding.unsqueeze(0)  # Shape: [1, seq_len, embed_dim]
+        positional_encoding = self.positional_encoding.unsqueeze(0).to(device)  # Shape: [1, seq_len, embed_dim]
         embedded_tokens += positional_encoding
 
         # Pass through transformer
@@ -201,6 +201,7 @@ class KNNExpertDataset(Dataset):
 def train_model(model, train_loader, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth"):
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
 
+    model.to(device)
     criterion = nn.MSELoss()
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=decay)
     
@@ -222,6 +223,7 @@ def train_model_tqdm(model, train_loader, num_epochs=100, lr=1e-3, decay=1e-5, m
     print(num_epochs)
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
 
+    model.to(device)
     criterion = nn.MSELoss()
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=decay)
     
