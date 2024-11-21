@@ -85,7 +85,6 @@ def nn_eval(config, nn_agent):
             steps += 1
 
         episode_rewards.append(episode_reward)
-        print(episode_reward)
 
         success += info['success'] if 'success' in info else 0
         trial += 1
@@ -96,6 +95,7 @@ def nn_eval(config, nn_agent):
     with open("results/" + str(env_name) + "_" + str(nn_agent.candidates) + "_" + str(nn_agent.lookback) + "_" + str(nn_agent.decay) + "_" + str(nn_agent.final_neighbors_ratio) + "_result.pkl", 'wb') as f:
         pickle.dump(episode_rewards, f)
     print(f"Candidates {nn_agent.candidates}, lookback {nn_agent.lookback}, decay {nn_agent.decay}, ratio {nn_agent.final_neighbors_ratio}: mean {np.mean(episode_rewards)}, std {np.std(episode_rewards)}")
+    return np.mean(episode_rewards)
 
 def nn_eval_sanity(config, nn_agent):
     diffs = []
@@ -107,8 +107,8 @@ def nn_eval_sanity(config, nn_agent):
         with torch.no_grad():
             pred_act = nn_agent.get_action(obs, normalize=False)
 
-        # print(act)
-        # print(pred_act)
+        print(act)
+        print(pred_act)
         diffs.append(np.sum(np.abs(act - pred_act)))
         # print(f"Diff {np.sum(np.abs(act - pred_act))}")
     print(np.mean(diffs))
@@ -129,4 +129,4 @@ if __name__ == "__main__":
 
     nn_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
 
-    nn_eval(env_cfg, nn_agent)
+    nn_eval_sanity(env_cfg, nn_agent)
