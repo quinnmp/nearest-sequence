@@ -95,6 +95,18 @@ def nn_eval(config, nn_agent):
         pickle.dump(episode_rewards, f)
     print(f"Candidates {nn_agent.candidates}, lookback {nn_agent.lookback}, decay {nn_agent.decay}, ratio {nn_agent.final_neighbors_ratio}: mean {np.mean(episode_rewards)}, std {np.std(episode_rewards)}")
 
+def nn_eval_sanity(config, nn_agent):
+    for idx, (obs, act) in enumerate(zip(nn_agent.flattened_obs_matrix, nn_agent.flattened_act_matrix)):
+        state_traj = np.searchsorted(nn_agent.traj_starts, idx, side='right') - 1
+        state_num = idx - nn_agent.traj_starts[state_traj]
+
+        nn_agent.obs_history = nn_agent.obs_matrix[state_traj][:state_num][::-1]
+        pred_act = nn_agent.get_action(obs, normalize=False)
+
+        # print(act)
+        # print(pred_act)
+        print(f"Diff {np.sum(np.abs(act - pred_act))}")
+
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("env_config_path", help="Path to environment config file")

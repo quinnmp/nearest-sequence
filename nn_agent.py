@@ -11,9 +11,9 @@ from nn_conditioning_model import KNNExpertDataset, KNNConditioningModel, KNNCon
 from torch.utils.data import Dataset, DataLoader, random_split
 import torch
 import time
-from numba import jit, njit, prange, float64, int64, float32, int32
+from numba import jit, njit, prange, float64, int64
 from scipy.linalg import lstsq
-from sklearn.preprocessing import StandardScaler
+from fast_scaler import FastScaler
 import math
 import faiss
 import os
@@ -34,26 +34,26 @@ class NNAgent:
 
         self.obs_matrix, self.act_matrix, self.traj_starts = create_matrices(self.expert_data)
 
-        self.obs_history = np.array([], dtype=np.float32)
+        self.obs_history = np.array([], dtype=np.float64)
         self.candidates = policy_cfg.get('k_neighbors', 100)
         self.lookback = policy_cfg.get('lookback', 10)
         self.decay = policy_cfg.get('decay_rate', 1)
         self.window = policy_cfg.get('dtw_window', 0)
         self.final_neighbors_ratio = policy_cfg.get('ratio', 1)
-        self.rot_indices = np.array(env_cfg.get('rot_indices', []), dtype=np.int32)
-        self.non_rot_indices = np.array([i for i in range(self.obs_matrix[0][0].shape[0]) if i not in self.rot_indices], dtype=np.int32)
+        self.rot_indices = np.array(env_cfg.get('rot_indices', []), dtype=np.int64)
+        self.non_rot_indices = np.array([i for i in range(self.obs_matrix[0][0].shape[0]) if i not in self.rot_indices], dtype=np.int64)
 
         # Precompute constants
-        self.flattened_obs_matrix = np.concatenate(self.obs_matrix, dtype=np.float32)
+        self.flattened_obs_matrix = np.concatenate(self.obs_matrix, dtype=np.float64)
         self.flattened_act_matrix = np.concatenate(self.act_matrix)
 
-        self.i_array = np.arange(1, self.lookback + 1, dtype=np.float32)
+        self.i_array = np.arange(1, self.lookback + 1, dtype=np.float64)
         self.decay_factors = np.power(self.i_array, self.decay)
 
         if len(env_cfg.get('weights', [])) > 0:
-            self.weights = np.array(env_cfg.get('weights'), dtype=np.float32)
+            self.weights = np.array(env_cfg.get('weights'), dtype=np.float64)
         else:
-            self.weights = np.ones(self.obs_matrix[0][0].shape[0], dtype=np.float32)
+            self.weights = np.ones(self.obs_matrix[0][0].shape[0], dtype=np.float64)
 
         self.reshaped_obs_matrix = self.flattened_obs_matrix.reshape(-1, len(self.obs_matrix[0][0]))
         self.reshaped_obs_matrix[:, self.non_rot_indices] *= self.weights[self.non_rot_indices]
@@ -66,7 +66,7 @@ class NNAgent:
         faiss.omp_set_num_threads(num_threads)  # Set to max threads
 
         # Add the data points to the index
-        self.index.add(self.reshaped_obs_matrix.astype('float32'))
+        self.index.add(self.reshaped_obs_matrix.astype('float64'))
         if env_cfg.get('plot', False):
             self.plot = nn_plot.NNPlot(self.expert_data)
         else:
@@ -87,36 +87,36 @@ class NNAgent:
 
                 state_dim = full_dataset[0][0][0].shape[0]
                 action_dim = full_dataset[0][3].shape[0]
-                model = KNNConditioningTransformerModel(
-                    state_dim=state_dim,
-                    action_dim=action_dim,
-                    k=self.candidates,
-                    action_scaler=full_dataset.action_scaler,
-                    final_neighbors_ratio=self.final_neighbors_ratio,
-                    embed_dim=policy_cfg.get('embed_dim', 128),
-                    num_heads=policy_cfg.get('num_heads', 4),
-                    num_layers=policy_cfg.get('num_layers', 2),
-                    dropout_rate=policy_cfg.get('dropout', 0.1)
-                )
-                # model = KNNConditioningModel(
+                # model = KNNConditioningTransformerModel(
                 #     state_dim=state_dim,
                 #     action_dim=action_dim,
                 #     k=self.candidates,
                 #     action_scaler=full_dataset.action_scaler,
                 #     final_neighbors_ratio=self.final_neighbors_ratio,
-                #     hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
+                #     embed_dim=policy_cfg.get('embed_dim', 128),
+                #     num_heads=policy_cfg.get('num_heads', 4),
+                #     num_layers=policy_cfg.get('num_layers', 2),
                 #     dropout_rate=policy_cfg.get('dropout', 0.1)
                 # )
-                self.model = train_model_tqdm(model, train_loader, num_epochs=policy_cfg.get('epochs', 100), lr=policy_cfg.get('lr', 1e-3), decay=policy_cfg.get('weight_decay', 1e-5), model_path=model_path)
+                model = KNNConditioningModel(
+                    state_dim=state_dim,
+                    action_dim=action_dim,
+                    k=self.candidates,
+                    action_scaler=full_dataset.action_scaler,
+                    final_neighbors_ratio=self.final_neighbors_ratio,
+                    hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
+                    dropout_rate=policy_cfg.get('dropout', 0.1)
+                )
+                self.model = train_model(model, train_loader, num_epochs=policy_cfg.get('epochs', 100), lr=policy_cfg.get('lr', 1e-3), decay=policy_cfg.get('weight_decay', 1e-5), model_path=model_path)
 
             self.model.eval()
 
 
     def update_obs_history(self, current_ob):
         if len(self.obs_history) == 0:
-            self.obs_history = np.array([current_ob], dtype=np.float32)
+            self.obs_history = np.array([current_ob], dtype=np.float64)
         else:
-            self.obs_history = np.vstack((current_ob, self.obs_history), dtype=np.float32)
+            self.obs_history = np.vstack((current_ob, self.obs_history), dtype=np.float64)
 
 class NNAgentEuclidean(NNAgent):
     def get_action(self, current_ob):
@@ -128,14 +128,14 @@ class NNAgentEuclidean(NNAgent):
         if len(self.rot_indices) > 0:
             # If we have elements in our observation space that wraparound (rotations), we can't just do direct Euclidean distance
             current_ob[self.non_rot_indices] *= self.weights[self.non_rot_indices]
-            all_distances = compute_distance_with_rot(current_ob.astype(np.float32), self.reshaped_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
-            nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates].astype(np.int32)
+            all_distances = compute_distance_with_rot(current_ob.astype(np.float64), self.reshaped_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
+            nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates].astype(np.int64)
         else:
-            query_point = np.array([current_ob * self.weights[self.non_rot_indices]], dtype='float32')
+            query_point = np.array([current_ob * self.weights[self.non_rot_indices]], dtype='float64')
             all_distances, nearest_neighbors = self.index.search(query_point, self.candidates)
             # This indexing is decieving - we aren't taking just the first neighbor
             # We only have one query point, so we take the nearest neighbors correlating t othat query point [0]
-            nearest_neighbors = np.array(nearest_neighbors[0], dtype=np.int32)
+            nearest_neighbors = np.array(nearest_neighbors[0], dtype=np.int64)
 
         if self.method == NN_METHOD.KNN_AND_DIST:
             # Remove the nearest neighbor
@@ -157,7 +157,7 @@ class NNAgentEuclidean(NNAgent):
 
         # How far can we look back for each neighbor trajectory?
         # This is upper bound by min(lookback hyperparameter, length of obs history, neighbor distance into its traj)
-        max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, len(self.obs_history)), dtype=np.int32)
+        max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, len(self.obs_history)), dtype=np.int64)
         
         accum_distances = compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, self.obs_history, self.flattened_obs_matrix, self.decay_factors, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
 
@@ -386,12 +386,12 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
         expert_data = load_expert_data(expert_data_path)
         observations = np.concatenate([traj['observations'] for traj in expert_data])
 
-        rot_indices = np.array(env_cfg.get('rot_indices', []), dtype=np.int32) 
+        rot_indices = np.array(env_cfg.get('rot_indices', []), dtype=np.int64) 
         # Separate non-rotational dimensions
         non_rot_indices = [i for i in range(observations.shape[1]) if i not in rot_indices]
         non_rot_observations = observations[:, non_rot_indices]
 
-        self.scaler = StandardScaler()
+        self.scaler = FastScaler()
         self.scaler.fit(non_rot_observations)
 
         self.old_expert_data = copy.deepcopy(expert_data)
@@ -406,6 +406,7 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
 
         super().__init__(env_cfg, policy_cfg)
 
-    def get_action(self, current_ob):
-        current_ob[self.non_rot_indices] = self.scaler.transform(current_ob[self.non_rot_indices].reshape(1, -1)).flatten()
+    def get_action(self, current_ob, normalize=True):
+        if normalize:
+            current_ob[self.non_rot_indices] = self.scaler.transform(current_ob[self.non_rot_indices].reshape(1, -1)).flatten()
         return super().get_action(current_ob)

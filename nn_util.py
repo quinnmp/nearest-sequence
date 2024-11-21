@@ -8,7 +8,7 @@ from scipy.spatial import distance
 from scipy.spatial import KDTree
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
-from numba import jit, njit, prange, float64, int64, float32, int32
+from numba import jit, njit, prange, float64, int64
 from scipy.linalg import lstsq
 from sklearn.preprocessing import StandardScaler
 import math
@@ -46,14 +46,14 @@ def create_matrices(expert_data):
     traj_starts = np.asarray(traj_starts)
     return obs_matrix, act_matrix, traj_starts
 
-@njit([float32[:](int32[:], int32[:], float32[:, :], float32[:,:], float32[:], int32[:], int32[:], float32[:])], parallel=True)
+@njit([float64[:](int64[:], int64[:], float64[:, :], float64[:,:], float64[:], int64[:], int64[:], float64[:])], parallel=True)
 def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_history, flattened_obs_matrix, decay_factors, rot_indices, non_rot_indices, rot_weights):
     m = len(nearest_neighbors)
     n = len(flattened_obs_matrix[0])
 
     total_obs = len(flattened_obs_matrix)
 
-    neighbor_distances = np.empty(m, dtype=np.float32)
+    neighbor_distances = np.empty(m, dtype=np.float64)
 
     # Matrix is reversed, we have to calculate from the back
     flattened_obs_matrix = flattened_obs_matrix[::-1]
@@ -68,7 +68,7 @@ def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_histor
 
         # Simple Euclidean distance
         # Decay factors ensure more recent observations have more impact on cummulative distance calculation
-        curr_distances = np.zeros(max_lb, dtype=np.float32)
+        curr_distances = np.zeros(max_lb, dtype=np.float64)
         for i in range(max_lb):
             dist = 0
 
@@ -89,29 +89,29 @@ def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_histor
         # decay_factors is calculated based on the lookback hyperparameter, but sometimes we're dealing with lookbacks shorter than that
         # Thus, we need to interpolate to make sure that we're still getting the decay_factors curve, just over less indices
         if max_lb == 1:
-            interpolated_decay = np.array([decay_factors[0]], dtype=np.float32)
+            interpolated_decay = np.array([decay_factors[0]], dtype=np.float64)
         else:
             interpolated_decay = np.interp(
                 np.linspace(0, len(decay_factors) - 1, max_lb),
                 np.arange(len(decay_factors)),
                 decay_factors
-            ).astype(np.float32)
+            ).astype(np.float64)
 
-        acc_distance = np.float32(0.0)
+        acc_distance = np.float64(0.0)
         for i in range(max_lb):
-            # Compute increment with explicit float32 casting for numeric stability
-            increment = np.float32(curr_distances[i]) * np.float32(interpolated_decay[i])
-            acc_distance = np.float32(acc_distance + increment)
+            # Compute increment with explicit float64 casting for numeric stability
+            increment = np.float64(curr_distances[i]) * np.float64(interpolated_decay[i])
+            acc_distance = np.float64(acc_distance + increment)
         neighbor_distances[neighbor] = acc_distance
 
 
     return neighbor_distances
 
-@njit([float32[:](float32[:], float32[:,:], int32[:], int32[:], float32[:])], parallel=True)
+@njit([float64[:](float64[:], float64[:,:], int64[:], int64[:], float64[:])], parallel=True)
 def compute_distance_with_rot(curr_ob, flattened_obs_matrix, rot_indices, non_rot_indices, rot_weights):
     m = len(flattened_obs_matrix)
 
-    neighbor_distances = np.empty(m, dtype=np.float32)
+    neighbor_distances = np.empty(m, dtype=np.float64)
 
     for neighbor in prange(m):
         nb = flattened_obs_matrix[neighbor]

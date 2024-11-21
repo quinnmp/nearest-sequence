@@ -9,8 +9,8 @@ class FastScaler:
     def fit(self, X):
         if isinstance(X, list):
             X = np.array(X)
-        self.mean_ = np.mean(X, axis=0, dtype=np.float32)
-        self.scale_ = np.std(X, axis=0, dtype=np.float32)
+        self.mean_ = np.mean(X, axis=0, dtype=np.float64)
+        self.scale_ = np.std(X, axis=0, dtype=np.float64)
         # Avoid division by zero
         self.scale_[self.scale_ == 0] = 1
         return self
