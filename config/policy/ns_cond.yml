@@ -8,7 +8,7 @@ hidden_dims:
   - 1024
   - 512
   - 256
-epochs: 250
+epochs: 100
 batch_size: 64
 lr: 0.001
 weight_decay: 0.00001

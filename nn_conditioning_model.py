@@ -17,6 +17,7 @@ import math
 import faiss
 import os
 from dataclasses import dataclass
+from tqdm import tqdm
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -85,6 +86,80 @@ class KNNConditioningModel(nn.Module):
         self.training_mode = False
         return self
 
+class KNNConditioningTransformerModel(nn.Module):
+    def __init__(self, state_dim, action_dim, k, action_scaler, final_neighbors_ratio=1, embed_dim=128, num_heads=4, num_layers=2, dropout_rate=0.1):
+        super(KNNConditioningTransformerModel, self).__init__()
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.k = k
+        self.final_neighbors_ratio = final_neighbors_ratio
+        self.input_dim = state_dim + action_dim + 1  # One token per state-action-distance triplet
+        self.action_scaler = action_scaler
+        self.training_mode = True
+
+        # Token embedding layer
+        self.token_embed = nn.Linear(self.input_dim, embed_dim)
+        
+        # Positional encoding
+        self.positional_encoding = nn.Parameter(torch.zeros(math.floor(k * final_neighbors_ratio), embed_dim))
+
+        # Transformer encoder
+        encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads, dim_feedforward=embed_dim*4, batch_first=True, dropout=dropout_rate)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+
+        # Output MLP
+        self.output_layer = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim),
+            nn.ReLU(),
+            nn.Linear(embed_dim, action_dim)
+        )
+
+    def forward(self, states, actions, distances):
+        if isinstance(states, np.ndarray):
+            states = torch.tensor(states, dtype=torch.float32, device=device).unsqueeze(0)
+            actions = self.action_scaler.transform(actions)
+            actions = torch.tensor(actions, dtype=torch.float32, device=device).unsqueeze(0)
+            distances = torch.tensor(distances, dtype=torch.float32, device=device).unsqueeze(0)
+
+        batch_size = states.size(0)
+        seq_len = math.floor(self.k * self.final_neighbors_ratio)
+
+        states = states.view(batch_size, seq_len, self.state_dim)
+        actions = actions.view(batch_size, seq_len, self.action_dim)
+        distances = distances.view(batch_size, seq_len, 1)
+
+        # Combine into tokens
+        tokens = torch.cat([states, actions, distances], dim=2)  # Shape: [batch_size, seq_len, input_dim]
+
+        # Embed tokens
+        embedded_tokens = self.token_embed(tokens)  # Shape: [batch_size, seq_len, embed_dim]
+
+        # Add positional encoding
+        positional_encoding = self.positional_encoding.unsqueeze(0)  # Shape: [1, seq_len, embed_dim]
+        embedded_tokens += positional_encoding
+
+        # Pass through transformer
+        transformer_out = self.transformer_encoder(embedded_tokens.transpose(0, 1))  # Shape: [seq_len, batch_size, embed_dim]
+        transformer_out = transformer_out.mean(dim=0)  # Aggregate: [batch_size, embed_dim]
+
+        # Predict actions
+        output = self.output_layer(transformer_out)  # Shape: [batch_size, action_dim]
+
+        if self.training_mode:
+            return output
+
+        return self.action_scaler.inverse_transform(output.cpu().detach().numpy())[0]
+
+    def train(self, mode=True):
+        super().train(mode)
+        self.training_mode = mode
+        return self
+
+    def eval(self):
+        super().eval()
+        self.training_mode = False
+        return self
+
 class KNNExpertDataset(Dataset):
     def __init__(self, expert_data_path, env_cfg, policy_cfg):
         policy_cfg_copy = policy_cfg.copy()
@@ -133,6 +208,27 @@ def train_model(model, train_loader, num_epochs=100, lr=1e-3, decay=1e-5, model_
         model.train()
         train_loss = 0.0
         for neighbor_states, neighbor_actions, neighbor_distances, actions in train_loader:
+            optimizer.zero_grad()
+            predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances)
+            loss = criterion(predicted_actions, actions)
+            loss.backward()
+            optimizer.step()
+            train_loss += loss.item()
+
+    torch.save(model, model_path)
+    return model
+
+def train_model_tqdm(model, train_loader, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth"):
+    print(num_epochs)
+    os.makedirs(os.path.dirname(model_path), exist_ok=True)
+
+    criterion = nn.MSELoss()
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=decay)
+    
+    for epoch in tqdm(range(num_epochs), desc="Training Epochs"):
+        model.train()
+        train_loss = 0.0
+        for neighbor_states, neighbor_actions, neighbor_distances, actions in tqdm(train_loader, desc=f"Epoch {epoch+1}", leave=False):
             optimizer.zero_grad()
             predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances)
             loss = criterion(predicted_actions, actions)
