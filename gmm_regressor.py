@@ -13,7 +13,6 @@ from fast_scaler import FastScaler
 import numpy as np
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-torch.set_default_dtype(torch.float64)
 
 class WeightedGMMActorDataset(Dataset):
     def __init__(self, observations, actions, weights):

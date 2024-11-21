@@ -87,26 +87,26 @@ class NNAgent:
 
                 state_dim = full_dataset[0][0][0].shape[0]
                 action_dim = full_dataset[0][3].shape[0]
-                # model = KNNConditioningTransformerModel(
-                #     state_dim=state_dim,
-                #     action_dim=action_dim,
-                #     k=self.candidates,
-                #     action_scaler=full_dataset.action_scaler,
-                #     final_neighbors_ratio=self.final_neighbors_ratio,
-                #     embed_dim=policy_cfg.get('embed_dim', 128),
-                #     num_heads=policy_cfg.get('num_heads', 4),
-                #     num_layers=policy_cfg.get('num_layers', 2),
-                #     dropout_rate=policy_cfg.get('dropout', 0.1)
-                # )
-                model = KNNConditioningModel(
+                model = KNNConditioningTransformerModel(
                     state_dim=state_dim,
                     action_dim=action_dim,
                     k=self.candidates,
                     action_scaler=full_dataset.action_scaler,
                     final_neighbors_ratio=self.final_neighbors_ratio,
-                    hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
+                    embed_dim=policy_cfg.get('embed_dim', 128),
+                    num_heads=policy_cfg.get('num_heads', 4),
+                    num_layers=policy_cfg.get('num_layers', 2),
                     dropout_rate=policy_cfg.get('dropout', 0.1)
                 )
+                # model = KNNConditioningModel(
+                #     state_dim=state_dim,
+                #     action_dim=action_dim,
+                #     k=self.candidates,
+                #     action_scaler=full_dataset.action_scaler,
+                #     final_neighbors_ratio=self.final_neighbors_ratio,
+                #     hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
+                #     dropout_rate=policy_cfg.get('dropout', 0.1)
+                # )
                 self.model = train_model(model, train_loader, num_epochs=policy_cfg.get('epochs', 100), lr=policy_cfg.get('lr', 1e-3), decay=policy_cfg.get('weight_decay', 1e-5), model_path=model_path)
 
             self.model.eval()

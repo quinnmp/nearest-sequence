@@ -13,6 +13,7 @@ import d4rl
 import pickle
 from itertools import product
 from push_t_env import PushTEnv
+import torch
 
 DEBUG = False
 
@@ -84,6 +85,7 @@ def nn_eval(config, nn_agent):
             steps += 1
 
         episode_rewards.append(episode_reward)
+        print(episode_reward)
 
         success += info['success'] if 'success' in info else 0
         trial += 1
@@ -96,16 +98,20 @@ def nn_eval(config, nn_agent):
     print(f"Candidates {nn_agent.candidates}, lookback {nn_agent.lookback}, decay {nn_agent.decay}, ratio {nn_agent.final_neighbors_ratio}: mean {np.mean(episode_rewards)}, std {np.std(episode_rewards)}")
 
 def nn_eval_sanity(config, nn_agent):
+    diffs = []
     for idx, (obs, act) in enumerate(zip(nn_agent.flattened_obs_matrix, nn_agent.flattened_act_matrix)):
         state_traj = np.searchsorted(nn_agent.traj_starts, idx, side='right') - 1
         state_num = idx - nn_agent.traj_starts[state_traj]
 
         nn_agent.obs_history = nn_agent.obs_matrix[state_traj][:state_num][::-1]
-        pred_act = nn_agent.get_action(obs, normalize=False)
+        with torch.no_grad():
+            pred_act = nn_agent.get_action(obs, normalize=False)
 
         # print(act)
         # print(pred_act)
-        print(f"Diff {np.sum(np.abs(act - pred_act))}")
+        diffs.append(np.sum(np.abs(act - pred_act)))
+        # print(f"Diff {np.sum(np.abs(act - pred_act))}")
+    print(np.mean(diffs))
 
 if __name__ == "__main__":
     parser = ArgumentParser()
