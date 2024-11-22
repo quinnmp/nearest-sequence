@@ -93,8 +93,8 @@ class NNAgent:
                     k=self.candidates,
                     action_scaler=full_dataset.action_scaler,
                     final_neighbors_ratio=self.final_neighbors_ratio,
-                    embed_dim=policy_cfg.get('embed_dim', 512),
-                    num_heads=policy_cfg.get('num_heads', 8),
+                    embed_dim=policy_cfg.get('embed_dim', 128),
+                    num_heads=policy_cfg.get('num_heads', 4),
                     num_layers=policy_cfg.get('num_layers', 2),
                     dropout_rate=policy_cfg.get('dropout', 0.1)
                 )
