@@ -34,6 +34,7 @@ class NeighborData:
     actions: torch.Tensor
     distances: torch.Tensor
     target_action: torch.Tensor
+    weights: torch.Tensor
 
 class KNNConditioningModel(nn.Module):
     def __init__(self, state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05):
@@ -62,7 +63,7 @@ class KNNConditioningModel(nn.Module):
         self.model = self.model.to(dtype=torch.float32, device=device)
         self.model.apply(init_weights)
     
-    def forward(self, states, actions, distances):
+    def forward(self, states, actions, distances, weights):
         # Will be batchless numpy arrays at inference time
         if isinstance(states, np.ndarray):
             states = torch.tensor(states, dtype=torch.float32, device=device).unsqueeze(0)
@@ -71,6 +72,7 @@ class KNNConditioningModel(nn.Module):
 
             distances = self.distance_scaler.transform(distances)
             distances = torch.tensor(distances, dtype=torch.float32, device=device).unsqueeze(0)
+            weights = torch.tensor(weights, dtype=torch.float32, device=device).unsqueeze(0)
 
         states = states.to(dtype=torch.float32)
         actions = actions.to(dtype=torch.float32)
@@ -89,7 +91,10 @@ class KNNConditioningModel(nn.Module):
 
         model_outputs = model_outputs.view(batch_size, num_neighbors, -1)
 
-        mean_actions = model_outputs.mean(dim=1)
+        if False:
+            mean_actions = (model_outputs * weights.unsqueeze(-1)).sum(dim=1)
+        else:
+            mean_actions = model_outputs.mean(dim=1)
 
         if self.training_mode:
             return mean_actions
@@ -212,7 +217,7 @@ class KNNExpertDataset(Dataset):
         
         all_distances = []
         for i in range(len(self)):
-            _, _, distances, _ = self[i]
+            _, _, distances, _, _ = self[i]
             all_distances.extend(distances.cpu().numpy())
 
         self.distance_scaler = FastScaler()
@@ -233,7 +238,7 @@ class KNNExpertDataset(Dataset):
 
             self.agent.obs_history = self.agent.obs_matrix[state_traj][:state_num][::-1]
 
-            neighbor_states, neighbor_actions, neighbor_distances = self.agent.get_action(self.agent.obs_matrix[state_traj][state_num], normalize=False)
+            neighbor_states, neighbor_actions, neighbor_distances, weights = self.agent.get_action(self.agent.obs_matrix[state_traj][state_num], normalize=False)
 
             neighbor_actions = self.action_scaler.transform(neighbor_actions)
 
@@ -241,7 +246,8 @@ class KNNExpertDataset(Dataset):
                 states=torch.tensor(neighbor_states, dtype=torch.float32, device=device),
                 actions=torch.tensor(neighbor_actions, dtype=torch.float32, device=device),
                 distances=torch.tensor(neighbor_distances, dtype=torch.float32, device=device),
-                target_action=torch.tensor(action, dtype=torch.float32, device=device)
+                target_action=torch.tensor(action, dtype=torch.float32, device=device),
+                weights=torch.tensor(weights, dtype=torch.float32, device=device)
             )
 
         data = self.neighbor_lookup[idx]
@@ -249,9 +255,9 @@ class KNNExpertDataset(Dataset):
             distances_numpy = data.distances.cpu().numpy()
             scaled_distances = self.distance_scaler.transform(distances_numpy)
             scaled_distances_tensor = torch.tensor(scaled_distances, dtype=torch.float32, device=device)
-            return data.states, data.actions, scaled_distances_tensor, data.target_action
+            return data.states, data.actions, scaled_distances_tensor, data.target_action, data.weights
         else:
-            return data.states, data.actions, data.distances, data.target_action
+            return data.states, data.actions, data.distances, data.target_action, data.weights
 
 def train_model(model, train_loader, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth"):
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
@@ -264,16 +270,16 @@ def train_model(model, train_loader, num_epochs=100, lr=1e-3, decay=1e-5, model_
         model.train()
         train_loss = 0.0
         num_batches = 0
-        for neighbor_states, neighbor_actions, neighbor_distances, actions in train_loader:
+        for neighbor_states, neighbor_actions, neighbor_distances, actions, weights in train_loader:
             optimizer.zero_grad()
-            predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances)
+            predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
             loss = criterion(predicted_actions, actions)
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
             num_batches += 1
         avg_loss = train_loss / num_batches
-        # print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {avg_loss:.4f}")
+        print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {avg_loss:.4f}")
 
     torch.save(model, model_path)
     return model

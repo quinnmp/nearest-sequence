@@ -146,7 +146,7 @@ class NNAgentEuclidean(NNAgent):
             # So the closest neighbor will be itself - unhelpful!
             nearest_index = np.argmin(all_distances)
             all_distances = np.delete(all_distances, nearest_index)
-            nearest_neighbors = np.delete(nearest_neighbors, np.where(nearest_index == nearest_index))
+            nearest_neighbors = np.delete(nearest_neighbors, np.where(nearest_neighbors == nearest_index))
             self.candidates -= 1
 
         # Find corresponding trajectories for each neighbor
@@ -185,17 +185,20 @@ class NNAgentEuclidean(NNAgent):
             neighbor_distances = np.zeros_like(neighbor_states)
 
             for i in range(len(current_ob)):
-                if (i in self.rot_indices):
-                    neighbor_distances[:][i] = neighbor_states[:][i] - current_ob[i]
+                if (i in self.non_rot_indices):
+                    neighbor_distances[:, i] = neighbor_states[:, i] - current_ob[i]
                 else:
-                    delta = neighbor_states[:][i] - current_ob[i]
+                    delta = neighbor_states[:, i] - current_ob[i]
                     delta = (delta + np.pi) % (2 * np.pi) - np.pi
-                    neighbor_distances[:][i] = delta / (2 * np.pi)
+                    neighbor_distances[:, i] = delta / (2 * np.pi)
+
+            neighbor_weights = 1 / accum_distances[final_neighbor_indices]
+            neighbor_weights = neighbor_weights / neighbor_weights.sum()
 
             if self.method == NN_METHOD.KNN_AND_DIST:
-                return neighbor_states, neighbor_actions, neighbor_distances
+                return neighbor_states, neighbor_actions, neighbor_distances, neighbor_weights
             else:
-                return self.model(neighbor_states, neighbor_actions, neighbor_distances)
+                return self.model(neighbor_states, neighbor_actions, neighbor_distances, neighbor_weights)
 
         if self.method == NN_METHOD.LWR:
             X = np.c_[np.ones(final_neighbor_num), self.flattened_obs_matrix[final_neighbors]]
