@@ -1,5 +1,4 @@
 name: "push_t"
 demo_pkl: "data/push_t_parsed.pkl"
-seed: 1000
 rot_indices:
   - 4

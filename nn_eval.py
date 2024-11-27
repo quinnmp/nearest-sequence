@@ -124,7 +124,7 @@ if __name__ == "__main__":
     print(env_cfg)
     print(policy_cfg)
 
-    for i in range(10):
-        agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
+    # for i in range(10):
+    agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
 
-        nn_eval(env_cfg, agent)
+    nn_eval(env_cfg, agent)

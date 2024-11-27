@@ -22,6 +22,12 @@ from tqdm import tqdm
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+def init_weights(m):
+    if isinstance(m, nn.Linear):
+        nn.init.xavier_uniform_(m.weight)
+        if m.bias is not None:
+            nn.init.constant_(m.bias, 0)
+
 @dataclass
 class NeighborData:
     states: torch.Tensor
@@ -30,14 +36,15 @@ class NeighborData:
     target_action: torch.Tensor
 
 class KNNConditioningModel(nn.Module):
-    def __init__(self, state_dim, action_dim, k, action_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05):
+    def __init__(self, state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05):
         super(KNNConditioningModel, self).__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.k = k
         self.final_neighbors_ratio = final_neighbors_ratio
-        self.input_dim = math.floor(k * final_neighbors_ratio) * (state_dim + action_dim + 1)  # k states + k distances
+        self.input_dim = state_dim + action_dim + state_dim
         self.action_scaler = action_scaler
+        self.distance_scaler = distance_scaler
         self.training_mode = True
 
         layers = []
@@ -46,13 +53,14 @@ class KNNConditioningModel(nn.Module):
             layers.extend([
                 nn.Linear(in_dim, hidden_dim).to(device),
                 nn.ReLU().to(device),
-                nn.Dropout(dropout_rate).to(device)
+                # nn.Dropout(dropout_rate).to(device)
             ])
             in_dim = hidden_dim
 
         layers.append(nn.Linear(hidden_dims[-1], action_dim).to(device))
         self.model = nn.Sequential(*layers)
         self.model = self.model.to(dtype=torch.float32, device=device)
+        self.model.apply(init_weights)
     
     def forward(self, states, actions, distances):
         # Will be batchless numpy arrays at inference time
@@ -60,25 +68,33 @@ class KNNConditioningModel(nn.Module):
             states = torch.tensor(states, dtype=torch.float32, device=device).unsqueeze(0)
             actions = self.action_scaler.transform(actions)
             actions = torch.tensor(actions, dtype=torch.float32, device=device).unsqueeze(0)
+
+            distances = self.distance_scaler.transform(distances)
             distances = torch.tensor(distances, dtype=torch.float32, device=device).unsqueeze(0)
 
         states = states.to(dtype=torch.float32)
         actions = actions.to(dtype=torch.float32)
         distances = distances.to(dtype=torch.float32)
 
+        num_neighbors = math.floor(self.k * self.final_neighbors_ratio)
+
         batch_size = states.size(0)
-        states = states.view(batch_size, math.floor(self.k * self.final_neighbors_ratio), self.state_dim)
-        actions = actions.view(batch_size, math.floor(self.k * self.final_neighbors_ratio), self.action_dim)
-        distances = distances.view(batch_size, math.floor(self.k * self.final_neighbors_ratio), 1)
-        # Interleave states and distances to query point for locality in input
-        interleaved = torch.cat([states, actions, distances], dim=2).view(batch_size, self.input_dim)
-        interleaved = interleaved.to(dtype=torch.float32)
-        output = self.model(interleaved)
+        states = states.view(batch_size, num_neighbors, self.state_dim)
+        actions = actions.view(batch_size, num_neighbors, self.action_dim)
+        distances = distances.view(batch_size, num_neighbors, self.state_dim)
+        inputs = torch.cat([states, actions, distances], dim=-1) # (batch_size, num_neighbors, state_dim + action_dim + 1)
+        inputs = inputs.view(batch_size * num_neighbors, -1)
+
+        model_outputs = self.model(inputs)
+
+        model_outputs = model_outputs.view(batch_size, num_neighbors, -1)
+
+        mean_actions = model_outputs.mean(dim=1)
 
         if self.training_mode:
-            return output
+            return mean_actions
 
-        return self.action_scaler.inverse_transform(output.cpu().detach().numpy())[0]
+        return self.action_scaler.inverse_transform(mean_actions.cpu().detach().numpy())[0]
 
     def train(self, mode=True):
         """Override train method to set training_mode flag"""
@@ -100,7 +116,7 @@ class KNNConditioningTransformerModel(nn.Module):
         self.action_dim = action_dim
         self.k = k
         self.final_neighbors_ratio = final_neighbors_ratio
-        self.input_dim = state_dim + action_dim + 1  # One token per state-action-distance triplet
+        self.input_dim = state_dim + action_dim + 1
         self.action_scaler = action_scaler
         self.training_mode = True
 
@@ -142,7 +158,7 @@ class KNNConditioningTransformerModel(nn.Module):
         distances = distances.to(dtype=torch.float32)
 
         batch_size = states.size(0)
-        seq_len = math.floor(self.k * self.final_neighbors_ratio)
+        seq_len = num_neighbors
 
         states = states.view(batch_size, seq_len, self.state_dim)
         actions = actions.view(batch_size, seq_len, self.action_dim)
@@ -202,7 +218,6 @@ class KNNExpertDataset(Dataset):
         self.distance_scaler = FastScaler()
         self.distance_scaler.fit(all_distances)
 
-
     def __len__(self):
         return len(self.agent.flattened_obs_matrix)
     
@@ -211,6 +226,7 @@ class KNNExpertDataset(Dataset):
             # Figure out which trajectory this index in our flattened state array belongs to
             state_traj = np.searchsorted(self.agent.traj_starts, idx, side='right') - 1
             state_num = idx - self.agent.traj_starts[state_traj]
+            actual_state = self.agent.obs_matrix[state_traj][state_num]
 
             # The corresponding action to this state
             action = self.action_scaler.transform([self.agent.act_matrix[state_traj][state_num]])[0]
@@ -218,6 +234,7 @@ class KNNExpertDataset(Dataset):
             self.agent.obs_history = self.agent.obs_matrix[state_traj][:state_num][::-1]
 
             neighbor_states, neighbor_actions, neighbor_distances = self.agent.get_action(self.agent.obs_matrix[state_traj][state_num], normalize=False)
+
             neighbor_actions = self.action_scaler.transform(neighbor_actions)
 
             self.neighbor_lookup[idx] = NeighborData(

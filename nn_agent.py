@@ -104,6 +104,7 @@ class NNAgent:
                     action_dim=action_dim,
                     k=self.candidates,
                     action_scaler=full_dataset.action_scaler,
+                    distance_scaler=full_dataset.distance_scaler,
                     final_neighbors_ratio=self.final_neighbors_ratio,
                     hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
                     dropout_rate=policy_cfg.get('dropout', 0.1)
@@ -176,16 +177,25 @@ class NNAgentEuclidean(NNAgent):
         if self.plot:
             self.plot.update(traj_nums[final_neighbor_indices], obs_nums[final_neighbor_indices], self.obs_history, self.lookback)
 
-        if self.method == NN_METHOD.KNN_AND_DIST:
+        if self.method == NN_METHOD.KNN_AND_DIST or self.method == NN_METHOD.COND:
             # This is the only method that doesn't actually return an action
             # It returns neighbor states and distances for training our conditioning model
             neighbor_states = self.flattened_obs_matrix[final_neighbors]
             neighbor_actions = self.flattened_act_matrix[final_neighbors]
-            return neighbor_states, neighbor_actions, accum_distances[final_neighbor_indices]
-        elif self.method == NN_METHOD.COND:
-            neighbor_states = self.flattened_obs_matrix[final_neighbors]
-            neighbor_actions = self.flattened_act_matrix[final_neighbors]
-            return self.model(neighbor_states, neighbor_actions, accum_distances[final_neighbor_indices])
+            neighbor_distances = np.zeros_like(neighbor_states)
+
+            for i in range(len(current_ob)):
+                if (i in self.rot_indices):
+                    neighbor_distances[:][i] = neighbor_states[:][i] - current_ob[i]
+                else:
+                    delta = neighbor_states[:][i] - current_ob[i]
+                    delta = (delta + np.pi) % (2 * np.pi) - np.pi
+                    neighbor_distances[:][i] = delta / (2 * np.pi)
+
+            if self.method == NN_METHOD.KNN_AND_DIST:
+                return neighbor_states, neighbor_actions, neighbor_distances
+            else:
+                return self.model(neighbor_states, neighbor_actions, neighbor_distances)
 
         if self.method == NN_METHOD.LWR:
             X = np.c_[np.ones(final_neighbor_num), self.flattened_obs_matrix[final_neighbors]]
