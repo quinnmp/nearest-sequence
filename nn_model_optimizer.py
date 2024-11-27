@@ -14,10 +14,14 @@ def objective(trial, env_config_path, policy_config_path):
         policy_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
     # Suggest parameter values for optimization
-    policy_cfg['k_neighbors'] = trial.suggest_int('k_neighbors', 10, 1000)
-    policy_cfg['lookback'] = trial.suggest_int('lookback', 1, 50)
-    policy_cfg['decay_rate'] = trial.suggest_float('decay_rate', -3.0, 0.0)
-    policy_cfg['ratio'] = trial.suggest_float('ratio', 0.05, 1.0)
+    policy_cfg['epochs'] = trial.suggest_int('epochs', 10, 5000)
+    policy_cfg['batch_size'] = 2 ** trial.suggest_int('batch_size_factor', 0, 8)
+    # policy_cfg['num_heads'] = trial.suggest_int('num_heads', 1, 8)
+    # policy_cfg['embed_dim'] = 2 ** trial.suggest_int('dim_size', 4, 7) * policy_cfg['num_heads']
+    policy_cfg['dropout'] = trial.suggest_float('dropout', 0.05, 0.5)
+    policy_cfg['hidden_dims'] = [
+    2 ** trial.suggest_int(f'layer_size_{i}', 6, 10) for i in range(trial.suggest_int('num_layers', 1, 5))
+    ]
 
     # Initialize the NNAgent with the updated config
     nn_agent_instance = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)

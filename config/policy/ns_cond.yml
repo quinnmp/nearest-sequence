@@ -1,14 +1,14 @@
 method: cond
-k_neighbors: 100
-lookback: 1
-decay_rate: 0
-ratio: 1
+k_neighbors: 727
+lookback: 19
+decay_rate: -2.3585814854057254
+ratio: 0.07581313789016951
+# Best parameters:  {'k_neighbors': 727, 'lookback': 19, 'decay_rate': -2.3585814854057254, 'ratio': 0.07581313789016951}
 
+
+epochs: 50
+batch_size: 64
 hidden_dims:
-  - 256
-  - 256
-epochs: 1000
-batch_size: 16
-lr: 0.001
-weight_decay: 0.00001
+   - 512
+   - 512
 cond_force_retrain: True

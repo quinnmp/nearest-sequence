@@ -22,21 +22,6 @@ from tqdm import tqdm
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def set_seed(seed):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)  # Ensures reproducibility for hashing operations
-
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    torch.use_deterministic_algorithms(True)
-
-
-set_seed(42)
-
 @dataclass
 class NeighborData:
     states: torch.Tensor
@@ -108,7 +93,8 @@ class KNNConditioningModel(nn.Module):
         return self
 
 class KNNConditioningTransformerModel(nn.Module):
-    def __init__(self, state_dim, action_dim, k, action_scaler, final_neighbors_ratio=1, embed_dim=128, num_heads=4, num_layers=2, dropout_rate=0.1):
+    def __init__(self, state_dim, action_dim, k, action_scaler, final_neighbors_ratio=1, embed_dim=64, num_heads=2, num_layers=2, dropout_rate=0.1):
+        set_seed(42)
         super(KNNConditioningTransformerModel, self).__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -119,21 +105,30 @@ class KNNConditioningTransformerModel(nn.Module):
         self.training_mode = True
 
         # Token embedding layer
-        self.token_embed = nn.Linear(self.input_dim, embed_dim).to(dtype=torch.float32, device=device)
-        
-        # Positional encoding
-        self.positional_encoding = nn.Parameter(torch.zeros(math.floor(k * final_neighbors_ratio), embed_dim, dtype=torch.float32, device=device))
+        self.token_embed = nn.Linear(self.input_dim, embed_dim)
+        self.token_embed_norm = nn.LayerNorm(embed_dim)
+
+        # Learnable positional encoding
+        self.embed_dim = embed_dim
+        max_seq_len = math.floor(k * final_neighbors_ratio)
+        self.positional_encoding = nn.Embedding(max_seq_len, embed_dim)
 
         # Transformer encoder
-        encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads, dim_feedforward=embed_dim*4, batch_first=True, dropout=dropout_rate)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim,
+            nhead=num_heads,
+            dim_feedforward=embed_dim * 4,
+            dropout=dropout_rate,
+            # norm_first=True,  # Pre-LayerNorm
+            batch_first=True  # Ensure batch is first dimension
+        )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
-        # Output MLP
-        self.output_layer = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim),
-            nn.ReLU(),
-            nn.Linear(embed_dim, action_dim)
-        ).to(dtype=torch.float32, device=device)
+        # Weighted aggregation layer
+        self.aggregation_weights = nn.Linear(embed_dim, 1)
+
+        # Output layer for predicting actions
+        self.output_layer = nn.Linear(embed_dim, action_dim)
 
     def forward(self, states, actions, distances):
         if isinstance(states, np.ndarray):
@@ -156,19 +151,22 @@ class KNNConditioningTransformerModel(nn.Module):
         # Combine into tokens
         tokens = torch.cat([states, actions, distances], dim=2)  # Shape: [batch_size, seq_len, input_dim]
 
-        # Embed tokens
-        embedded_tokens = self.token_embed(tokens)  # Shape: [batch_size, seq_len, embed_dim]
+        # Embed tokens and apply normalization
+        embedded_tokens = self.token_embed_norm(self.token_embed(tokens))  # Shape: [batch_size, seq_len, embed_dim]
 
         # Add positional encoding
-        positional_encoding = self.positional_encoding.unsqueeze(0).to(device)  # Shape: [1, seq_len, embed_dim]
-        embedded_tokens += positional_encoding
+        positional_indices = torch.arange(seq_len, device=device).unsqueeze(0).repeat(batch_size, 1)  # Shape: [batch_size, seq_len]
+        embedded_tokens += self.positional_encoding(positional_indices)  # Add learnable positional encoding
 
         # Pass through transformer
-        transformer_out = self.transformer_encoder(embedded_tokens.transpose(0, 1))  # Shape: [seq_len, batch_size, embed_dim]
-        transformer_out = transformer_out.mean(dim=0)  # Aggregate: [batch_size, embed_dim]
+        transformer_out = self.transformer_encoder(embedded_tokens)  # Shape: [seq_len, batch_size, embed_dim]
+
+        # Weighted Aggregation
+        weights = torch.softmax(self.aggregation_weights(transformer_out), dim=1)  # Shape: [batch_size, seq_len, 1]
+        aggregated_output = (transformer_out * weights).sum(dim=1)  # Shape: [batch_size, embed_dim]
 
         # Predict actions
-        output = self.output_layer(transformer_out)  # Shape: [batch_size, action_dim]
+        output = self.output_layer(aggregated_output)  # Shape: [batch_size, action_dim]
 
         if self.training_mode:
             return output
@@ -195,6 +193,15 @@ class KNNExpertDataset(Dataset):
         self.action_scaler.fit(np.concatenate(self.agent.act_matrix))
 
         self.neighbor_lookup: List[NeighborData | None] = [None] * len(self.agent.flattened_obs_matrix)
+        
+        all_distances = []
+        for i in range(len(self)):
+            _, _, distances, _ = self[i]
+            all_distances.extend(distances.cpu().numpy())
+
+        self.distance_scaler = FastScaler()
+        self.distance_scaler.fit(all_distances)
+
 
     def __len__(self):
         return len(self.agent.flattened_obs_matrix)
@@ -221,7 +228,13 @@ class KNNExpertDataset(Dataset):
             )
 
         data = self.neighbor_lookup[idx]
-        return data.states, data.actions, data.distances, data.target_action
+        if hasattr(self, "distance_scaler"):
+            distances_numpy = data.distances.cpu().numpy()
+            scaled_distances = self.distance_scaler.transform(distances_numpy)
+            scaled_distances_tensor = torch.tensor(scaled_distances, dtype=torch.float32, device=device)
+            return data.states, data.actions, scaled_distances_tensor, data.target_action
+        else:
+            return data.states, data.actions, data.distances, data.target_action
 
 def train_model(model, train_loader, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth"):
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
@@ -243,7 +256,7 @@ def train_model(model, train_loader, num_epochs=100, lr=1e-3, decay=1e-5, model_
             train_loss += loss.item()
             num_batches += 1
         avg_loss = train_loss / num_batches
-        print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {avg_loss:.4f}")
+        # print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {avg_loss:.4f}")
 
     torch.save(model, model_path)
     return model
@@ -263,7 +276,6 @@ def train_model_tqdm(model, train_loader, num_epochs=100, lr=1e-3, decay=1e-5, m
             optimizer.zero_grad()
             predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances)
             loss = criterion(predicted_actions, actions)
-            print(loss.item())
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
@@ -311,7 +323,7 @@ if __name__ == "__main__":
     num_epochs = 1
     learning_rate = 1e-3
 
-    train_loader = DataLoader(full_dataset, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(full_dataset, batch_size=batch_size, shuffle=True, num_workers=-1, worker_init_fn=lambda worker_id: np.random.seed(42 + worker_id))
 
     # Initialize model
     state_dim = full_dataset[0][0][0].shape[0]

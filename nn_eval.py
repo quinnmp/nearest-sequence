@@ -43,9 +43,6 @@ def nn_eval(config, nn_agent):
     else:
         env = gym.make(env_name)
 
-    # env.seed(config['seed'])
-    np.random.seed(config.get('seed', 42))
-
     episode_rewards = []
     success = 0
     trial = 0
@@ -127,6 +124,7 @@ if __name__ == "__main__":
     print(env_cfg)
     print(policy_cfg)
 
-    nn_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
+    for i in range(10):
+        agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
 
-    nn_eval_sanity(env_cfg, nn_agent)
+        nn_eval(env_cfg, agent)

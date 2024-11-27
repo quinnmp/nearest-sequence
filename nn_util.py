@@ -15,7 +15,21 @@ import math
 import faiss
 import os
 import gmm_regressor
+import torch
+import random
 DEBUG = False
+
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True, warn_only=True)
 
 def load_expert_data(path):
     with open(path, 'rb') as input_file:

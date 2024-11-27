@@ -2,14 +2,14 @@
 
 #SBATCH --job-name=knn
 #SBATCH --account=weirdlab
-#SBATCH --partition=gpu-l40s
+#SBATCH --partition=gpu-l40
 
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=10
-#SBATCH --gpus-per-task=2
+#SBATCH --cpus-per-task=40
+#SBATCH --gpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --time=24:00:00
+#SBATCH --time=72:00:00
 #SBATCH -o log/%j.out
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=quinnpfeifer@icloud.com
@@ -27,5 +27,5 @@ export CPATH=$CONDA_PREFIX/include:$CPATH
 export LIBRARY_PATH=$CONDA_PREFIX/lib:$LIBRARY_PATH
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 
-stdbuf -o0 -e0 python -u nn_eval.py config/env/hopper.yml config/policy/ns_cond.yml 
+stdbuf -o0 -e0 python -u nn_model_random.py config/env/hopper_1.yml config/policy/ns_cond.yml 
 

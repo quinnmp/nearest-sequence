@@ -18,11 +18,12 @@ import math
 import faiss
 import os
 import gmm_regressor
-from nn_util import NN_METHOD, load_expert_data, save_expert_data, create_matrices, compute_accum_distance_with_rot, compute_distance_with_rot
+from nn_util import NN_METHOD, load_expert_data, save_expert_data, create_matrices, compute_accum_distance_with_rot, compute_distance_with_rot, set_seed
 DEBUG = False
 
 class NNAgent:
     def __init__(self, env_cfg, policy_cfg):
+        set_seed(42)
         self.env_cfg = env_cfg
         self.policy_cfg = policy_cfg
 
@@ -77,37 +78,37 @@ class NNAgent:
             # Check if the model already exists
             if os.path.exists(model_path) and not policy_cfg.get('cond_force_retrain', False):
                 # Load the model if it exists
-                print(f"Loading model from {model_path}")
                 self.model = torch.load(model_path, weights_only=False)
             else:
                 # Train the model if it doesn't exist
-                print(f"Training model and saving to {model_path}")
                 full_dataset = KNNExpertDataset(self.expert_data_path, env_cfg, policy_cfg)
-                train_loader = DataLoader(full_dataset, batch_size=policy_cfg.get('batch_size', 64), shuffle=True)
+                def worker_init_fn(worker_id):
+                    np.random.seed(42 + worker_id)
+                train_loader = DataLoader(full_dataset, batch_size=policy_cfg.get('batch_size', 64), shuffle=True, num_workers=0)
 
                 state_dim = full_dataset[0][0][0].shape[0]
                 action_dim = full_dataset[0][3].shape[0]
-                model = KNNConditioningTransformerModel(
-                    state_dim=state_dim,
-                    action_dim=action_dim,
-                    k=self.candidates,
-                    action_scaler=full_dataset.action_scaler,
-                    final_neighbors_ratio=self.final_neighbors_ratio,
-                    embed_dim=policy_cfg.get('embed_dim', 128),
-                    num_heads=policy_cfg.get('num_heads', 4),
-                    num_layers=policy_cfg.get('num_layers', 2),
-                    dropout_rate=policy_cfg.get('dropout', 0.1)
-                )
-                # model = KNNConditioningModel(
+                # model = KNNConditioningTransformerModel(
                 #     state_dim=state_dim,
                 #     action_dim=action_dim,
                 #     k=self.candidates,
                 #     action_scaler=full_dataset.action_scaler,
                 #     final_neighbors_ratio=self.final_neighbors_ratio,
-                #     hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
+                #     embed_dim=policy_cfg.get('embed_dim', 64),
+                #     num_heads=policy_cfg.get('num_heads', 2),
+                #     num_layers=policy_cfg.get('num_layers', 2),
                 #     dropout_rate=policy_cfg.get('dropout', 0.1)
                 # )
-                self.model = train_model(model, train_loader, num_epochs=policy_cfg.get('epochs', 100), lr=policy_cfg.get('lr', 1e-3), decay=policy_cfg.get('weight_decay', 1e-5), model_path=model_path)
+                model = KNNConditioningModel(
+                    state_dim=state_dim,
+                    action_dim=action_dim,
+                    k=self.candidates,
+                    action_scaler=full_dataset.action_scaler,
+                    final_neighbors_ratio=self.final_neighbors_ratio,
+                    hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
+                    dropout_rate=policy_cfg.get('dropout', 0.1)
+                )
+                self.model = train_model(model, train_loader, num_epochs=policy_cfg.get('epochs', 1000), lr=policy_cfg.get('lr', 1e-3), decay=policy_cfg.get('weight_decay', 1e-5), model_path=model_path)
 
             self.model.eval()
 
@@ -125,7 +126,8 @@ class NNAgentEuclidean(NNAgent):
         if self.method == NN_METHOD.KNN_AND_DIST:
             self.candidates += 1
 
-        if len(self.rot_indices) > 0:
+        # if len(self.rot_indices) > 0:
+        if True:
             # If we have elements in our observation space that wraparound (rotations), we can't just do direct Euclidean distance
             current_ob[self.non_rot_indices] *= self.weights[self.non_rot_indices]
             all_distances = compute_distance_with_rot(current_ob.astype(np.float64), self.reshaped_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
@@ -143,7 +145,7 @@ class NNAgentEuclidean(NNAgent):
             # So the closest neighbor will be itself - unhelpful!
             nearest_index = np.argmin(all_distances)
             all_distances = np.delete(all_distances, nearest_index)
-            nearest_neighbors = np.delete(nearest_neighbors, nearest_index)
+            nearest_neighbors = np.delete(nearest_neighbors, np.where(nearest_index == nearest_index))
             self.candidates -= 1
 
         # Find corresponding trajectories for each neighbor

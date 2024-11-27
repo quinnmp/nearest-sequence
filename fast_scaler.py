@@ -11,6 +11,10 @@ class FastScaler:
             X = np.array(X)
         self.mean_ = np.mean(X, axis=0, dtype=np.float64)
         self.scale_ = np.std(X, axis=0, dtype=np.float64)
+
+        if np.ndim(self.scale_) == 0:
+            self.scale_ = np.array([self.scale_])
+
         # Avoid division by zero
         self.scale_[self.scale_ == 0] = 1
         return self
