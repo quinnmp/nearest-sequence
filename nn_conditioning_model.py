@@ -279,7 +279,7 @@ def train_model(model, train_loader, num_epochs=100, lr=1e-3, decay=1e-5, model_
             train_loss += loss.item()
             num_batches += 1
         avg_loss = train_loss / num_batches
-        print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {avg_loss:.4f}")
+        # print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {avg_loss:.4f}")
 
     torch.save(model, model_path)
     return model
