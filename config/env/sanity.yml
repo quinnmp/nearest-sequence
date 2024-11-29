@@ -1,0 +1,2 @@
+name: "hopper-expert-v2" # Dummy env
+demo_pkl: "data/sanity_forward_data.pkl"

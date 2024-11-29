@@ -14,7 +14,7 @@ def objective(trial, env_config_path, policy_config_path):
         policy_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
     # Suggest parameter values for optimization
-    policy_cfg['k_neighbors'] = trial.suggest_int('k_neighbors', 10, 1000)
+    policy_cfg['k_neighbors'] = trial.suggest_int('k_neighbors', 10, 999)
     policy_cfg['lookback'] = trial.suggest_int('lookback', 1, 50)
     policy_cfg['decay_rate'] = trial.suggest_float('decay_rate', -3.0, 0.0)
     policy_cfg['ratio'] = trial.suggest_float('ratio', 0.05, 1.0)
