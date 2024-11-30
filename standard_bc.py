@@ -11,6 +11,7 @@ import yaml
 import gym
 gym.logger.set_level(40)
 from fast_scaler import FastScaler
+from push_t_env import PushTEnv
 
 class BehaviorCloningModel(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dims=[256, 256], dropout=0.2):
