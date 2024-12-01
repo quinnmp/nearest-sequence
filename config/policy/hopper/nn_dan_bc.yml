@@ -1,0 +1,13 @@
+method: cond
+k_neighbors: 298
+lookback: 1
+decay_rate: 0
+ratio: 1
+
+epochs: 200
+batch_size: 64
+hidden_dims:
+   - 128
+   - 128
+   - 128
+cond_force_retrain: True

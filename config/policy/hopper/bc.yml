@@ -1,0 +1,6 @@
+epochs: 716
+batch_size: 32
+hidden_dims:
+   - 512
+   - 512
+   - 512

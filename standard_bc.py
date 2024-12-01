@@ -173,7 +173,7 @@ def evaluate_model(trained_model, dataset, env_cfg, num_trials: int = 100):
 
 def objective(trial: optuna.trial.Trial, env_cfg: dict, base_policy_cfg: dict):
     # Hyperparameter suggestions
-    epochs = trial.suggest_int('epochs', 1, 2000)
+    epochs = trial.suggest_int('epochs', 1, 200)
     batch_size = trial.suggest_categorical('batch_size', [2**i for i in range(4, 9)])  # 2 to 256
     layer_size = trial.suggest_categorical('layer_size', [2**i for i in range(2, 11)])  # 2 to 1024
     num_layers = trial.suggest_int('num_layers', 2, 3)
@@ -233,7 +233,7 @@ def objective(trial: optuna.trial.Trial, env_cfg: dict, base_policy_cfg: dict):
         return mean_reward
     
     except Exception as e:
-        logging.error(f"Error in trial {trial.number}: {e}")
+        print(f"Error in trial {trial.number}: {e}")
         return float('-inf')  # Penalize failed trials
 
 def run_hyperparameter_optimization(
@@ -265,12 +265,12 @@ def run_hyperparameter_optimization(
     )
     
     # Log best trial
-    logging.info("Best trial:")
+    print("Best trial:")
     trial = study.best_trial
-    logging.info(f"  Value (Mean Reward): {trial.value}")
-    logging.info("  Params: ")
+    print(f"  Value (Mean Reward): {trial.value}")
+    print("  Params: ")
     for key, value in trial.params.items():
-        logging.info(f"    {key}: {value}")
+        print(f"    {key}: {value}")
     
     return study
 
@@ -281,6 +281,44 @@ if __name__ == "__main__":
     parser.add_argument("policy_cfg_path", help="Path to policy configuration file")
     args = parser.parse_args()
 
+    # env_cfg, policy_cfg = load_configurations(args.env_cfg_path, args.policy_cfg_path)
+    #
+    # # Load expert data
+    # expert_data = load_expert_data(env_cfg['demo_pkl'])
+    # obs_matrix, act_matrix, *_ = create_matrices(expert_data)
+    #
+    # # Create model with hyperparameters from config
+    # model = BehaviorCloningModel(
+    #     state_dim=len(obs_matrix[0][0]), 
+    #     action_dim=len(act_matrix[0][0]),
+    #     hidden_dims=policy_cfg.get('hidden_dims', [64])
+    # )
+    #
+    # # Prepare dataset and dataloader
+    # dataset = ExpertTrajectoryDataset(obs_matrix, act_matrix)
+    # train_loader = DataLoader(
+    #     dataset, 
+    #     batch_size=policy_cfg.get('batch_size', 64), 
+    #     shuffle=True,
+    #     pin_memory=torch.cuda.is_available()
+    # )
+    #
+    # # Train model
+    # trained_model = train_behavior_cloning(
+    #     model, 
+    #     train_loader, 
+    #     num_epochs=policy_cfg.get('epochs', 100)
+    # )
+    #
+    # # Evaluate model
+    # episode_rewards = evaluate_model(
+    #     trained_model, 
+    #     dataset, 
+    #     env_cfg
+    # )
+    #
+    # print(f"Mean: {np.mean(episode_rewards)}, std: {np.std(episode_rewards)}")
+
     # Run optimization
     sampler = optuna.samplers.TPESampler(n_startup_trials=10)
     study = run_hyperparameter_optimization(
@@ -289,7 +327,7 @@ if __name__ == "__main__":
         sampler=sampler,
         n_trials=100,  # Number of trials to run
     )
-    
+
     # Print best parameters
     print("Best parameters:")
     print(study.best_params)

@@ -114,7 +114,7 @@ class NNAgent:
             self.model.eval()
 
     def update_obs_history(self, current_ob):
-        self.obs_history = np.vstack((current_ob, self.obs_history)) if len(self.obs_history) > 0 else np.array([current_ob], dtype=np.float64)
+        self.obs_history = np.vstack((current_ob, self.obs_history), dtype=np.float64) if len(self.obs_history) > 0 else np.array([current_ob], dtype=np.float64)
 
     def reset_obs_history(self):
         self.obs_history = np.array([], dtype=np.float64)
