@@ -30,11 +30,9 @@ def objective(trial, env_config_path, policy_config_path):
 
 # Create and run an Optuna study to optimize the objective function
 def optimize(env_config_path, policy_config_path):
-    # Create a study object, specifying the direction as maximizing the objective
-    study = optuna.create_study(direction='maximize')
-    
-    # Optimize the objective function over a number of trials
-    study.optimize(lambda trial: objective(trial, env_config_path, policy_config_path), n_trials=100)  # You can adjust the number of trials
+    sampler = optuna.samplers.TPESampler(n_startup_trials=50)
+    study = optuna.create_study(sampler=sampler, direction='maximize')
+    study.optimize(lambda trial: objective(trial, env_config_path, policy_config_path), n_trials=500)
     
     # Print the best parameters found
     print("Best parameters: ", study.best_params)

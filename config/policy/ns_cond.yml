@@ -3,9 +3,8 @@ k_neighbors: 727
 lookback: 19
 decay_rate: -2.3585814854057254
 ratio: 0.07581313789016951
-# Best parameters:  {'k_neighbors': 727, 'lookback': 19, 'decay_rate': -2.3585814854057254, 'ratio': 0.07581313789016951}
 
-epochs: 20
+epochs: 200
 batch_size: 64
 hidden_dims:
    - 128

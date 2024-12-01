@@ -20,7 +20,7 @@ def objective(trial, env_config_path, policy_config_path):
     # policy_cfg['embed_dim'] = 2 ** trial.suggest_int('dim_size', 4, 7) * policy_cfg['num_heads']
     policy_cfg['dropout'] = trial.suggest_float('dropout', 0.05, 0.5)
     policy_cfg['hidden_dims'] = [
-    2 ** trial.suggest_int(f'layer_size_{i}', 6, 10) for i in range(trial.suggest_int('num_layers', 1, 5))
+    2 ** trial.suggest_int(f'layer_size_{i}', 6, 10) for i in range(trial.suggest_int('num_layers', 1, 3))
     ]
 
     # Initialize the NNAgent with the updated config

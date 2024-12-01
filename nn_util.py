@@ -19,6 +19,9 @@ import torch
 import random
 DEBUG = False
 
+TWO_PI = 2 * np.pi
+INV_TWO_PI = 1 / TWO_PI
+
 def set_seed(seed):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
@@ -80,25 +83,6 @@ def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_histor
         start = total_obs - nb - 1
         obs_matrix_slice = flattened_obs_matrix[start:start + max_lb]
 
-        # Simple Euclidean distance
-        # Decay factors ensure more recent observations have more impact on cummulative distance calculation
-        curr_distances = np.zeros(max_lb, dtype=np.float64)
-        for i in range(max_lb):
-            dist = 0
-
-            # Element-wise distance calculation
-            for j in non_rot_indices:
-                dist += (obs_history_slice[i, j] - obs_matrix_slice[i, j]) ** 2
-
-            # Handle rotational dimensions with wraparound logic
-            for k, j in enumerate(rot_indices):
-                delta = np.abs(obs_history_slice[i, j] - obs_matrix_slice[i, j])
-                delta = min(delta, 2 * np.pi - delta) / 2 * np.pi
-                dist += delta ** 2 * rot_weights[k]
-
-            # Multiply by decay factor
-            curr_distances[i] = dist ** 0.5
-
         # This line is dense, but it's just doing this:
         # decay_factors is calculated based on the lookback hyperparameter, but sometimes we're dealing with lookbacks shorter than that
         # Thus, we need to interpolate to make sure that we're still getting the decay_factors curve, just over less indices
@@ -111,13 +95,27 @@ def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_histor
                 decay_factors
             ).astype(np.float64)
 
+        # Simple Euclidean distance
+        # Decay factors ensure more recent observations have more impact on cummulative distance calculation
         acc_distance = np.float64(0.0)
         for i in range(max_lb):
-            # Compute increment with explicit float64 casting for numeric stability
-            increment = np.float64(curr_distances[i]) * np.float64(interpolated_decay[i])
-            acc_distance = np.float64(acc_distance + increment)
-        neighbor_distances[neighbor] = acc_distance
+            dist = 0.0
 
+            # Element-wise distance calculation
+            for j in non_rot_indices:
+                dist += (obs_history_slice[i, j] - obs_matrix_slice[i, j]) ** 2
+
+            # Handle rotational dimensions with wraparound logic
+            for k, j in enumerate(rot_indices):
+                delta = np.abs(obs_history_slice[i, j] - obs_matrix_slice[i, j])
+                delta = min(delta, 2 * np.pi - delta) / 2 * np.pi
+                dist += delta ** 2 * rot_weights[k]
+
+            # Multiply by decay factor
+            dist_sqrt = np.sqrt(dist)
+            acc_distance += dist_sqrt * interpolated_decay[i]
+
+        neighbor_distances[neighbor] = acc_distance
 
     return neighbor_distances
 
@@ -130,7 +128,7 @@ def compute_distance_with_rot(curr_ob, flattened_obs_matrix, rot_indices, non_ro
     for neighbor in prange(m):
         nb = flattened_obs_matrix[neighbor]
 
-        dist = 0
+        dist = 0.0
         # Element-wise distance calculation
         for j in non_rot_indices:
             dist += (curr_ob[j] - nb[j]) ** 2
@@ -141,7 +139,7 @@ def compute_distance_with_rot(curr_ob, flattened_obs_matrix, rot_indices, non_ro
             delta = min(delta, 2 * np.pi - delta) / 2 * np.pi
             dist += delta ** 2 * rot_weights[k]
 
-        neighbor_distances[neighbor] = dist ** 0.5
+        neighbor_distances[neighbor] = np.sqrt(dist)
 
     return neighbor_distances
 

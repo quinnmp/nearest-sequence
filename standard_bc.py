@@ -4,7 +4,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, random_split
 import numpy as np
 import os
-from nn_util import load_expert_data, create_matrices
+from nn_util import load_expert_data, create_matrices, set_seed
 from nn_eval import crop_obs_for_env
 import argparse
 import yaml
@@ -12,9 +12,11 @@ import gym
 gym.logger.set_level(40)
 from fast_scaler import FastScaler
 from push_t_env import PushTEnv
+import optuna
 
 class BehaviorCloningModel(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dims=[256, 256], dropout=0.2):
+        set_seed(42)
         super(BehaviorCloningModel, self).__init__()
         
         layers = []
@@ -114,45 +116,22 @@ class ExpertTrajectoryDataset(Dataset):
     def __getitem__(self, idx):
         return self.states[idx], self.actions[idx]
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("env_env_cfg_path", help="Path to environment env_cfg file")
-    parser.add_argument("policy_env_cfg_path", help="Path to policy env_cfg file")
-    args, _ = parser.parse_known_args()
+def load_configurations(env_cfg_path: str, policy_cfg_path: str):
+    with open(env_cfg_path, 'r') as f:
+        env_cfg = yaml.safe_load(f)
+    
+    with open(policy_cfg_path, 'r') as f:
+        policy_cfg = yaml.safe_load(f)
+    
+    return env_cfg, policy_cfg
 
-    with open(args.env_env_cfg_path, 'r') as f:
-        env_cfg = yaml.load(f, Loader=yaml.FullLoader)
-    with open(args.policy_env_cfg_path, 'r') as f:
-        policy_cfg = yaml.load(f, Loader=yaml.FullLoader)
-
-    print(env_cfg)
-    print(policy_cfg)
-
-    expert_data = load_expert_data(env_cfg['demo_pkl'])
-
-    obs_matrix, act_matrix, _ = create_matrices(expert_data)
-
-    model = BehaviorCloningModel(
-        state_dim=len(obs_matrix[0][0]), 
-        action_dim=len(act_matrix[0][0])
-    )
-
-    dataset = ExpertTrajectoryDataset(obs_matrix, act_matrix)
-
-    train_loader = DataLoader(
-        dataset, 
-        batch_size=policy_cfg.get('batch_size', 64), 
-        shuffle=True,
-        pin_memory=torch.cuda.is_available()
-    )
-
-    trained_model = train_behavior_cloning(model, train_loader)
-
+def evaluate_model(trained_model, dataset, env_cfg, num_trials: int = 100):
     env_name = env_cfg['name']
     is_metaworld = env_cfg.get('metaworld', False)
-
+    
+    # Environment setup 
     if is_metaworld:
-        env = _env_dict.MT50_V2[env_name]()
+        env = env_dict.MT50_V2[env_name]()
         env._partially_observable = False
         env._freeze_rand_vec = False
         env._set_task_called = True
@@ -160,48 +139,158 @@ if __name__ == "__main__":
         env = PushTEnv()
     else:
         env = gym.make(env_name)
-
+    
     episode_rewards = []
-    success = 0
-    trial = 0
-    while True:
+    for trial in range(num_trials):
         env.seed(trial)
-        if env_name == "push_t":
-            observation = crop_obs_for_env(env.reset()[0], env_name)
-        else:
-            observation = crop_obs_for_env(env.reset(), env_name)
-
+        observation = crop_obs_for_env(env.reset(), env_name)
         episode_reward = 0.0
         steps = 0
-
+        
         while True:
             action = trained_model(observation, dataset.state_scaler, dataset.action_scaler)
+            
             if env_name == "push_t":
                 observation, reward, done, truncated, info = env.step(action)
             else:
                 observation, reward, done, info = env.step(action)
-
+            
             observation = crop_obs_for_env(observation, env_name)
-
+            
             if env_name == "push_t":
                 episode_reward = max(episode_reward, reward)
             else:
                 episode_reward += reward
-            if False:
-                env.render(mode='human')
-            if done:
+            
+            if done or (is_metaworld and steps >= 500) or (env_name == "push_t" and steps > 200):
                 break
-            if is_metaworld and steps >= 500:
-                break
-            if env_name == "push_t" and steps > 200:
-                break
+            
             steps += 1
-
+        
         episode_rewards.append(episode_reward)
+    
+    return episode_rewards
 
-        success += info['success'] if 'success' in info else 0
-        trial += 1
-        if trial >= 10:
-            break
+def objective(trial: optuna.trial.Trial, env_cfg: dict, base_policy_cfg: dict):
+    # Hyperparameter suggestions
+    epochs = trial.suggest_int('epochs', 1, 2000)
+    batch_size = trial.suggest_categorical('batch_size', [2**i for i in range(4, 9)])  # 2 to 256
+    layer_size = trial.suggest_categorical('layer_size', [2**i for i in range(2, 11)])  # 2 to 1024
+    num_layers = trial.suggest_int('num_layers', 2, 3)
+    
+    # Update policy configuration
+    policy_cfg = base_policy_cfg.copy()
+    policy_cfg['epochs'] = epochs
+    policy_cfg['batch_size'] = batch_size
+    policy_cfg['hidden_dims'] = [layer_size] * num_layers
+    
+    try:
+        # Load expert data
+        expert_data = load_expert_data(env_cfg['demo_pkl'])
+        obs_matrix, act_matrix, *_ = create_matrices(expert_data)
+        
+        # Create model with current hyperparameters
+        model = BehaviorCloningModel(
+            state_dim=len(obs_matrix[0][0]), 
+            action_dim=len(act_matrix[0][0]),
+            hidden_dims=policy_cfg['hidden_dims']
+        )
+        
+        # Prepare dataset and dataloader
+        dataset = ExpertTrajectoryDataset(obs_matrix, act_matrix)
+        train_loader = DataLoader(
+            dataset, 
+            batch_size=policy_cfg.get('batch_size', 64), 
+            shuffle=True,
+            pin_memory=torch.cuda.is_available()
+        )
+        
+        # Train model
+        trained_model = train_behavior_cloning(
+            model, 
+            train_loader, 
+            num_epochs=policy_cfg['epochs']
+        )
+        
+        # Evaluate model
+        episode_rewards = evaluate_model(
+            trained_model, 
+            dataset, 
+            env_cfg
+        )
+        
+        # Return mean reward (higher is better)
+        mean_reward = np.mean(episode_rewards)
+        
+        # Log trial details
+        print(f"Trial {trial.number}: "
+                     f"Epochs={epochs}, "
+                     f"Batch Size={batch_size}, "
+                     f"Layer Size={layer_size}, "
+                     f"Num Layers={num_layers}, "
+                     f"Mean Reward={mean_reward}")
+        
+        return mean_reward
+    
+    except Exception as e:
+        logging.error(f"Error in trial {trial.number}: {e}")
+        return float('-inf')  # Penalize failed trials
 
-    print(f"mean {np.mean(episode_rewards)}, std {np.std(episode_rewards)}")
+def run_hyperparameter_optimization(
+    env_cfg_path: str, 
+    policy_cfg_path: str, 
+    sampler = None,
+    n_trials: int = 100, 
+    timeout: int = 3600,
+    storage: str = None
+):
+    # Load configurations
+    env_cfg, base_policy_cfg = load_configurations(env_cfg_path, policy_cfg_path)
+    
+    # Create study with optimization direction
+    study = optuna.create_study(
+        sampler=sampler,
+        direction='maximize',  # Maximize mean reward
+    )
+    
+    # Define objective with partial application
+    def _objective(trial):
+        return objective(trial, env_cfg, base_policy_cfg)
+    
+    # Optimize
+    study.optimize(
+        _objective, 
+        n_trials=n_trials,
+        timeout=timeout
+    )
+    
+    # Log best trial
+    logging.info("Best trial:")
+    trial = study.best_trial
+    logging.info(f"  Value (Mean Reward): {trial.value}")
+    logging.info("  Params: ")
+    for key, value in trial.params.items():
+        logging.info(f"    {key}: {value}")
+    
+    return study
+
+# Usage example
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Hyperparameter Optimization for Behavior Cloning")
+    parser.add_argument("env_cfg_path", help="Path to environment configuration file")
+    parser.add_argument("policy_cfg_path", help="Path to policy configuration file")
+    args = parser.parse_args()
+
+    # Run optimization
+    sampler = optuna.samplers.TPESampler(n_startup_trials=10)
+    study = run_hyperparameter_optimization(
+        env_cfg_path=args.env_cfg_path,
+        policy_cfg_path=args.policy_cfg_path,
+        sampler=sampler,
+        n_trials=100,  # Number of trials to run
+    )
+    
+    # Print best parameters
+    print("Best parameters:")
+    print(study.best_params)
+    print(f"Best value: {study.best_value}")

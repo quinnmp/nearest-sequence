@@ -53,7 +53,7 @@ def nn_eval(config, nn_agent):
         else:
             observation = crop_obs_for_env(env.reset(), env_name)
 
-        nn_agent.obs_history = np.array([])
+        nn_agent.reset_obs_history()
 
         episode_reward = 0.0
         steps = 0
@@ -85,13 +85,16 @@ def nn_eval(config, nn_agent):
 
         success += info['success'] if 'success' in info else 0
         trial += 1
-        if trial >= 10:
+        if trial >= 100:
             break
 
     os.makedirs('results', exist_ok=True)
     with open("results/" + str(env_name) + "_" + str(nn_agent.candidates) + "_" + str(nn_agent.lookback) + "_" + str(nn_agent.decay) + "_" + str(nn_agent.final_neighbors_ratio) + "_result.pkl", 'wb') as f:
         pickle.dump(episode_rewards, f)
-    print(f"Candidates {nn_agent.candidates}, lookback {nn_agent.lookback}, decay {nn_agent.decay}, ratio {nn_agent.final_neighbors_ratio}: mean {np.mean(episode_rewards)}, std {np.std(episode_rewards)}")
+    print(
+        f"Candidates {nn_agent.candidates}, lookback {nn_agent.lookback}, decay {nn_agent.decay}, ratio {nn_agent.final_neighbors_ratio}: "
+        f"mean {round(np.mean(episode_rewards), 2)}, std {round(np.std(episode_rewards), 2)}"
+    )
     return np.mean(episode_rewards)
 
 def nn_eval_sanity(config, nn_agent):

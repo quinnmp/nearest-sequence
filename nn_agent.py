@@ -35,7 +35,6 @@ class NNAgent:
 
         self.obs_matrix, self.act_matrix, self.traj_starts = create_matrices(self.expert_data)
 
-        self.obs_history = np.array([], dtype=np.float64)
         self.candidates = policy_cfg.get('k_neighbors', 100)
         self.lookback = policy_cfg.get('lookback', 10)
         self.decay = policy_cfg.get('decay_rate', 1)
@@ -47,6 +46,7 @@ class NNAgent:
         # Precompute constants
         self.flattened_obs_matrix = np.concatenate(self.obs_matrix, dtype=np.float64)
         self.flattened_act_matrix = np.concatenate(self.act_matrix)
+        self.obs_history = np.array([], dtype=np.float64)
 
         self.i_array = np.arange(1, self.lookback + 1, dtype=np.float64)
         self.decay_factors = np.power(self.i_array, self.decay)
@@ -113,12 +113,11 @@ class NNAgent:
 
             self.model.eval()
 
-
     def update_obs_history(self, current_ob):
-        if len(self.obs_history) == 0:
-            self.obs_history = np.array([current_ob], dtype=np.float64)
-        else:
-            self.obs_history = np.vstack((current_ob, self.obs_history), dtype=np.float64)
+        self.obs_history = np.vstack((current_ob, self.obs_history)) if len(self.obs_history) > 0 else np.array([current_ob], dtype=np.float64)
+
+    def reset_obs_history(self):
+        self.obs_history = np.array([], dtype=np.float64)
 
 class NNAgentEuclidean(NNAgent):
     def get_action(self, current_ob):
@@ -132,7 +131,7 @@ class NNAgentEuclidean(NNAgent):
             # If we have elements in our observation space that wraparound (rotations), we can't just do direct Euclidean distance
             current_ob[self.non_rot_indices] *= self.weights[self.non_rot_indices]
             all_distances = compute_distance_with_rot(current_ob.astype(np.float64), self.reshaped_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
-            nearest_neighbors = np.argpartition(all_distances.flatten(), kth=self.candidates)[:self.candidates].astype(np.int64)
+            nearest_neighbors = np.argpartition(all_distances, kth=self.candidates, axis=None)[:self.candidates].astype(np.int64)
         else:
             query_point = np.array([current_ob * self.weights[self.non_rot_indices]], dtype='float64')
             all_distances, nearest_neighbors = self.index.search(query_point, self.candidates)
@@ -201,12 +200,15 @@ class NNAgentEuclidean(NNAgent):
                 return self.model(neighbor_states, neighbor_actions, neighbor_distances, neighbor_weights)
 
         if self.method == NN_METHOD.LWR:
-            X = np.c_[np.ones(final_neighbor_num), self.flattened_obs_matrix[final_neighbors]]
+            X = np.empty((len(final_neighbors), self.flattened_obs_matrix.shape[1] + 1))
+            X[:, 0] = 1  # First column of ones
+            X[:, 1:] = self.flattened_obs_matrix[final_neighbors]
+
             Y = self.flattened_act_matrix[final_neighbors]
             X_weights = X.T * accum_distances[final_neighbor_indices]
 
             try:
-                theta = np.linalg.pinv(X_weights @ X) @ X_weights @ Y
+                theta, _, _, _ = np.linalg.lstsq(X_weights @ X, X_weights @ Y, rcond=None)
             except np.linalg.LinAlgError:
                 try:
                     print("FAILED TO CONVERGE, ADDING NOISE")
