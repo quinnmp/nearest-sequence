@@ -33,15 +33,7 @@ class BehaviorCloningModel(nn.Module):
         layers.append(nn.Linear(input_dim, action_dim))
         
         self.model = nn.Sequential(*layers)
-        
-        self.apply(self._init_weights)
     
-    def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            nn.init.xavier_uniform_(module.weight)
-            if module.bias is not None:
-                nn.init.constant_(module.bias, 0)
-
     def forward(self, states, state_scaler=None, action_scaler=None):
         if isinstance(states, np.ndarray):
             if state_scaler is not None:
@@ -66,7 +58,7 @@ def train_behavior_cloning(model, train_loader, num_epochs=100, lr=1e-3, weight_
     model.to(device)
 
     criterion = nn.MSELoss()
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=decay, eps=1e-8, amsgrad=False)
     
     for epoch in range(num_epochs):
         model.train()
@@ -197,11 +189,14 @@ def objective(trial: optuna.trial.Trial, env_cfg: dict, base_policy_cfg: dict):
         )
         
         # Prepare dataset and dataloader
+        generator.manual_seed(42)
         dataset = ExpertTrajectoryDataset(obs_matrix, act_matrix)
         train_loader = DataLoader(
             dataset, 
             batch_size=policy_cfg.get('batch_size', 64), 
-            shuffle=True
+            shuffle=True,
+            num_workers=0,
+            generator=generator
         )
         
         # Train model
@@ -295,11 +290,15 @@ if __name__ == "__main__":
         )
 
         # Prepare dataset and dataloader
+        generator = torch.Generator()
+        generator.manual_seed(42)
         dataset = ExpertTrajectoryDataset(obs_matrix, act_matrix)
         train_loader = DataLoader(
             dataset, 
             batch_size=policy_cfg.get('batch_size', 64), 
-            shuffle=True
+            shuffle=True,
+            num_workers=0,
+            generator=generator
         )
 
         # Train model

@@ -7,7 +7,7 @@ import copy
 from scipy.spatial import distance
 from scipy.spatial import KDTree
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from nn_conditioning_model import KNNExpertDataset, KNNConditioningModel, KNNConditioningTransformerModel, KNNConditioningModelWithMagnitude, KNNConditioningModelAllWithMagnitude, KNNConditioningModelAllWithVector, train_model, train_model_tqdm
+from nn_conditioning_model import KNNExpertDataset, KNNConditioningModel, KNNConditioningTransformerModel, train_model, train_model_tqdm
 from torch.utils.data import Dataset, DataLoader, random_split
 import torch
 import time
@@ -84,7 +84,9 @@ class NNAgent:
                 full_dataset = KNNExpertDataset(self.expert_data_path, env_cfg, policy_cfg, euclidean=False)
                 def worker_init_fn(worker_id):
                     np.random.seed(42 + worker_id)
-                train_loader = DataLoader(full_dataset, batch_size=policy_cfg.get('batch_size', 64), shuffle=True, num_workers=0)
+                generator = torch.Generator()
+                generator.manual_seed(42)
+                train_loader = DataLoader(full_dataset, batch_size=policy_cfg.get('batch_size', 64), shuffle=True, num_workers=0, generator=generator)
 
                 state_dim = full_dataset[0][0][0].shape[0]
                 action_dim = full_dataset[0][3].shape[0]

@@ -28,12 +28,6 @@ else:
 
 torch.set_default_dtype(torch.float32)
 
-def init_weights(m):
-    if isinstance(m, nn.Linear):
-        nn.init.xavier_uniform_(m.weight)
-        if m.bias is not None:
-            nn.init.constant_(m.bias, 0)
-
 @dataclass
 class NeighborData:
     states: torch.Tensor
@@ -43,13 +37,21 @@ class NeighborData:
     weights: torch.Tensor
 
 class KNNConditioningModel(nn.Module):
-    def __init__(self, state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05):
+    def __init__(self, state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False):
         super(KNNConditioningModel, self).__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.k = k
         self.final_neighbors_ratio = final_neighbors_ratio
-        self.input_dim = state_dim + action_dim + state_dim
+
+        self.euclidean = euclidean
+        self.combined_dim = combined_dim
+        
+        self.distance_size = state_dim if not euclidean else 1
+        self.input_dim = state_dim + action_dim + self.distance_size
+        if combined_dim:
+            self.input_dim = self.input_dim * math.floor(k * final_neighbors_ratio)
+
         self.action_scaler = action_scaler
         self.distance_scaler = distance_scaler
         self.training_mode = True
@@ -66,7 +68,6 @@ class KNNConditioningModel(nn.Module):
 
         layers.append(nn.Linear(hidden_dims[-1], action_dim).to(device))
         self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
-        self.model.apply(init_weights)
     
     def forward(self, states, actions, distances, weights):
         # Will be batchless numpy arrays at inference time
@@ -75,6 +76,8 @@ class KNNConditioningModel(nn.Module):
             actions = self.action_scaler.transform(actions)
             actions = torch.tensor(actions, dtype=torch.float32, device=device).unsqueeze(0)
 
+            if self.euclidean:
+                distances = np.sqrt(np.sum(distances**2, axis=-1, keepdims=True))
             distances = self.distance_scaler.transform(distances)
             distances = torch.tensor(distances, dtype=torch.float32, device=device).unsqueeze(0)
             weights = torch.tensor(weights, dtype=torch.float32, device=device).unsqueeze(0)
@@ -88,244 +91,29 @@ class KNNConditioningModel(nn.Module):
         batch_size = states.size(0)
         states = states.view(batch_size, num_neighbors, self.state_dim)
         actions = actions.view(batch_size, num_neighbors, self.action_dim)
-        distances = distances.view(batch_size, num_neighbors, self.state_dim)
-        inputs = torch.cat([states, actions, distances], dim=-1) # (batch_size, num_neighbors, state_dim + action_dim + 1)
-        inputs = inputs.view(batch_size * num_neighbors, -1)
+        distances = distances.view(batch_size, num_neighbors, self.distance_size)
+        
+        if not self.combined_dim:
+            inputs = torch.cat([states, actions, distances], dim=-1)
+            inputs = inputs.view(batch_size * num_neighbors, -1)
 
-        model_outputs = self.model(inputs)
+            model_outputs = self.model(inputs)
 
-        model_outputs = model_outputs.view(batch_size, num_neighbors, -1)
+            model_outputs = model_outputs.view(batch_size, num_neighbors, -1)
+            if False:
+                output = (model_outputs * weights.unsqueeze(-1)).sum(dim=1)
+            else:
+                output = model_outputs.mean(dim=1)
 
-        if False:
-            mean_actions = (model_outputs * weights.unsqueeze(-1)).sum(dim=1)
         else:
-            mean_actions = model_outputs.mean(dim=1)
-
-        if self.training_mode:
-            return mean_actions
-
-        return self.action_scaler.inverse_transform(mean_actions.cpu().detach().numpy())[0]
-
-    def train(self, mode=True):
-        """Override train method to set training_mode flag"""
-        super().train(mode)
-        self.training_mode = mode
-        return self
-    
-    def eval(self):
-        """Override eval method to set training_mode flag"""
-        super().eval()
-        self.training_mode = False
-        return self
-
-class KNNConditioningModelAllWithVector(nn.Module):
-    def __init__(self, state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05):
-        super(KNNConditioningModelAllWithVector, self).__init__()
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-        self.k = k
-        self.final_neighbors_ratio = final_neighbors_ratio
-        self.input_dim = math.floor(k * final_neighbors_ratio) * (state_dim + action_dim + state_dim)  # k states + k distances
-
-        self.action_scaler = action_scaler
-        self.distance_scaler = distance_scaler
-        self.training_mode = True
-
-        layers = []
-        in_dim = self.input_dim
-        for hidden_dim in hidden_dims:
-            layers.extend([
-                nn.Linear(in_dim, hidden_dim).to(device),
-                nn.ReLU().to(device),
-                # nn.Dropout(dropout_rate).to(device)
-            ])
-            in_dim = hidden_dim
-
-        layers.append(nn.Linear(hidden_dims[-1], action_dim).to(device))
-        self.model = nn.Sequential(*layers)
-        self.model = self.model.to(dtype=torch.float32, device=device)
-        self.model.apply(init_weights)
-    
-    def forward(self, states, actions, distances, weights):
-        # Will be batchless numpy arrays at inference time
-        if isinstance(states, np.ndarray):
-            states = torch.tensor(states, dtype=torch.float32, device=device).unsqueeze(0)
-            actions = self.action_scaler.transform(actions)
-            actions = torch.tensor(actions, dtype=torch.float32, device=device).unsqueeze(0)
-
-            distances = np.sqrt(np.sum(distances**2, axis=-1, keepdims=True))
-            distances = self.distance_scaler.transform(distances)
-            distances = torch.tensor(distances, dtype=torch.float32, device=device).unsqueeze(0)
-            weights = torch.tensor(weights, dtype=torch.float32, device=device).unsqueeze(0)
-
-        states = states.to(dtype=torch.float32)
-        actions = actions.to(dtype=torch.float32)
-        distances = distances.to(dtype=torch.float32)
-
-        num_neighbors = math.floor(self.k * self.final_neighbors_ratio)
-
-        batch_size = states.size(0)
-        states = states.view(batch_size, math.floor(self.k * self.final_neighbors_ratio), self.state_dim)
-        actions = actions.view(batch_size, math.floor(self.k * self.final_neighbors_ratio), self.action_dim)
-        distances = distances.view(batch_size, math.floor(self.k * self.final_neighbors_ratio), self.state_dim)
-        interleaved = torch.cat([states, actions, distances], dim=2).view(batch_size, self.input_dim)
-        interleaved = interleaved.to(dtype=torch.float32)
-        output = self.model(interleaved)
+            interleaved = torch.cat([states, actions, distances], dim=2).view(batch_size, self.input_dim)
+            interleaved = interleaved.to(dtype=torch.float32)
+            output = self.model(interleaved)
 
         if self.training_mode:
             return output
 
         return self.action_scaler.inverse_transform(output.cpu().detach().numpy())[0]
-
-    def train(self, mode=True):
-        """Override train method to set training_mode flag"""
-        super().train(mode)
-        self.training_mode = mode
-        return self
-    
-    def eval(self):
-        """Override eval method to set training_mode flag"""
-        super().eval()
-        self.training_mode = False
-        return self
-
-class KNNConditioningModelAllWithMagnitude(nn.Module):
-    def __init__(self, state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05):
-        super(KNNConditioningModelAllWithMagnitude, self).__init__()
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-        self.k = k
-        self.final_neighbors_ratio = final_neighbors_ratio
-        self.input_dim = math.floor(k * final_neighbors_ratio) * (state_dim + action_dim + 1)  # k states + k distances
-
-        self.action_scaler = action_scaler
-        self.distance_scaler = distance_scaler
-        self.training_mode = True
-
-        layers = []
-        in_dim = self.input_dim
-        for hidden_dim in hidden_dims:
-            layers.extend([
-                nn.Linear(in_dim, hidden_dim).to(device),
-                nn.ReLU().to(device),
-                # nn.Dropout(dropout_rate).to(device)
-            ])
-            in_dim = hidden_dim
-
-        layers.append(nn.Linear(hidden_dims[-1], action_dim).to(device))
-        self.model = nn.Sequential(*layers)
-        self.model = self.model.to(dtype=torch.float32, device=device)
-        self.model.apply(init_weights)
-    
-    def forward(self, states, actions, distances, weights):
-        # Will be batchless numpy arrays at inference time
-        if isinstance(states, np.ndarray):
-            states = torch.tensor(states, dtype=torch.float32, device=device).unsqueeze(0)
-            actions = self.action_scaler.transform(actions)
-            actions = torch.tensor(actions, dtype=torch.float32, device=device).unsqueeze(0)
-
-            distances = np.sqrt(np.sum(distances**2, axis=-1, keepdims=True))
-            distances = self.distance_scaler.transform(distances)
-            distances = torch.tensor(distances, dtype=torch.float32, device=device).unsqueeze(0)
-            weights = torch.tensor(weights, dtype=torch.float32, device=device).unsqueeze(0)
-
-        states = states.to(dtype=torch.float32)
-        actions = actions.to(dtype=torch.float32)
-        distances = distances.to(dtype=torch.float32)
-
-        num_neighbors = math.floor(self.k * self.final_neighbors_ratio)
-
-        batch_size = states.size(0)
-        states = states.view(batch_size, math.floor(self.k * self.final_neighbors_ratio), self.state_dim)
-        actions = actions.view(batch_size, math.floor(self.k * self.final_neighbors_ratio), self.action_dim)
-        distances = distances.view(batch_size, math.floor(self.k * self.final_neighbors_ratio), 1)
-        interleaved = torch.cat([states, actions, distances], dim=2).view(batch_size, self.input_dim)
-        interleaved = interleaved.to(dtype=torch.float32)
-        output = self.model(interleaved)
-
-        if self.training_mode:
-            return output
-
-        return self.action_scaler.inverse_transform(output.cpu().detach().numpy())[0]
-
-    def train(self, mode=True):
-        """Override train method to set training_mode flag"""
-        super().train(mode)
-        self.training_mode = mode
-        return self
-    
-    def eval(self):
-        """Override eval method to set training_mode flag"""
-        super().eval()
-        self.training_mode = False
-        return self
-
-class KNNConditioningModelWithMagnitude(nn.Module):
-    def __init__(self, state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05):
-        super(KNNConditioningModelWithMagnitude, self).__init__()
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-        self.k = k
-        self.final_neighbors_ratio = final_neighbors_ratio
-        self.input_dim = state_dim + action_dim + 1
-        self.action_scaler = action_scaler
-        self.distance_scaler = distance_scaler
-        self.training_mode = True
-
-        layers = []
-        in_dim = self.input_dim
-        for hidden_dim in hidden_dims:
-            layers.extend([
-                nn.Linear(in_dim, hidden_dim).to(device),
-                nn.ReLU().to(device),
-                # nn.Dropout(dropout_rate).to(device)
-            ])
-            in_dim = hidden_dim
-
-        layers.append(nn.Linear(hidden_dims[-1], action_dim).to(device))
-        self.model = nn.Sequential(*layers)
-        self.model = self.model.to(dtype=torch.float32, device=device)
-        self.model.apply(init_weights)
-    
-    def forward(self, states, actions, distances, weights):
-        # Will be batchless numpy arrays at inference time
-        if isinstance(states, np.ndarray):
-            states = torch.tensor(states, dtype=torch.float32, device=device).unsqueeze(0)
-            actions = self.action_scaler.transform(actions)
-            actions = torch.tensor(actions, dtype=torch.float32, device=device).unsqueeze(0)
-
-            distances = np.sqrt(np.sum(distances**2, axis=-1, keepdims=True))
-            distances = self.distance_scaler.transform(distances)
-            distances = torch.tensor(distances, dtype=torch.float32, device=device).unsqueeze(0)
-            weights = torch.tensor(weights, dtype=torch.float32, device=device).unsqueeze(0)
-
-        states = states.to(dtype=torch.float32)
-        actions = actions.to(dtype=torch.float32)
-        distances = distances.to(dtype=torch.float32)
-
-        num_neighbors = math.floor(self.k * self.final_neighbors_ratio)
-
-        batch_size = states.size(0)
-        states = states.view(batch_size, num_neighbors, self.state_dim)
-        actions = actions.view(batch_size, num_neighbors, self.action_dim)
-        distances = distances.view(batch_size, num_neighbors, 1)
-
-        inputs = torch.cat([states, actions, distances], dim=-1) # (batch_size, num_neighbors, state_dim + action_dim + 1)
-        inputs = inputs.view(batch_size * num_neighbors, -1)
-
-        model_outputs = self.model(inputs)
-
-        model_outputs = model_outputs.view(batch_size, num_neighbors, -1)
-
-        if False:
-            mean_actions = (model_outputs * weights.unsqueeze(-1)).sum(dim=1)
-        else:
-            mean_actions = model_outputs.mean(dim=1)
-
-        if self.training_mode:
-            return mean_actions
-
-        return self.action_scaler.inverse_transform(mean_actions.cpu().detach().numpy())[0]
 
     def train(self, mode=True):
         """Override train method to set training_mode flag"""
@@ -495,14 +283,14 @@ def train_model(model, train_loader, num_epochs=100, lr=1e-3, decay=1e-5, model_
 
     model.to(device)
     criterion = nn.MSELoss()
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=decay)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=decay, eps=1e-8, amsgrad=False)
     
     for epoch in range(num_epochs):
         model.train()
         train_loss = 0.0
         num_batches = 0
         for neighbor_states, neighbor_actions, neighbor_distances, actions, weights in train_loader:
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
             loss = criterion(predicted_actions, actions)
             loss.backward()

@@ -85,7 +85,7 @@ def nn_eval(config, nn_agent):
 
         success += info['success'] if 'success' in info else 0
         trial += 1
-        if trial >= 1:
+        if trial >= 100:
             break
 
     os.makedirs('results', exist_ok=True)
