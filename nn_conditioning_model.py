@@ -52,15 +52,14 @@ class KNNConditioningModel(nn.Module):
         in_dim = self.input_dim
         for hidden_dim in hidden_dims:
             layers.extend([
-                nn.Linear(in_dim, hidden_dim).to(device),
-                nn.ReLU().to(device),
+                nn.Linear(in_dim, hidden_dim),
+                nn.ReLU(),
                 # nn.Dropout(dropout_rate).to(device)
             ])
             in_dim = hidden_dim
 
         layers.append(nn.Linear(hidden_dims[-1], action_dim).to(device))
-        self.model = nn.Sequential(*layers)
-        self.model = self.model.to(dtype=torch.float32, device=device)
+        self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
         self.model.apply(init_weights)
     
     def forward(self, states, actions, distances, weights):

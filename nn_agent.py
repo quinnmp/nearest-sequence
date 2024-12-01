@@ -84,7 +84,7 @@ class NNAgent:
                 full_dataset = KNNExpertDataset(self.expert_data_path, env_cfg, policy_cfg, euclidean=False)
                 def worker_init_fn(worker_id):
                     np.random.seed(42 + worker_id)
-                train_loader = DataLoader(full_dataset, batch_size=policy_cfg.get('batch_size', 64), shuffle=True, num_workers=0, pin_memory=torch.cuda.is_available())
+                train_loader = DataLoader(full_dataset, batch_size=policy_cfg.get('batch_size', 64), shuffle=True, num_workers=0)
 
                 state_dim = full_dataset[0][0][0].shape[0]
                 action_dim = full_dataset[0][3].shape[0]

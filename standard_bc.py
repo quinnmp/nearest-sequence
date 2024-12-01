@@ -201,8 +201,7 @@ def objective(trial: optuna.trial.Trial, env_cfg: dict, base_policy_cfg: dict):
         train_loader = DataLoader(
             dataset, 
             batch_size=policy_cfg.get('batch_size', 64), 
-            shuffle=True,
-            pin_memory=torch.cuda.is_available()
+            shuffle=True
         )
         
         # Train model
@@ -281,54 +280,54 @@ if __name__ == "__main__":
     parser.add_argument("policy_cfg_path", help="Path to policy configuration file")
     args = parser.parse_args()
 
-    # env_cfg, policy_cfg = load_configurations(args.env_cfg_path, args.policy_cfg_path)
-    #
-    # # Load expert data
-    # expert_data = load_expert_data(env_cfg['demo_pkl'])
-    # obs_matrix, act_matrix, *_ = create_matrices(expert_data)
-    #
-    # # Create model with hyperparameters from config
-    # model = BehaviorCloningModel(
-    #     state_dim=len(obs_matrix[0][0]), 
-    #     action_dim=len(act_matrix[0][0]),
-    #     hidden_dims=policy_cfg.get('hidden_dims', [64])
-    # )
-    #
-    # # Prepare dataset and dataloader
-    # dataset = ExpertTrajectoryDataset(obs_matrix, act_matrix)
-    # train_loader = DataLoader(
-    #     dataset, 
-    #     batch_size=policy_cfg.get('batch_size', 64), 
-    #     shuffle=True,
-    #     pin_memory=torch.cuda.is_available()
-    # )
-    #
-    # # Train model
-    # trained_model = train_behavior_cloning(
-    #     model, 
-    #     train_loader, 
-    #     num_epochs=policy_cfg.get('epochs', 100)
-    # )
-    #
-    # # Evaluate model
-    # episode_rewards = evaluate_model(
-    #     trained_model, 
-    #     dataset, 
-    #     env_cfg
-    # )
-    #
-    # print(f"Mean: {np.mean(episode_rewards)}, std: {np.std(episode_rewards)}")
+    if True:
+        env_cfg, policy_cfg = load_configurations(args.env_cfg_path, args.policy_cfg_path)
 
-    # Run optimization
-    sampler = optuna.samplers.TPESampler(n_startup_trials=10)
-    study = run_hyperparameter_optimization(
-        env_cfg_path=args.env_cfg_path,
-        policy_cfg_path=args.policy_cfg_path,
-        sampler=sampler,
-        n_trials=100,  # Number of trials to run
-    )
+        # Load expert data
+        expert_data = load_expert_data(env_cfg['demo_pkl'])
+        obs_matrix, act_matrix, *_ = create_matrices(expert_data)
 
-    # Print best parameters
-    print("Best parameters:")
-    print(study.best_params)
-    print(f"Best value: {study.best_value}")
+        # Create model with hyperparameters from config
+        model = BehaviorCloningModel(
+            state_dim=len(obs_matrix[0][0]), 
+            action_dim=len(act_matrix[0][0]),
+            hidden_dims=policy_cfg.get('hidden_dims', [64])
+        )
+
+        # Prepare dataset and dataloader
+        dataset = ExpertTrajectoryDataset(obs_matrix, act_matrix)
+        train_loader = DataLoader(
+            dataset, 
+            batch_size=policy_cfg.get('batch_size', 64), 
+            shuffle=True
+        )
+
+        # Train model
+        trained_model = train_behavior_cloning(
+            model, 
+            train_loader, 
+            num_epochs=policy_cfg.get('epochs', 100)
+        )
+
+        # Evaluate model
+        episode_rewards = evaluate_model(
+            trained_model, 
+            dataset, 
+            env_cfg
+        )
+
+        print(f"Mean: {np.mean(episode_rewards)}, std: {np.std(episode_rewards)}")
+    else:
+        # Run optimization
+        sampler = optuna.samplers.TPESampler(n_startup_trials=10)
+        study = run_hyperparameter_optimization(
+            env_cfg_path=args.env_cfg_path,
+            policy_cfg_path=args.policy_cfg_path,
+            sampler=sampler,
+            n_trials=100,  # Number of trials to run
+        )
+
+        # Print best parameters
+        print("Best parameters:")
+        print(study.best_params)
+        print(f"Best value: {study.best_value}")
