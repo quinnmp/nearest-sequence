@@ -9,7 +9,7 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import argparse
 import yaml
 import pickle
-from numba import jit, njit, prange, float64, int64
+from numba import jit, njit, prange, float32, int64
 from sklearn.model_selection import KFold
 from sklearn.neighbors import KDTree
 import nn_agent, nn_util
@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from tqdm import tqdm
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.set_default_dtype(torch.float32)
 
 def init_weights(m):
     if isinstance(m, nn.Linear):
@@ -504,7 +505,7 @@ def train_model(model, train_loader, num_epochs=100, lr=1e-3, decay=1e-5, model_
             train_loss += loss.item()
             num_batches += 1
         avg_loss = train_loss / num_batches
-        # print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {avg_loss:.4f}")
+        print(f"Epoch [{epoch + 1}/{num_epochs}], Loss: {avg_loss:.4f}")
 
     torch.save(model, model_path)
     return model

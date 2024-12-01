@@ -4,7 +4,7 @@ lookback: 19
 decay_rate: -2.3585814854057254
 ratio: 0.07581313789016951
 
-epochs: 200
+epochs: 10
 batch_size: 64
 hidden_dims:
    - 128
