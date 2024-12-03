@@ -1,6 +1,8 @@
-epochs: 716
-batch_size: 32
+epochs: 150
+batch_size: 128
 hidden_dims:
-   - 512
-   - 512
-   - 512
+   - 1024
+   - 1024
+     #{'epochs': 150, 'batch_size': 128, 'layer_size': 1024, 'num_layers': 2}
+     #Best value: 1348.2047267448334
+

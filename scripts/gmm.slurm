@@ -27,5 +27,5 @@ export CPATH=$CONDA_PREFIX/include:$CPATH
 export LIBRARY_PATH=$CONDA_PREFIX/lib:$LIBRARY_PATH
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 
-stdbuf -o0 -e0 python -u nn_eval.py config/env/hopper.yml config/policy/ns_cond.yml 
+stdbuf -o0 -e0 python -u nn_model_optimizer.py config/env/hopper.yml config/policy/hopper/ns_dan_bc.yml 
 

@@ -43,7 +43,6 @@ def save_expert_data(data, path):
         return pickle.dump(data, output_file)
 
 def create_matrices(expert_data):
-    max_length = max((len(traj['observations']) for traj in expert_data))
     obs_matrix = []
     act_matrix = []
     traj_starts = []

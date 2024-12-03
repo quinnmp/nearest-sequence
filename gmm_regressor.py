@@ -13,12 +13,13 @@ from fast_scaler import FastScaler
 import numpy as np
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+torch.set_default_dtype(torch.float32)
 
 class WeightedGMMActorDataset(Dataset):
     def __init__(self, observations, actions, weights):
-        self.observations = torch.from_numpy(observations).to(device)
-        self.actions = torch.from_numpy(actions).to(device)
-        self.weights = torch.as_tensor(weights).to(device)
+        self.observations = torch.from_numpy(observations).to(device).to(torch.float32)
+        self.actions = torch.from_numpy(actions).to(device).to(torch.float32)
+        self.weights = torch.as_tensor(weights, dtype=torch.float32).to(device)
 
     def __len__(self):
         return len(self.observations)
@@ -28,23 +29,20 @@ class WeightedGMMActorDataset(Dataset):
 
 def train_model(model, train_loader, val_loader, optimizer, scheduler, epochs=10, patience=5):
     model.train()
-    scaler = torch.amp.GradScaler()
     best_val_loss = float('inf')
     patience_counter = 0
 
     for epoch in range(epochs):
         total_loss = 0.0
         for obs_batch, act_batch, weight_batch in train_loader:
-            with torch.amp.autocast(device_type='cuda'):
-                dist = model.forward_train({"obs": obs_batch})
-                log_probs = dist.log_prob(act_batch)
-                loss = -(log_probs * weight_batch).mean()
-                total_loss += loss.item()
+            dist = model.forward_train({"obs": obs_batch})
+            log_probs = dist.log_prob(act_batch)
+            loss = -(log_probs * weight_batch).mean()
+            total_loss += loss.item()
             
             optimizer.zero_grad(set_to_none=True)
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            loss.backward()
+            optimizer.step()
 
         val_loss = validate_model(model, val_loader)
 
@@ -73,10 +71,8 @@ def validate_model(model, val_loader):
     model.train()
     return total_val_loss / len(val_loader)
 
-def get_action(observations, actions, distances, query_point, policy_cfg, checkpoint_path="data/gmm_last_iteration.pth", from_scratch=False):
+def get_action(observations, actions, distances, query_point, policy_cfg, action_scaler, checkpoint_path="data/gmm_last_iteration.pth", from_scratch=False):
     # Scale actions to similar range as observations
-    action_scaler = FastScaler()
-    action_scaler.fit(actions)
     scaled_actions = action_scaler.transform(actions)
     
     # Normalize distances to create weights
@@ -97,8 +93,10 @@ def get_action(observations, actions, distances, query_point, policy_cfg, checkp
     val_dataset = WeightedGMMActorDataset(observations[val_indices], scaled_actions[val_indices], weights[val_indices])
 
     batch_size = policy_cfg.get('batch_size', min(32, len(train_dataset)))
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, persistent_workers=False)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0, persistent_workers=False)
+    generator = torch.Generator()
+    generator.manual_seed(42)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0, persistent_workers=False, generator=generator)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0, persistent_workers=False, generator=generator)
 
     # Suppress robomimic logs from config factory
     original_stdout = sys.stdout

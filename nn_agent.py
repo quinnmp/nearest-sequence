@@ -73,6 +73,10 @@ class NNAgent:
         else:
             self.plot = False
 
+        if self.method == NN_METHOD.KNN_AND_DIST or self.method == NN_METHOD.COND:
+            # Just for testing - not recommended
+            self.sq_instead_of_diff = False
+
         if self.method == NN_METHOD.COND:
             model_path = "cond_models/" + os.path.basename(self.expert_data_path)[:-4] + "_cond_model.pth"
             # Check if the model already exists
@@ -90,17 +94,6 @@ class NNAgent:
 
                 state_dim = full_dataset[0][0][0].shape[0]
                 action_dim = full_dataset[0][3].shape[0]
-                # model = KNNConditioningTransformerModel(
-                #     state_dim=state_dim,
-                #     action_dim=action_dim,
-                #     k=self.candidates,
-                #     action_scaler=full_dataset.action_scaler,
-                #     final_neighbors_ratio=self.final_neighbors_ratio,
-                #     embed_dim=policy_cfg.get('embed_dim', 64),
-                #     num_heads=policy_cfg.get('num_heads', 2),
-                #     num_layers=policy_cfg.get('num_layers', 2),
-                #     dropout_rate=policy_cfg.get('dropout', 0.1)
-                # )
                 model = KNNConditioningModel(
                     state_dim=state_dim,
                     action_dim=action_dim,
@@ -109,11 +102,14 @@ class NNAgent:
                     distance_scaler=full_dataset.distance_scaler,
                     final_neighbors_ratio=self.final_neighbors_ratio,
                     hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
-                    dropout_rate=policy_cfg.get('dropout', 0.1)
+                    dropout_rate=policy_cfg.get('dropout', 0.1),
                 )
                 self.model = train_model(model, train_loader, num_epochs=policy_cfg.get('epochs', 1000), lr=policy_cfg.get('lr', 1e-3), decay=policy_cfg.get('weight_decay', 1e-5), model_path=model_path)
 
             self.model.eval()
+        elif self.method == NN_METHOD.GMM:
+            self.action_scaler = FastScaler()
+            self.action_scaler.fit(self.flattened_act_matrix)
 
     def update_obs_history(self, current_ob):
         self.obs_history = np.vstack((current_ob, self.obs_history), dtype=np.float64) if len(self.obs_history) > 0 else np.array([current_ob], dtype=np.float64)
@@ -183,15 +179,19 @@ class NNAgentEuclidean(NNAgent):
             # It returns neighbor states and distances for training our conditioning model
             neighbor_states = self.flattened_obs_matrix[final_neighbors]
             neighbor_actions = self.flattened_act_matrix[final_neighbors]
-            neighbor_distances = np.zeros_like(neighbor_states)
 
-            for i in range(len(current_ob)):
-                if (i in self.non_rot_indices):
-                    neighbor_distances[:, i] = neighbor_states[:, i] - current_ob[i]
-                else:
-                    delta = neighbor_states[:, i] - current_ob[i]
-                    delta = (delta + np.pi) % (2 * np.pi) - np.pi
-                    neighbor_distances[:, i] = delta / (2 * np.pi)
+            if self.sq_instead_of_diff:
+                neighbor_distances = np.tile(current_ob, (len(final_neighbors), 1))
+            else:
+                neighbor_distances = np.zeros_like(neighbor_states)
+
+                for i in range(len(current_ob)):
+                    if (i in self.non_rot_indices):
+                        neighbor_distances[:, i] = neighbor_states[:, i] - current_ob[i]
+                    else:
+                        delta = neighbor_states[:, i] - current_ob[i]
+                        delta = (delta + np.pi) % (2 * np.pi) - np.pi
+                        neighbor_distances[:, i] = delta / (2 * np.pi)
 
             neighbor_weights = 1 / accum_distances[final_neighbor_indices]
             neighbor_weights = neighbor_weights / neighbor_weights.sum()
@@ -228,6 +228,7 @@ class NNAgentEuclidean(NNAgent):
                 accum_distances[final_neighbor_indices],
                 current_ob,
                 self.policy_cfg,
+                self.action_scaler,
                 from_scratch=(len(self.obs_history) == 1)
             )
     

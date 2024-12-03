@@ -58,7 +58,7 @@ def train_behavior_cloning(model, train_loader, num_epochs=100, lr=1e-3, weight_
     model.to(device)
 
     criterion = nn.MSELoss()
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=decay, eps=1e-8, amsgrad=False)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay, eps=1e-8, amsgrad=False)
     
     for epoch in range(num_epochs):
         model.train()
@@ -189,6 +189,7 @@ def objective(trial: optuna.trial.Trial, env_cfg: dict, base_policy_cfg: dict):
         )
         
         # Prepare dataset and dataloader
+        generator = torch.Generator()
         generator.manual_seed(42)
         dataset = ExpertTrajectoryDataset(obs_matrix, act_matrix)
         train_loader = DataLoader(
@@ -222,7 +223,8 @@ def objective(trial: optuna.trial.Trial, env_cfg: dict, base_policy_cfg: dict):
                      f"Batch Size={batch_size}, "
                      f"Layer Size={layer_size}, "
                      f"Num Layers={num_layers}, "
-                     f"Mean Reward={mean_reward}")
+                     f"Mean Reward={mean_reward}, "
+                     f"STD={np.std(episode_rewards)}")
         
         return mean_reward
     
