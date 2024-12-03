@@ -1,0 +1,6 @@
+method: lwr
+k_neighbors: 470
+lookback: 1
+decay_rate: 0
+ratio: 1
+# Candidates 470, lookback 1, decay 0, ratio 1: mean 781.3623951252557, std 72.15551329318362

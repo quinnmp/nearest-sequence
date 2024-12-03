@@ -1,0 +1,15 @@
+method: cond
+k_neighbors: 237
+lookback: 27
+decay_rate: -2.785717325929091
+ratio: 0.4314969702404607
+# Candidates 237, lookback 27, decay -2.785717325929091, ratio 0.4314969702404607: mean 3486.49, std 441.07
+
+
+epochs: 20
+batch_size: 64
+hidden_dims:
+   - 128
+   - 128
+   - 128
+cond_force_retrain: True
