@@ -1,12 +1,12 @@
 method: cond
-k_neighbors: 237
-lookback: 27
-decay_rate: -2.785717325929091
-ratio: 0.4314969702404607
-# Candidates 237, lookback 27, decay -2.785717325929091, ratio 0.4314969702404607: mean 3486.49, std 441.07
+k_neighbors: 650
+lookback: 23
+decay_rate: -0.8757043333376062
+ratio: 0.5269758905428606
+# [I 2024-12-03 20:22:53,557] Trial 1 finished with value: 3619.528774344117 and parameters: {'k_neighbors': 650, 'lookback': 23, 'decay_rate': -0.8757043333376062, 'ratio': 0.5269758905428606}. Best is trial 1 with value: 3619.528774344117.
 
 
-epochs: 20
+epochs: 40
 batch_size: 64
 hidden_dims:
    - 128

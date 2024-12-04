@@ -15,7 +15,7 @@ def objective(trial, env_config_path, policy_config_path):
 
     # Suggest parameter values for optimization
     policy_cfg['k_neighbors'] = trial.suggest_int('k_neighbors', 10, 999)
-    policy_cfg['lookback'] = trial.suggest_int('lookback', 1, 50)
+    policy_cfg['lookback'] = trial.suggest_int('lookback', 2, 50)
     policy_cfg['decay_rate'] = trial.suggest_float('decay_rate', -3.0, 0.0)
     policy_cfg['ratio'] = trial.suggest_float('ratio', 0.05, 1.0)
 
@@ -30,9 +30,9 @@ def objective(trial, env_config_path, policy_config_path):
 
 # Create and run an Optuna study to optimize the objective function
 def optimize(env_config_path, policy_config_path):
-    sampler = optuna.samplers.TPESampler(n_startup_trials=50)
+    sampler = optuna.samplers.TPESampler()
     study = optuna.create_study(sampler=sampler, direction='maximize')
-    study.optimize(lambda trial: objective(trial, env_config_path, policy_config_path), n_trials=500)
+    study.optimize(lambda trial: objective(trial, env_config_path, policy_config_path), n_trials=100)
     
     # Print the best parameters found
     print("Best parameters: ", study.best_params)

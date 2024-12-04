@@ -2,13 +2,13 @@
 
 #SBATCH --job-name=knn
 #SBATCH --account=weirdlab
-#SBATCH --partition=gpu-l40s
+#SBATCH --partition=gpu-l40
 
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=128
+#SBATCH --cpus-per-task=96
 #SBATCH --gpus-per-task=8
-#SBATCH --mem=1024G
+#SBATCH --mem=512G
 #SBATCH --time=72:00:00
 #SBATCH -o log/%j.out
 #SBATCH --mail-type=END,FAIL
@@ -27,5 +27,5 @@ export CPATH=$CONDA_PREFIX/include:$CPATH
 export LIBRARY_PATH=$CONDA_PREFIX/lib:$LIBRARY_PATH
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 
-stdbuf -o0 -e0 python -u nn_sweep_k.py config/env/hopper.yml config/policy/hopper/nn_dan_bc.yml 
+stdbuf -o0 -e0 python -u nn_sweep_k.py config/env/hopper_5.yml config/policy/hopper/ns_dan_bc.yml 
 

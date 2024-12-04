@@ -1,6 +1,7 @@
 method: lwr
-k_neighbors: 732
-lookback: 11
-decay_rate: -0.002190720982379551
-ratio: 0.5276841322874066
-# Candidates 732, lookback 11, decay -0.002190720982379551, ratio 0.5276841322874066: mean 952.8506988395685, std 53.246563448238575
+k_neighbors: 474
+lookback: 10
+decay_rate: -1.5782308755982235
+ratio: 0.2427323158073047
+# Candidates 474, lookback 10, decay -1.5782308755982235, ratio 0.2427323158073047: mean 3560.98, std 42.15
+

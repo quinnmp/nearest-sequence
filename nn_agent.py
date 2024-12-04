@@ -119,6 +119,7 @@ class NNAgent:
 
 class NNAgentEuclidean(NNAgent):
     def get_action(self, current_ob):
+        import time
         self.update_obs_history(current_ob)
 
         if self.method == NN_METHOD.KNN_AND_DIST:

@@ -2,12 +2,12 @@
 
 #SBATCH --job-name=knn
 #SBATCH --account=weirdlab
-#SBATCH --partition=gpu-l40s
+#SBATCH --partition=gpu-l40
 
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=128
-#SBATCH --gpus-per-task=8
+#SBATCH --cpus-per-task=126
+#SBATCH --gpus-per-task=0
 #SBATCH --mem=1024G
 #SBATCH --time=72:00:00
 #SBATCH -o log/%j.out
@@ -27,5 +27,6 @@ export CPATH=$CONDA_PREFIX/include:$CPATH
 export LIBRARY_PATH=$CONDA_PREFIX/lib:$LIBRARY_PATH
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 
-stdbuf -o0 -e0 python -u nn_model_optimizer.py config/env/hopper.yml config/policy/hopper/ns_dan_bc.yml 
+python nn_param_optimizer.py config/env/hopper_10.yml config/policy/hopper_10/ns_lwr.yml
+
 

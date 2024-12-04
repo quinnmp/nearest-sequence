@@ -230,7 +230,7 @@ class KNNExpertDataset(Dataset):
         self.neighbor_lookup: List[NeighborData | None] = [None] * len(self.agent.flattened_obs_matrix)
 
         self.euclidean = euclidean
-        
+
         all_distances = []
         for i in range(len(self)):
             _, _, distances, _, _ = self[i]
