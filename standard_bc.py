@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, random_split
+import torchvision.transforms as transforms
 import numpy as np
-import os
+import os, sys
 from nn_util import load_expert_data, create_matrices, set_seed
 from nn_eval import crop_obs_for_env
 import argparse
@@ -13,9 +14,10 @@ gym.logger.set_level(40)
 from fast_scaler import FastScaler
 from push_t_env import PushTEnv
 import optuna
+from PIL import Image
 
 class BehaviorCloningModel(nn.Module):
-    def __init__(self, state_dim, action_dim, hidden_dims=[256, 256], dropout=0.2):
+    def __init__(self, state_dim, action_dim, hidden_dims=[256, 256], dropout=0.3):
         set_seed(42)
         super(BehaviorCloningModel, self).__init__()
         
@@ -25,7 +27,8 @@ class BehaviorCloningModel(nn.Module):
         for hidden_dim in hidden_dims:
             layers.extend([
                 nn.Linear(input_dim, hidden_dim),
-                nn.ReLU(),
+                # nn.BatchNorm1d(hidden_dim),
+                nn.ReLU(inplace=True),
                 nn.Dropout(dropout)
             ])
             input_dim = hidden_dim
@@ -42,7 +45,6 @@ class BehaviorCloningModel(nn.Module):
             states = torch.tensor(states, dtype=torch.float32)
         
         states = states.to(dtype=torch.float32, device=next(self.parameters()).device)
-        
         scaled_actions = self.model(states)
         
         if action_scaler is not None:
@@ -117,10 +119,56 @@ def load_configurations(env_cfg_path: str, policy_cfg_path: str):
     
     return env_cfg, policy_cfg
 
+def stack_with_previous(obs_list, stack_size=3):
+    if len(obs_list) < stack_size:
+        return np.concatenate([obs_list[0]] * (stack_size - len(obs_list)) + obs_list, axis=0)
+    return np.concatenate(obs_list[-stack_size:], axis=0)
+
 def evaluate_model(trained_model, dataset, env_cfg, num_trials: int = 100):
     env_name = env_cfg['name']
     is_metaworld = env_cfg.get('metaworld', False)
+    img = env_cfg.get('img', False)
     
+    
+    if img:
+        # Load the pre-trained DinoV2 model
+        original_stdout = sys.stdout
+        sys.stdout = open('/dev/null', 'w')
+        try:
+            model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
+            model.eval()
+        finally:
+            sys.stdout.close()
+            sys.stdout = original_stdout
+
+
+# Preprocessing transforms
+        transform = transforms.Compose([
+            transforms.Resize(224),  # DinoV2 expects 224x224 input
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+
+# If you have an RGB numpy array from your environment
+        def process_rgb_array(rgb_array):
+            # Handle 4-channel image (RGBA)
+            if rgb_array.shape[2] == 4:
+                # Convert RGBA to RGB by dropping the alpha channel
+                rgb_array = rgb_array[:, :, :3]
+
+            # Convert numpy array to PIL Image
+            image = Image.fromarray((rgb_array * 255).astype(np.uint8))
+            
+            # Apply transformations
+            input_tensor = transform(image).unsqueeze(0)  # Add batch dimension
+            
+            # Extract features
+            with torch.no_grad():
+                features = model(input_tensor)
+
+            return features.cpu().numpy()[0]
+
     # Environment setup 
     if is_metaworld:
         env = env_dict.MT50_V2[env_name]()
@@ -135,19 +183,37 @@ def evaluate_model(trained_model, dataset, env_cfg, num_trials: int = 100):
     episode_rewards = []
     for trial in range(num_trials):
         env.seed(trial)
-        observation = crop_obs_for_env(env.reset(), env_name)
+        if img:
+            env.reset()
+            frame = env.render(mode='rgb_array')
+            observation = process_rgb_array(frame)
+            obs_history = [observation] 
+        else:
+            observation = crop_obs_for_env(env.reset(), env_name)
         episode_reward = 0.0
         steps = 0
         
         while True:
-            action = trained_model(observation, dataset.state_scaler, dataset.action_scaler)
+            if img:
+                # Stack observations with history
+                stacked_observation = stack_with_previous(obs_history)
+                action = trained_model(stacked_observation, dataset.state_scaler, dataset.action_scaler)
+            else:
+                action = trained_model(observation, dataset.state_scaler, dataset.action_scaler)
             
             if env_name == "push_t":
                 observation, reward, done, truncated, info = env.step(action)
             else:
                 observation, reward, done, info = env.step(action)
             
-            observation = crop_obs_for_env(observation, env_name)
+            if img:
+                frame = env.render(mode='rgb_array')
+                observation = process_rgb_array(frame)
+                obs_history.append(observation)
+                if len(obs_history) > 3:
+                    obs_history.pop(0)
+            else:
+                observation = crop_obs_for_env(observation, env_name)
             
             if env_name == "push_t":
                 episode_reward = max(episode_reward, reward)
@@ -159,16 +225,17 @@ def evaluate_model(trained_model, dataset, env_cfg, num_trials: int = 100):
             
             steps += 1
         
+        print(episode_reward)
         episode_rewards.append(episode_reward)
     
     return episode_rewards
 
 def objective(trial: optuna.trial.Trial, env_cfg: dict, base_policy_cfg: dict):
     # Hyperparameter suggestions
-    epochs = trial.suggest_int('epochs', 1, 200)
+    epochs = trial.suggest_int('epochs', 1, 5000)
     batch_size = trial.suggest_categorical('batch_size', [2**i for i in range(4, 9)])  # 2 to 256
-    layer_size = trial.suggest_categorical('layer_size', [2**i for i in range(2, 11)])  # 2 to 1024
-    num_layers = trial.suggest_int('num_layers', 2, 3)
+    layer_size = trial.suggest_categorical('layer_size', [2**i for i in range(2, 13)])  # 2 to 1024
+    num_layers = trial.suggest_int('num_layers', 2, 5)
     
     # Update policy configuration
     policy_cfg = base_policy_cfg.copy()
@@ -211,7 +278,8 @@ def objective(trial: optuna.trial.Trial, env_cfg: dict, base_policy_cfg: dict):
         episode_rewards = evaluate_model(
             trained_model, 
             dataset, 
-            env_cfg
+            env_cfg,
+            num_trials=10
         )
         
         # Return mean reward (higher is better)
@@ -277,7 +345,7 @@ if __name__ == "__main__":
     parser.add_argument("policy_cfg_path", help="Path to policy configuration file")
     args = parser.parse_args()
 
-    if True:
+    if False:
         env_cfg, policy_cfg = load_configurations(args.env_cfg_path, args.policy_cfg_path)
 
         # Load expert data

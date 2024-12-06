@@ -1,6 +1,7 @@
-epochs: 200
+epochs: 1000
 batch_size: 64
 hidden_dims:
-   - 128
-   - 128
-   - 128
+   - 2048
+   - 1024
+   - 512
+   - 256
