@@ -77,34 +77,69 @@ class NNAgent:
             # Just for testing - not recommended
             self.sq_instead_of_diff = False
 
-        if self.method == NN_METHOD.COND:
-            model_path = "cond_models/" + os.path.basename(self.expert_data_path)[:-4] + "_cond_model.pth"
+        if self.method == NN_METHOD.COND or self.method == NN_METHOD.BC:
+            model_path = policy_cfg.get('model_name')
+            if model_path is None:
+                model_path = "cond_models/" + os.path.basename(self.expert_data_path)[:-4] + "_cond_model.pth"
+            else:
+                model_path = "cond_models/" + model_path + ".pth"
+
             # Check if the model already exists
             if os.path.exists(model_path) and not policy_cfg.get('cond_force_retrain', False):
                 # Load the model if it exists
                 self.model = torch.load(model_path, weights_only=False)
             else:
                 # Train the model if it doesn't exist
-                full_dataset = KNNExpertDataset(self.expert_data_path, env_cfg, policy_cfg, euclidean=False)
+                train_dataset = KNNExpertDataset(self.expert_data_path, env_cfg, policy_cfg, euclidean=False, bc_baseline=self.method == NN_METHOD.BC)
+                if env_cfg.get('val_pkl'):
+                    val_dataset = KNNExpertDataset(env_cfg['val_pkl'], env_cfg, policy_cfg, euclidean=False, bc_baseline=self.method == NN_METHOD.BC)
+                else:
+                    val_dataset = None
+
                 def worker_init_fn(worker_id):
                     np.random.seed(42 + worker_id)
                 generator = torch.Generator()
                 generator.manual_seed(42)
-                train_loader = DataLoader(full_dataset, batch_size=policy_cfg.get('batch_size', 64), shuffle=True, num_workers=0, generator=generator)
 
-                state_dim = full_dataset[0][0][0].shape[0]
-                action_dim = full_dataset[0][3].shape[0]
+                train_loader = DataLoader(
+                    train_dataset, 
+                    batch_size=policy_cfg.get('batch_size', 64), 
+                    shuffle=True, 
+                    num_workers=0, 
+                    generator=generator
+                )
+
+                val_loader = DataLoader(
+                    val_dataset, 
+                    batch_size=policy_cfg.get('batch_size', 64), 
+                    shuffle=False, 
+                    num_workers=0, 
+                    generator=generator
+                )
+
+                state_dim = train_dataset[0][0][0].shape[0]
+                action_dim = train_dataset[0][3].shape[0]
                 model = KNNConditioningModel(
                     state_dim=state_dim,
                     action_dim=action_dim,
                     k=self.candidates,
-                    action_scaler=full_dataset.action_scaler,
-                    distance_scaler=full_dataset.distance_scaler,
+                    action_scaler=train_dataset.action_scaler,
+                    distance_scaler=train_dataset.distance_scaler,
                     final_neighbors_ratio=self.final_neighbors_ratio,
                     hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
                     dropout_rate=policy_cfg.get('dropout', 0.1),
+                    bc_baseline=self.method == NN_METHOD.BC
                 )
-                self.model = train_model(model, train_loader, num_epochs=policy_cfg.get('epochs', 1000), lr=policy_cfg.get('lr', 1e-3), decay=policy_cfg.get('weight_decay', 1e-5), model_path=model_path)
+
+                self.model = train_model(
+                    model, 
+                    train_loader, 
+                    val_loader=val_loader,
+                    num_epochs=policy_cfg.get('epochs', 1000), 
+                    lr=policy_cfg.get('lr', 1e-3), 
+                    decay=policy_cfg.get('weight_decay', 1e-5), 
+                    model_path=model_path
+                )
 
             self.model.eval()
         elif self.method == NN_METHOD.GMM:
@@ -119,6 +154,9 @@ class NNAgent:
 
 class NNAgentEuclidean(NNAgent):
     def get_action(self, current_ob):
+        if self.method == NN_METHOD.BC:
+            return self.model(current_ob, -1, -1, -1)
+
         self.update_obs_history(current_ob)
 
         if self.method == NN_METHOD.KNN_AND_DIST:

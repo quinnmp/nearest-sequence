@@ -1,7 +1,9 @@
-epochs: 1000
+method: bc
+
+epochs: 200
 batch_size: 64
 hidden_dims:
-   - 2048
-   - 1024
-   - 512
-   - 256
+   - 128
+   - 128
+   - 128
+cond_force_retrain: True

@@ -12,4 +12,5 @@ hidden_dims:
    - 128
    - 128
    - 128
+model_name: "dan_hopper_1"
 cond_force_retrain: True

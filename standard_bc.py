@@ -28,8 +28,8 @@ class BehaviorCloningModel(nn.Module):
             layers.extend([
                 nn.Linear(input_dim, hidden_dim),
                 # nn.BatchNorm1d(hidden_dim),
-                nn.ReLU(inplace=True),
-                nn.Dropout(dropout)
+                nn.ReLU(),
+                # nn.Dropout(dropout)
             ])
             input_dim = hidden_dim
         
@@ -345,7 +345,7 @@ if __name__ == "__main__":
     parser.add_argument("policy_cfg_path", help="Path to policy configuration file")
     args = parser.parse_args()
 
-    if False:
+    if True:
         env_cfg, policy_cfg = load_configurations(args.env_cfg_path, args.policy_cfg_path)
 
         # Load expert data

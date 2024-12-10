@@ -131,7 +131,7 @@ def nn_eval(config, nn_agent):
                 episode_reward = max(episode_reward, reward)
             else:
                 episode_reward += reward
-            if False:
+            if True:
                 env.render(mode='human')
             if done:
                 break
@@ -140,9 +140,9 @@ def nn_eval(config, nn_agent):
             if env_name == "push_t" and steps > 200:
                 break
             steps += 1
-            print(steps)
+            # print(steps)
 
-        print(episode_reward)
+        # print(episode_reward)
         episode_rewards.append(episode_reward)
 
         success += info['success'] if 'success' in info else 0
@@ -160,21 +160,69 @@ def nn_eval(config, nn_agent):
     )
     return np.mean(episode_rewards)
 
-def nn_eval_sanity(config, nn_agent):
-    diffs = []
-    for idx, (obs, act) in enumerate(zip(nn_agent.flattened_obs_matrix, nn_agent.flattened_act_matrix)):
-        state_traj = np.searchsorted(nn_agent.traj_starts, idx, side='right') - 1
-        state_num = idx - nn_agent.traj_starts[state_traj]
+def nn_eval_sanity(config, nn_agent_dan, nn_agent_bc):
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+    from matplotlib.animation import FFMpegWriter
 
-        nn_agent.obs_history = nn_agent.obs_matrix[state_traj][:state_num][::-1]
-        with torch.no_grad():
-            pred_act = nn_agent.get_action(obs, normalize=False)
+    obs_matrix, act_matrix, traj_starts = nn_util.create_matrices(nn_util.load_expert_data("data/hopper-expert-v2_25_standardized.pkl")[:1])
+    obs_array = np.concatenate(obs_matrix, dtype=np.float64)
+    act_array = np.concatenate(act_matrix)
 
-        print(act)
-        print(pred_act)
-        diffs.append(np.sum(np.abs(act - pred_act)))
-        # print(f"Diff {np.sum(np.abs(act - pred_act))}")
-    print(np.mean(diffs))
+    writer = FFMpegWriter(fps=60, metadata=dict(artist='Me'), bitrate=5000)
+    video_filename = 'nn_eval_sanity.mp4'
+
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    dan_errors = []
+    bc_errors = []
+
+    with writer.saving(fig, video_filename, 100):
+        for idx, (obs, act) in enumerate(zip(obs_array, act_array)):
+            state_traj = np.searchsorted(traj_starts, idx, side='right') - 1
+            state_num = idx - traj_starts[state_traj]
+
+            nn_agent_dan.obs_history = obs_matrix[state_traj][:state_num][::-1]
+
+            with torch.no_grad():
+                nn_agent_bc.get_action(obs, normalize=False)
+                nn_agent_dan.get_action(obs, normalize=False)
+
+                normalized_act = nn_agent_bc.model.action_scaler.transform(act)
+
+                neighbor_acts = pickle.load(open('data/neighbor_actions.pkl', 'rb'))[0]
+                bc_act = pickle.load(open('data/bc_action.pkl', 'rb'))[0]
+                
+                points = neighbor_acts - normalized_act
+                mean_point = points.mean(axis=0)
+                bc_act_diff = bc_act - normalized_act
+
+                dan_errors.append(np.abs(mean_point))
+                bc_errors.append(np.abs(bc_act_diff))
+
+                ax.cla()
+
+                x, y, z = points[:, 0], points[:, 1], points[:, 2]
+
+                ax.scatter(x, y, z, c='b', marker='o', label='Predicted actions', alpha=0.1)
+
+                ax.scatter(0, 0, 0, c='r', marker='o', s=100, label='Actual action')
+
+                ax.scatter(bc_act_diff[0], bc_act_diff[1], bc_act_diff[2], c='y', s=100, label='BC action')
+
+                ax.scatter(mean_point[0], mean_point[1], mean_point[2], c='g', marker='o', s=100, label='Mean Predicted Action')
+
+                ax.set_xlim([-4, 4])
+                ax.set_ylim([-4, 4])
+                ax.set_zlim([-4, 4])
+
+                formatted_dan_error = np.array2string(np.mean(dan_errors, axis=0), formatter={'float_kind': lambda x: f"{x:.2f}"})
+                formatted_bc_error = np.array2string(np.mean(bc_errors, axis=0), formatter={'float_kind': lambda x: f"{x:.2f}"})
+                ax.set_title(f"Mean DAN Error: {formatted_dan_error}, Mean BC Error: {formatted_bc_error}")
+
+                ax.legend(loc='lower left')
+                writer.grab_frame()
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -191,6 +239,15 @@ if __name__ == "__main__":
     print(policy_cfg)
 
     # for i in range(10):
-    agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
-
-    nn_eval(env_cfg, agent)
+    dan_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
+    nn_eval(env_cfg, dan_agent)
+    
+    # policy_cfg_copy = policy_cfg.copy()
+    # policy_cfg_copy['method'] = 'bc'
+    # policy_cfg_copy['model_name'] = 'bc_hopper_1'
+    #
+    # bc_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg_copy)
+    #
+    # # nn_eval_sanity(env_cfg, dan_agent, bc_agent)
+    # nn_eval(env_cfg, bc_agent)
+    #

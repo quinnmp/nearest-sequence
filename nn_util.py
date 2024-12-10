@@ -143,7 +143,7 @@ def compute_distance_with_rot(curr_ob, flattened_obs_matrix, rot_indices, non_ro
     return neighbor_distances
 
 class NN_METHOD:
-    NN, NS, LWR, GMM, COND, KNN_AND_DIST = range(6)
+    NN, NS, LWR, GMM, COND, KNN_AND_DIST, BC = range(7)
 
     def from_string(name):
         match name:
@@ -159,6 +159,8 @@ class NN_METHOD:
                 return NN_METHOD.COND
             case 'knn_and_dist':
                 return NN_METHOD.KNN_AND_DIST
+            case 'bc':
+                return NN_METHOD.BC
             case _:
                 print(f"No such method {name}! Defaulting to NN")
                 return NN_METHOD.NN
