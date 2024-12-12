@@ -49,7 +49,7 @@ def process_rgb_array(rgb_array):
     
     return features.cpu().numpy()[0]
 
-def stack_with_previous(obs_list, stack_size=3):
+def stack_with_previous(obs_list, stack_size=10):
     padded_obs = [obs_list[0] for _ in range(stack_size - 1)] + obs_list
     stacked_obs = []
 
@@ -95,18 +95,17 @@ for traj in range(len(data)):
     for ob in range(len(data[traj]['observations'])):
         env.reset()
         if is_metaworld:
-            breakpoint()
             env.set_state(
                 np.hstack((np.zeros(unobserved_nq), data[traj]['observations'][ob][:nq])), 
                 data[traj]['observations'][ob][:-nq])
         else:
             env.set_state(
                 np.hstack((np.zeros(unobserved_nq), data[traj]['observations'][ob][:nq])), 
-                data[traj]['observations'][ob][:-nq])
+                data[traj]['observations'][ob][-nv:])
         frame = env.render(mode='rgb_array')
         traj_obs.append(process_rgb_array(frame))
         # plt.imsave('hopper_frame.png', frame)
-    stacked_traj_obs = stack_with_previous(traj_obs, stack_size=3)
+    stacked_traj_obs = stack_with_previous(traj_obs, stack_size=10)
     img_data.append({'observations': stacked_traj_obs, 'actions': data[traj]['actions']})
 
 pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_img.pkl', 'wb'))

@@ -18,8 +18,9 @@ if __name__ == "__main__":
     print(env_cfg)
     print(policy_cfg)
 
-    for k in range(10, 1000, 10):
-        policy_cfg['k_neighbors'] = k
+    for k in range(24, 1000, 1):
+        print(k)
+        policy_cfg['epochs'] = k
         agent = nn_agent.NNAgentEuclidean(env_cfg, policy_cfg)
 
         nn_eval(env_cfg, agent)

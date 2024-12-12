@@ -89,17 +89,14 @@ class NNAgent:
                 # Load the model if it exists
                 self.model = torch.load(model_path, weights_only=False)
             else:
-                # Train the model if it doesn't exist
-                train_dataset = KNNExpertDataset(self.expert_data_path, env_cfg, policy_cfg, euclidean=False, bc_baseline=self.method == NN_METHOD.BC)
-                if env_cfg.get('val_pkl'):
-                    val_dataset = KNNExpertDataset(env_cfg['val_pkl'], env_cfg, policy_cfg, euclidean=False, bc_baseline=self.method == NN_METHOD.BC)
-                else:
-                    val_dataset = None
-
                 def worker_init_fn(worker_id):
                     np.random.seed(42 + worker_id)
+
                 generator = torch.Generator()
                 generator.manual_seed(42)
+
+                # Train the model if it doesn't exist
+                train_dataset = KNNExpertDataset(self.expert_data_path, env_cfg, policy_cfg, euclidean=False, bc_baseline=self.method == NN_METHOD.BC)
 
                 train_loader = DataLoader(
                     train_dataset, 
@@ -109,13 +106,17 @@ class NNAgent:
                     generator=generator
                 )
 
-                val_loader = DataLoader(
-                    val_dataset, 
-                    batch_size=policy_cfg.get('batch_size', 64), 
-                    shuffle=False, 
-                    num_workers=0, 
-                    generator=generator
-                )
+                if env_cfg.get('val_pkl'):
+                    val_dataset = KNNExpertDataset(env_cfg['val_pkl'], env_cfg, policy_cfg, euclidean=False, bc_baseline=self.method == NN_METHOD.BC)
+                    val_loader = DataLoader(
+                        val_dataset, 
+                        batch_size=policy_cfg.get('batch_size', 64), 
+                        shuffle=False, 
+                        num_workers=0, 
+                        generator=generator
+                    )
+                else:
+                    val_loader = None
 
                 state_dim = train_dataset[0][0][0].shape[0]
                 action_dim = train_dataset[0][3].shape[0]

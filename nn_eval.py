@@ -16,6 +16,7 @@ from push_t_env import PushTEnv
 import torch
 import torchvision.transforms as transforms
 from PIL import Image
+import matplotlib.pyplot as plt
 
 DEBUG = False
 
@@ -31,7 +32,7 @@ def crop_obs_for_env(obs, env):
     else:
         return obs
 
-def stack_with_previous(obs_list, stack_size=3):
+def stack_with_previous(obs_list, stack_size=10):
     if len(obs_list) < stack_size:
         return np.concatenate([obs_list[0]] * (stack_size - len(obs_list)) + obs_list, axis=0)
     return np.concatenate(obs_list[-stack_size:], axis=0)
@@ -84,14 +85,24 @@ def nn_eval(config, nn_agent):
     else:
         env = gym.make(env_name)
 
+    if img:
+        img_env = gym.make(env_name)
+        unobserved_nq = 1
+        nq = env.model.nq - unobserved_nq
+        nv = env.model.nv
+
     episode_rewards = []
     success = 0
     trial = 0
     while True:
+        video_frames = []
         env.seed(trial)
         if img:
-            env.reset()
-            frame = env.render(mode='rgb_array')
+            observation = env.reset()
+            img_env.set_state(
+                np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
+                observation[-nv:])
+            frame = img_env.render(mode='rgb_array')
             observation = process_rgb_array(frame)
             obs_history = [observation] 
         else:
@@ -119,7 +130,10 @@ def nn_eval(config, nn_agent):
                 observation, reward, done, info = env.step(action)
 
             if img:
-                frame = env.render(mode='rgb_array')
+                img_env.set_state(
+                    np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
+                    observation[-nv:])
+                frame = img_env.render(mode='rgb_array')
                 observation = process_rgb_array(frame)
                 obs_history.append(observation)
                 if len(obs_history) > 3:
@@ -131,8 +145,11 @@ def nn_eval(config, nn_agent):
                 episode_reward = max(episode_reward, reward)
             else:
                 episode_reward += reward
-            if True:
-                env.render(mode='human')
+            if False:
+                frame = env.render(mode='rgb_array')
+                video_frames.append(frame)
+
+                # env.render(mode='human')
             if done:
                 break
             if is_metaworld and steps >= 500:
@@ -148,7 +165,10 @@ def nn_eval(config, nn_agent):
         success += info['success'] if 'success' in info else 0
         trial += 1
 
-        if trial >= 100:
+        if len(video_frames) > 0:
+            pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
+
+        if trial >= 10:
             break
 
     os.makedirs('results', exist_ok=True)
@@ -160,7 +180,160 @@ def nn_eval(config, nn_agent):
     )
     return np.mean(episode_rewards)
 
-def nn_eval_sanity(config, nn_agent_dan, nn_agent_bc):
+def nn_eval_closed_loop(config, nn_agent):
+    env_name = config['name']
+    is_metaworld = config.get('metaworld', False)
+
+    expert_data = nn_util.load_expert_data("data/hopper-expert-v2_25.pkl")
+
+    img = config.get('img', False)
+
+    if img:
+        # Load the pre-trained DinoV2 model
+        model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
+        model.eval()
+
+# Preprocessing transforms
+        transform = transforms.Compose([
+            transforms.Resize(224),  # DinoV2 expects 224x224 input
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+
+# If you have an RGB numpy array from your environment
+        def process_rgb_array(rgb_array):
+            # Handle 4-channel image (RGBA)
+            if rgb_array.shape[2] == 4:
+                # Convert RGBA to RGB by dropping the alpha channel
+                rgb_array = rgb_array[:, :, :3]
+
+            # Convert numpy array to PIL Image
+            image = Image.fromarray((rgb_array * 255).astype(np.uint8))
+            
+            # Apply transformations
+            input_tensor = transform(image).unsqueeze(0)  # Add batch dimension
+            
+            # Extract features
+            with torch.no_grad():
+                features = model(input_tensor)
+
+            return features.cpu().numpy()[0]
+
+    if is_metaworld:
+        env = _env_dict.MT50_V2[env_name]()
+        env._partially_observable = False
+        env._freeze_rand_vec = False
+        env._set_task_called = True
+    elif env_name == 'push_t':
+        env = PushTEnv()
+    else:
+        env = gym.make(env_name)
+
+    unobserved_nq = 1
+    nq = env.model.nq - unobserved_nq
+    nv = env.model.nv
+
+    if img:
+        img_env = gym.make(env_name)
+
+    episode_rewards = []
+    success = 0
+    trial = 1
+    while True:
+        video_frames = []
+        env.seed(trial)
+        if img:
+            observation = env.reset()
+            img_env.set_state(
+                np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
+                observation[:-nq])
+            frame = img_env.render(mode='rgb_array')
+            observation = process_rgb_array(frame)
+            obs_history = [observation] 
+        else:
+            if env_name == "push_t":
+                observation = crop_obs_for_env(env.reset()[0], env_name)
+            else:
+                observation = env.reset()
+                expert_start = expert_data[trial]['observations'][0]
+                env.set_state(
+                    np.hstack((np.zeros(unobserved_nq), expert_start[:nq])), 
+                    expert_start[-nv:])
+                breakpoint()
+                observation = expert_start
+
+        nn_agent.reset_obs_history()
+
+        episode_reward = 0.0
+        steps = 0
+
+        while True:
+            if img:
+                # Stack observations with history
+                stacked_observation = stack_with_previous(obs_history)
+                action = nn_agent.get_action(stacked_observation)
+            else:
+                action = nn_agent.get_action(observation)
+
+            if env_name == "push_t":
+                observation, reward, done, truncated, info = env.step(action)
+            else:
+                observation, reward, done, info = env.step(action)
+
+            if img:
+                img_env.set_state(
+                    np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
+                    observation[:-nq])
+                frame = img_env.render(mode='rgb_array')
+                observation = process_rgb_array(frame)
+                obs_history.append(observation)
+                if len(obs_history) > 3:
+                    obs_history.pop(0)
+            else:
+                observation = crop_obs_for_env(observation, env_name)
+
+            if env_name == "push_t":
+                episode_reward = max(episode_reward, reward)
+            else:
+                episode_reward += reward
+            if False:
+                frame = env.render(mode='rgb_array')
+                video_frames.append(frame)
+
+                # plt.imsave("hopper_img.png", frame)
+                # print(env.state_vector()[2])
+                # env.render(mode='human')
+            if done:
+                break
+            if is_metaworld and steps >= 500:
+                break
+            if env_name == "push_t" and steps > 200:
+                break
+            steps += 1
+
+        # print(episode_reward)
+        episode_rewards.append(episode_reward)
+
+        success += info['success'] if 'success' in info else 0
+        trial += 1
+
+        if len(video_frames) > 0:
+            pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
+
+        if trial >= len(expert_data):
+            break
+
+    os.makedirs('results', exist_ok=True)
+    with open("results/" + str(env_name) + "_" + str(nn_agent.candidates) + "_" + str(nn_agent.lookback) + "_" + str(nn_agent.decay) + "_" + str(nn_agent.final_neighbors_ratio) + "_result.pkl", 'wb') as f:
+        pickle.dump(episode_rewards, f)
+    print(
+        f"Candidates {nn_agent.candidates}, lookback {nn_agent.lookback}, decay {nn_agent.decay}, ratio {nn_agent.final_neighbors_ratio}: "
+        f"mean {round(np.mean(episode_rewards), 2)}, std {round(np.std(episode_rewards), 2)}"
+    )
+    return np.mean(episode_rewards)
+
+def nn_eval_open_loop(config, nn_agent_dan, nn_agent_bc):
     import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d import Axes3D
     from matplotlib.animation import FFMpegWriter
@@ -240,7 +413,7 @@ if __name__ == "__main__":
 
     # for i in range(10):
     dan_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
-    nn_eval(env_cfg, dan_agent)
+    nn_eval_closed_loop(env_cfg, dan_agent)
     
     # policy_cfg_copy = policy_cfg.copy()
     # policy_cfg_copy['method'] = 'bc'

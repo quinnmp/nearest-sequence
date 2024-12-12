@@ -1,8 +1,8 @@
-epochs: 150
-batch_size: 128
+method: bc
+epochs: 200
+batch_size: 64
 hidden_dims:
-   - 1024
-   - 1024
-     #{'epochs': 150, 'batch_size': 128, 'layer_size': 1024, 'num_layers': 2}
-     #Best value: 1348.2047267448334
-
+   - 128
+   - 128
+   - 128
+cond_force_retrain: True

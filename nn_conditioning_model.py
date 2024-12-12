@@ -376,7 +376,7 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                 print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
         else:
             # If no validation loader, save the model at the end of training
-            print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")
+            # print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")
             torch.save(model, model_path)
 
     torch.save(model, model_path)
