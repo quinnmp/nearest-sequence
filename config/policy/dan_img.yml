@@ -1,0 +1,10 @@
+method: cond
+
+epochs: 20
+batch_size: 64
+hidden_dims:
+   - 1024
+   - 512
+   - 128
+   - 32
+cond_force_retrain: True

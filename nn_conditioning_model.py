@@ -19,6 +19,7 @@ import random
 import os
 from dataclasses import dataclass
 from tqdm import tqdm
+import time
 REPRODUCE_RESULTS = False
 
 if REPRODUCE_RESULTS:
@@ -262,6 +263,7 @@ class KNNExpertDataset(Dataset):
             for i in range(len(self)):
                 _, _, distances, _, _ = self[i]
                 all_distances.extend(distances.cpu().numpy())
+                print(i)
 
             self.distance_scaler = FastScaler()
             self.distance_scaler.fit(all_distances)
@@ -376,7 +378,7 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                 print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
         else:
             # If no validation loader, save the model at the end of training
-            # print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")
+            print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")
             torch.save(model, model_path)
 
     torch.save(model, model_path)

@@ -17,6 +17,8 @@ import torch
 import torchvision.transforms as transforms
 from PIL import Image
 import matplotlib.pyplot as plt
+import mujoco
+from typing import Dict, Any
 
 DEBUG = False
 
@@ -45,7 +47,7 @@ def nn_eval(config, nn_agent):
 
     if img:
         # Load the pre-trained DinoV2 model
-        model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
+        model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
         model.eval()
 
 # Preprocessing transforms
@@ -88,6 +90,9 @@ def nn_eval(config, nn_agent):
     if img:
         img_env = gym.make(env_name)
         unobserved_nq = 1
+        model_obj = mujoco.MjModel.from_xml_path(img_env.spec.kwargs['xml_path'])
+        data = mujoco.MjData(model_obj)
+        renderer = mujoco.Renderer(model_obj)
         nq = env.model.nq - unobserved_nq
         nv = env.model.nv
 
@@ -102,7 +107,9 @@ def nn_eval(config, nn_agent):
             img_env.set_state(
                 np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
                 observation[-nv:])
-            frame = img_env.render(mode='rgb_array')
+
+            renderer.update_scene(data)
+            frame = renderer.render()
             observation = process_rgb_array(frame)
             obs_history = [observation] 
         else:
@@ -133,7 +140,10 @@ def nn_eval(config, nn_agent):
                 img_env.set_state(
                     np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
                     observation[-nv:])
-                frame = img_env.render(mode='rgb_array')
+
+                renderer.update_scene(data)
+                frame = renderer.render()
+
                 observation = process_rgb_array(frame)
                 obs_history.append(observation)
                 if len(obs_history) > 3:
@@ -184,7 +194,7 @@ def nn_eval_closed_loop(config, nn_agent):
     env_name = config['name']
     is_metaworld = config.get('metaworld', False)
 
-    expert_data = nn_util.load_expert_data("data/hopper-expert-v2_25.pkl")
+    expert_data = nn_util.load_expert_data("data/hopper-expert-v2_1.pkl")
 
     img = config.get('img', False)
 
@@ -239,7 +249,7 @@ def nn_eval_closed_loop(config, nn_agent):
 
     episode_rewards = []
     success = 0
-    trial = 1
+    trial = 0
     while True:
         video_frames = []
         env.seed(trial)
@@ -260,7 +270,6 @@ def nn_eval_closed_loop(config, nn_agent):
                 env.set_state(
                     np.hstack((np.zeros(unobserved_nq), expert_start[:nq])), 
                     expert_start[-nv:])
-                breakpoint()
                 observation = expert_start
 
         nn_agent.reset_obs_history()
@@ -269,6 +278,12 @@ def nn_eval_closed_loop(config, nn_agent):
         steps = 0
 
         while True:
+            if True:
+                expert_start = expert_data[trial]['observations'][steps]
+                env.set_state(
+                    np.hstack((np.zeros(unobserved_nq), expert_start[:nq])), 
+                    expert_start[-nv:])
+                observation = expert_start
             if img:
                 # Stack observations with history
                 stacked_observation = stack_with_previous(obs_history)

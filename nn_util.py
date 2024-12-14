@@ -118,11 +118,14 @@ def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_histor
 
     return neighbor_distances
 
-@njit([float64[:](float64[:], float64[:,:], int64[:], int64[:], float64[:])], parallel=True)
-def compute_distance_with_rot(curr_ob, flattened_obs_matrix, rot_indices, non_rot_indices, rot_weights):
+@njit([(float64[:], float64[:, :], int64[:], int64[:], float64[:])], parallel=True)
+def compute_distance_with_rot(curr_ob: np.ndarray, flattened_obs_matrix: np.ndarray, 
+                              rot_indices: np.ndarray, non_rot_indices: np.ndarray, 
+                              rot_weights: np.ndarray):
     m = len(flattened_obs_matrix)
 
     neighbor_distances = np.empty(m, dtype=np.float64)
+    neighbor_vec_distances = np.empty_like(flattened_obs_matrix)
 
     for neighbor in prange(m):
         nb = flattened_obs_matrix[neighbor]
@@ -130,17 +133,20 @@ def compute_distance_with_rot(curr_ob, flattened_obs_matrix, rot_indices, non_ro
         dist = 0.0
         # Element-wise distance calculation
         for j in non_rot_indices:
-            dist += (curr_ob[j] - nb[j]) ** 2
+            diff = nb[j] - curr_ob[j]
+            neighbor_vec_distances[neighbor, j] = diff
+            dist += diff * diff
 
         # Handle rotational dimensions with wraparound logic
         for k, j in enumerate(rot_indices):
             delta = np.abs(curr_ob[j] - nb[j])
             delta = min(delta, 2 * np.pi - delta) / 2 * np.pi
-            dist += delta ** 2 * rot_weights[k]
+            neighbor_vec_distances[neighbor][j] = delta * rot_weights[k]
+            dist += neighbor_vec_distances[neighbor][j] ** 2
 
         neighbor_distances[neighbor] = np.sqrt(dist)
 
-    return neighbor_distances
+    return neighbor_distances, neighbor_vec_distances
 
 class NN_METHOD:
     NN, NS, LWR, GMM, COND, KNN_AND_DIST, BC = range(7)

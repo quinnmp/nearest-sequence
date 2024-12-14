@@ -167,7 +167,7 @@ class NNAgentEuclidean(NNAgent):
         if True:
             # If we have elements in our observation space that wraparound (rotations), we can't just do direct Euclidean distance
             current_ob[self.non_rot_indices] *= self.weights[self.non_rot_indices]
-            all_distances = compute_distance_with_rot(current_ob.astype(np.float64), self.reshaped_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
+            all_distances, dist_vecs = compute_distance_with_rot(current_ob.astype(np.float64), self.reshaped_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
             nearest_neighbors = np.argpartition(all_distances, kth=self.candidates, axis=None)[:self.candidates].astype(np.int64)
         else:
             query_point = np.array([current_ob * self.weights[self.non_rot_indices]], dtype='float64')
@@ -222,15 +222,7 @@ class NNAgentEuclidean(NNAgent):
             if self.sq_instead_of_diff:
                 neighbor_distances = np.tile(current_ob, (len(final_neighbors), 1))
             else:
-                neighbor_distances = np.zeros_like(neighbor_states)
-
-                for i in range(len(current_ob)):
-                    if (i in self.non_rot_indices):
-                        neighbor_distances[:, i] = neighbor_states[:, i] - current_ob[i]
-                    else:
-                        delta = neighbor_states[:, i] - current_ob[i]
-                        delta = (delta + np.pi) % (2 * np.pi) - np.pi
-                        neighbor_distances[:, i] = delta / (2 * np.pi)
+                neighbor_distances = dist_vecs[final_neighbors]
 
             neighbor_weights = 1 / accum_distances[final_neighbor_indices]
             neighbor_weights = neighbor_weights / neighbor_weights.sum()
