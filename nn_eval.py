@@ -90,9 +90,6 @@ def nn_eval(config, nn_agent):
     if img:
         img_env = gym.make(env_name)
         unobserved_nq = 1
-        model_obj = mujoco.MjModel.from_xml_path(img_env.spec.kwargs['xml_path'])
-        data = mujoco.MjData(model_obj)
-        renderer = mujoco.Renderer(model_obj)
         nq = env.model.nq - unobserved_nq
         nv = env.model.nv
 
@@ -108,8 +105,7 @@ def nn_eval(config, nn_agent):
                 np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
                 observation[-nv:])
 
-            renderer.update_scene(data)
-            frame = renderer.render()
+            frame = img_env.render(mode='rgb_array')
             observation = process_rgb_array(frame)
             obs_history = [observation] 
         else:
@@ -140,10 +136,7 @@ def nn_eval(config, nn_agent):
                 img_env.set_state(
                     np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
                     observation[-nv:])
-
-                renderer.update_scene(data)
-                frame = renderer.render()
-
+                frame = img_env.render(mode='rgb_array')
                 observation = process_rgb_array(frame)
                 obs_history.append(observation)
                 if len(obs_history) > 3:
@@ -427,8 +420,9 @@ if __name__ == "__main__":
     print(policy_cfg)
 
     # for i in range(10):
-    dan_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
-    nn_eval_closed_loop(env_cfg, dan_agent)
+    # NOT STANDARDIZED
+    dan_agent = nn_agent.NNAgentEuclidean(env_cfg, policy_cfg)
+    nn_eval(env_cfg, dan_agent)
     
     # policy_cfg_copy = policy_cfg.copy()
     # policy_cfg_copy['method'] = 'bc'

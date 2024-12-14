@@ -1,11 +1,10 @@
 method: bc
 
-epochs: 16
-batch_size: 64
+epochs: 5000
+batch_size: 16
 hidden_dims:
-   - 1024
    - 512
+   - 256
    - 128
-   - 32
 model_name: "bc_img"
 cond_force_retrain: True

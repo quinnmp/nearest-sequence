@@ -6,4 +6,4 @@ hidden_dims:
    - 128
    - 128
    - 128
-cond_force_retrain: False
+cond_force_retrain: True

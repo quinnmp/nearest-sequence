@@ -263,7 +263,6 @@ class KNNExpertDataset(Dataset):
             for i in range(len(self)):
                 _, _, distances, _, _ = self[i]
                 all_distances.extend(distances.cpu().numpy())
-                print(i)
 
             self.distance_scaler = FastScaler()
             self.distance_scaler.fit(all_distances)
@@ -320,12 +319,16 @@ class KNNExpertDataset(Dataset):
         else:
             return data.states, data.actions, data.distances, data.target_action, data.weights
 
-def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth"):
+def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth", loaded_optimizer=None):
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
 
     model.to(device)
     criterion = nn.MSELoss()
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=decay, eps=1e-8, amsgrad=False)
+    if loaded_optimizer is not None:
+        optimizer = loaded_optimizer
+    else:
+        print("Constructing optimizer")
+        optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=decay, eps=1e-8, amsgrad=False)
 
     best_val_loss = float('inf')
     
@@ -379,9 +382,10 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
         else:
             # If no validation loader, save the model at the end of training
             print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")
-            torch.save(model, model_path)
+            # torch.save({'model': model, 'optimizer': optimizer}, model_path)
 
-    torch.save(model, model_path)
+    print(f"Saving model to {model_path}")
+    torch.save({'model': model, 'optimizer': optimizer}, model_path)
     return model
 
 def train_model_tqdm(model, train_loader, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth"):

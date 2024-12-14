@@ -87,8 +87,10 @@ class NNAgent:
             # Check if the model already exists
             if os.path.exists(model_path) and not policy_cfg.get('cond_force_retrain', False):
                 # Load the model if it exists
-                self.model = torch.load(model_path, weights_only=False)
+                checkpoint = torch.load(model_path, weights_only=False)
+                self.model = checkpoint['model']
             else:
+
                 def worker_init_fn(worker_id):
                     np.random.seed(42 + worker_id)
 
@@ -120,26 +122,33 @@ class NNAgent:
 
                 state_dim = train_dataset[0][0][0].shape[0]
                 action_dim = train_dataset[0][3].shape[0]
-                model = KNNConditioningModel(
-                    state_dim=state_dim,
-                    action_dim=action_dim,
-                    k=self.candidates,
-                    action_scaler=train_dataset.action_scaler,
-                    distance_scaler=train_dataset.distance_scaler,
-                    final_neighbors_ratio=self.final_neighbors_ratio,
-                    hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
-                    dropout_rate=policy_cfg.get('dropout', 0.1),
-                    bc_baseline=self.method == NN_METHOD.BC
-                )
+                if os.path.exists(model_path) and policy_cfg.get('warm_start', False):
+                    checkpoint = torch.load(model_path, weights_only=False)
+                    model = checkpoint['model']
+                    optimizer = checkpoint['optimizer']
+                else:
+                    optimizer = None
+                    model = KNNConditioningModel(
+                        state_dim=state_dim,
+                        action_dim=action_dim,
+                        k=self.candidates,
+                        action_scaler=train_dataset.action_scaler,
+                        distance_scaler=train_dataset.distance_scaler,
+                        final_neighbors_ratio=self.final_neighbors_ratio,
+                        hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
+                        dropout_rate=policy_cfg.get('dropout', 0.1),
+                        bc_baseline=self.method == NN_METHOD.BC
+                    )
 
                 self.model = train_model(
                     model, 
                     train_loader, 
                     val_loader=val_loader,
                     num_epochs=policy_cfg.get('epochs', 1000), 
-                    lr=policy_cfg.get('lr', 1e-3), 
-                    decay=policy_cfg.get('weight_decay', 1e-5), 
-                    model_path=model_path
+                    lr=float(policy_cfg.get('lr', 1e-3)), 
+                    decay=float(policy_cfg.get('weight_decay', 1e-5)), 
+                    model_path=model_path,
+                    loaded_optimizer=optimizer
                 )
 
             self.model.eval()

@@ -17,7 +17,6 @@ import torchvision.transforms as transforms
 from PIL import Image
 import metaworld
 import metaworld.envs.mujoco.env_dict as _env_dict
-import mujoco
 
 # Load the pre-trained DinoV2 model
 model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
@@ -90,10 +89,6 @@ else:
     nq = env.model.nq - unobserved_nq
     nv = env.model.nv
 
-model_obj = mujoco.MjModel.from_xml_path('/home/quinn/Documents/research/nn/data/new_hopper.xml')
-env_data = mujoco.MjData(model_obj)
-renderer = mujoco.Renderer(model_obj)
-
 img_data = []
 for traj in range(len(data)):
     traj_obs = []
@@ -107,10 +102,9 @@ for traj in range(len(data)):
             env.set_state(
                 np.hstack((np.zeros(unobserved_nq), data[traj]['observations'][ob][:nq])), 
                 data[traj]['observations'][ob][-nv:])
-        renderer.update_scene(env_data)
-        frame = renderer.render()
+        frame = env.render(mode='rgb_array')
         traj_obs.append(process_rgb_array(frame))
-        plt.imsave('hopper_frame.png', frame)
+        # plt.imsave('hopper_frame.png', frame)
     stacked_traj_obs = stack_with_previous(traj_obs, stack_size=10)
     img_data.append({'observations': stacked_traj_obs, 'actions': data[traj]['actions']})
 
