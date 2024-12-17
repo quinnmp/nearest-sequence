@@ -46,11 +46,12 @@ def nn_eval(config, nn_agent):
     img = config.get('img', False)
 
     if img:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         # Load the pre-trained DinoV2 model
-        model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
+        model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14').to(device)
         model.eval()
 
-# Preprocessing transforms
         transform = transforms.Compose([
             transforms.Resize(224),  # DinoV2 expects 224x224 input
             transforms.CenterCrop(224),
@@ -58,7 +59,6 @@ def nn_eval(config, nn_agent):
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
-# If you have an RGB numpy array from your environment
         def process_rgb_array(rgb_array):
             # Handle 4-channel image (RGBA)
             if rgb_array.shape[2] == 4:
@@ -69,7 +69,7 @@ def nn_eval(config, nn_agent):
             image = Image.fromarray((rgb_array * 255).astype(np.uint8))
             
             # Apply transformations
-            input_tensor = transform(image).unsqueeze(0)  # Add batch dimension
+            input_tensor = transform(image).unsqueeze(0).to(device)  # Add batch dimension
             
             # Extract features
             with torch.no_grad():
@@ -120,6 +120,7 @@ def nn_eval(config, nn_agent):
         steps = 0
 
         while True:
+            start = time.time()
             if img:
                 # Stack observations with history
                 stacked_observation = stack_with_previous(obs_history)
@@ -160,9 +161,8 @@ def nn_eval(config, nn_agent):
             if env_name == "push_t" and steps > 200:
                 break
             steps += 1
-            start = time.time()
-            print(steps)
-            print(f"Step time: {time.time() - time}")
+            # print(steps)
+            print(f"Step time: {time.time() - start}")
 
         # print(episode_reward)
         episode_rewards.append(episode_reward)
