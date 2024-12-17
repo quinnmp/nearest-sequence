@@ -14,10 +14,10 @@ def objective(trial, env_config_path, policy_config_path):
         policy_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
     # Suggest parameter values for optimization
-    policy_cfg['epochs'] = trial.suggest_int('epochs', 10, 2000)
+    policy_cfg['epochs'] = trial.suggest_int('epochs', 10, 500)
     policy_cfg['batch_size'] = trial.suggest_categorical('batch_size', [2**i for i in range(2, 9)])  # 2 to 256
-    layer_size = trial.suggest_categorical('layer_size', [2**i for i in range(4, 11)])  # 16 to 1024
-    num_layers = trial.suggest_int('num_layers', 2, 34)
+    layer_size = trial.suggest_categorical('layer_size', [2**i for i in range(4, 11)])  # 16 to 2048
+    num_layers = trial.suggest_int('num_layers', 2, 4)
     policy_cfg['hidden_dims'] = [layer_size] * num_layers
 
     # Initialize the NNAgent with the updated config

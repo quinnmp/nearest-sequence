@@ -18,13 +18,10 @@ if __name__ == "__main__":
     print(env_cfg)
     print(policy_cfg)
 
-    policy_cfg['epochs'] = 10
-    agent = nn_agent.NNAgentEuclidean(env_cfg, policy_cfg)
 
-    policy_cfg['warm_start'] = True
-    policy_cfg['epochs'] = 10
-    for k in range(20, 1000, 10):
+    for k in range(10, 1000, 10):
         print(k)
+        policy_cfg['k_neighbors'] = k
         agent = nn_agent.NNAgentEuclidean(env_cfg, policy_cfg)
 
         nn_eval(env_cfg, agent)

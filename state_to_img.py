@@ -19,7 +19,7 @@ import metaworld
 import metaworld.envs.mujoco.env_dict as _env_dict
 
 # Load the pre-trained DinoV2 model
-model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14')
+model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
 model.eval()
 
 # Preprocessing transforms

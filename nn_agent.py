@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from nn_conditioning_model import KNNExpertDataset, KNNConditioningModel, KNNConditioningTransformerModel, train_model, train_model_tqdm
 from torch.utils.data import Dataset, DataLoader, random_split
 import torch
+import torch.nn as nn
 import time
 from numba import jit, njit, prange, float64, int64
 from scipy.linalg import lstsq
@@ -140,6 +141,8 @@ class NNAgent:
                         bc_baseline=self.method == NN_METHOD.BC
                     )
 
+                model = nn.DataParallel(model)
+
                 self.model = train_model(
                     model, 
                     train_loader, 
@@ -223,8 +226,6 @@ class NNAgentEuclidean(NNAgent):
             self.plot.update(traj_nums[final_neighbor_indices], obs_nums[final_neighbor_indices], self.obs_history, self.lookback)
 
         if self.method == NN_METHOD.KNN_AND_DIST or self.method == NN_METHOD.COND:
-            # This is the only method that doesn't actually return an action
-            # It returns neighbor states and distances for training our conditioning model
             neighbor_states = self.flattened_obs_matrix[final_neighbors]
             neighbor_actions = self.flattened_act_matrix[final_neighbors]
 
@@ -239,7 +240,12 @@ class NNAgentEuclidean(NNAgent):
             if self.method == NN_METHOD.KNN_AND_DIST:
                 return neighbor_states, neighbor_actions, neighbor_distances, neighbor_weights
             else:
-                return self.model(neighbor_states, neighbor_actions, neighbor_distances, neighbor_weights)
+                if isinstance(self.model, nn.DataParallel):
+                    model = self.model.module
+                else:
+                    model = self.model
+
+                return model(neighbor_states, neighbor_actions, neighbor_distances, neighbor_weights)
 
         if self.method == NN_METHOD.LWR:
             X = np.empty((len(final_neighbors), self.flattened_obs_matrix.shape[1] + 1))
