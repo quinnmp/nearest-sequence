@@ -160,7 +160,9 @@ def nn_eval(config, nn_agent):
             if env_name == "push_t" and steps > 200:
                 break
             steps += 1
-            # print(steps)
+            start = time.time()
+            print(steps)
+            print(f"Step time: {time.time() - time}")
 
         # print(episode_reward)
         episode_rewards.append(episode_reward)

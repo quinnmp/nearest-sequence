@@ -20,6 +20,8 @@ import faiss
 import os
 import gmm_regressor
 from nn_util import NN_METHOD, load_expert_data, save_expert_data, create_matrices, compute_accum_distance_with_rot, compute_distance_with_rot, set_seed
+from sklearn.random_projection import GaussianRandomProjection
+
 DEBUG = False
 
 class NNAgent:
@@ -180,12 +182,12 @@ class NNAgentEuclidean(NNAgent):
             # If we have elements in our observation space that wraparound (rotations), we can't just do direct Euclidean distance
             current_ob[self.non_rot_indices] *= self.weights[self.non_rot_indices]
             all_distances, dist_vecs = compute_distance_with_rot(current_ob.astype(np.float64), self.reshaped_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
-            nearest_neighbors = np.argpartition(all_distances, kth=self.candidates, axis=None)[:self.candidates].astype(np.int64)
+            nearest_neighbors = np.argpartition(all_distances, kth=self.candidates)[:self.candidates].astype(np.int64)
         else:
             query_point = np.array([current_ob * self.weights[self.non_rot_indices]], dtype='float64')
             all_distances, nearest_neighbors = self.index.search(query_point, self.candidates)
             # This indexing is decieving - we aren't taking just the first neighbor
-            # We only have one query point, so we take the nearest neighbors correlating t othat query point [0]
+            # We only have one query point, so we take the nearest neighbors correlating to that query point [0]
             nearest_neighbors = np.array(nearest_neighbors[0], dtype=np.int64)
 
         if self.method == NN_METHOD.KNN_AND_DIST:
@@ -206,16 +208,20 @@ class NNAgentEuclidean(NNAgent):
             nearest_neighbor = np.argmin(all_distances)
             return self.act_matrix[traj_nums[nearest_neighbor]][obs_nums[nearest_neighbor]]
 
-        # How far can we look back for each neighbor trajectory?
-        # This is upper bound by min(lookback hyperparameter, length of obs history, neighbor distance into its traj)
-        max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, len(self.obs_history)), dtype=np.int64)
-        
-        accum_distances = compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, self.obs_history, self.flattened_obs_matrix, self.decay_factors, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
+        if self.lookback == 1:
+            # No lookback needed
+            accum_distances = all_distances[nearest_neighbors]
+        else:
+            # How far can we look back for each neighbor trajectory?
+            # This is upper bound by min(lookback hyperparameter, length of obs history, neighbor distance into its traj)
+            max_lookbacks = np.minimum(self.lookback, np.minimum(obs_nums + 1, len(self.obs_history)), dtype=np.int64)
+            
+            accum_distances = compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, self.obs_history, self.flattened_obs_matrix, self.decay_factors, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
 
-        if self.method == NN_METHOD.NS:
-            # If we're doing direct nearest sequence, return that action
-            nearest_sequence = np.argmin(accum_distances)
-            return self.act_matrix[traj_nums[nearest_sequence]][obs_nums[nearest_sequence]]
+            if self.method == NN_METHOD.NS:
+                # If we're doing direct nearest sequence, return that action
+                nearest_sequence = np.argmin(accum_distances)
+                return self.act_matrix[traj_nums[nearest_sequence]][obs_nums[nearest_sequence]]
 
         # Do a final pass and pick only the top (self.final_neighbors_ratio * 100)% of neighbors based on this new accumulated distance
         final_neighbor_num = math.floor(len(accum_distances) * self.final_neighbors_ratio)
@@ -248,15 +254,24 @@ class NNAgentEuclidean(NNAgent):
                 return model(neighbor_states, neighbor_actions, neighbor_distances, neighbor_weights)
 
         if self.method == NN_METHOD.LWR:
-            X = np.empty((len(final_neighbors), self.flattened_obs_matrix.shape[1] + 1))
+            obs_features = self.flattened_obs_matrix[final_neighbors]
+            
+            if obs_features.shape[1] > 100:
+                n_components = max(100, int(0.01 * obs_features.shape[1]))  # At least 1% or 50 components
+                rp = GaussianRandomProjection(n_components=n_components)
+                obs_features = rp.fit_transform(obs_features)
+
+                current_ob = rp.transform(current_ob.reshape(1, -1)).flatten()
+
+            X = np.empty((len(final_neighbors), obs_features.shape[1] + 1))
             X[:, 0] = 1  # First column of ones
-            X[:, 1:] = self.flattened_obs_matrix[final_neighbors]
+            X[:, 1:] = obs_features
 
             Y = self.flattened_act_matrix[final_neighbors]
             X_weights = X.T * accum_distances[final_neighbor_indices]
 
             try:
-                theta, _, _, _ = np.linalg.lstsq(X_weights @ X, X_weights @ Y, rcond=None)
+                theta = np.linalg.lstsq(X_weights @ X, X_weights @ Y, rcond=None)[0]
             except np.linalg.LinAlgError:
                 try:
                     print("FAILED TO CONVERGE, ADDING NOISE")
