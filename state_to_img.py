@@ -42,7 +42,7 @@ def process_rgb_array(rgb_array):
     
     # Apply transformations
     input_tensor = transform(image).unsqueeze(0)  # Add batch dimension
-    
+
     # Extract features
     with torch.no_grad():
         features = model(input_tensor)
@@ -103,6 +103,7 @@ for traj in range(len(data)):
                 np.hstack((np.zeros(unobserved_nq), data[traj]['observations'][ob][:nq])), 
                 data[traj]['observations'][ob][-nv:])
         frame = env.render(mode='rgb_array')
+        breakpoint()
         traj_obs.append(process_rgb_array(frame))
         # plt.imsave('hopper_frame.png', frame)
     stacked_traj_obs = stack_with_previous(traj_obs, stack_size=10)

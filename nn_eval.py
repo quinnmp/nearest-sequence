@@ -39,7 +39,7 @@ def stack_with_previous(obs_list, stack_size=10):
         return np.concatenate([obs_list[0]] * (stack_size - len(obs_list)) + obs_list, axis=0)
     return np.concatenate(obs_list[-stack_size:], axis=0)
 
-def process_rgb_array(rgb_array):
+def process_rgb_array(rgb_array, transform, device, model):
     # Handle 4-channel image (RGBA)
     if rgb_array.shape[2] == 4:
         # Convert RGBA to RGB by dropping the alpha channel
@@ -106,7 +106,7 @@ def nn_eval(config, nn_agent):
                 observation[-nv:])
 
             frame = img_env.render(mode='rgb_array')
-            observation = process_rgb_array(frame)
+            observation = process_rgb_array(frame, transform, device, model)
             obs_history = [observation] 
         else:
             if env_name == "push_t":
@@ -138,7 +138,7 @@ def nn_eval(config, nn_agent):
                     np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
                     observation[-nv:])
                 frame = img_env.render(mode='rgb_array')
-                observation = process_rgb_array(frame)
+                observation = process_rgb_array(frame, transform, device, model)
                 obs_history.append(observation)
                 if len(obs_history) > 3:
                     obs_history.pop(0)
@@ -162,7 +162,7 @@ def nn_eval(config, nn_agent):
                 break
             steps += 1
             # print(steps)
-            print(f"Step time: {time.time() - start}")
+            # print(f"Step time: {time.time() - start}")
 
         # print(episode_reward)
         episode_rewards.append(episode_reward)
@@ -362,8 +362,18 @@ def nn_eval_open_loop_img(config, nn_agent_dan, nn_agent_img):
 
         stacked_observation = img_obs_matrix[state_traj][state_num]
 
-        _, dan_actions, _, _ = nn_agent_dan.get_action(obs, normalize=False)
-        _, img_actions, _, _ = nn_agent_img.get_action(stacked_observation)
+        _, dan_actions, dan_distances, dan_weights = nn_agent_dan.get_action(obs, normalize=False)
+        _, img_actions, img_distances, img_weights = nn_agent_img.get_action(stacked_observation)
+
+        combined = [(action, weight) for action, weight in zip(dan_actions, dan_weights)]
+        sorted_combined = sorted(combined, key=lambda x: x[1], reverse=True)
+        sorted_actions_weights = np.array(sorted_combined, dtype=object)
+        print(sorted_actions_weights)
+
+        combined = [(action, weight) for action, weight in zip(img_actions, img_weights)]
+        sorted_combined = sorted(combined, key=lambda x: x[1], reverse=True)
+        sorted_actions_weights = np.array(sorted_combined, dtype=object)
+        print(sorted_actions_weights)
 
         scores += len(set(map(tuple, dan_actions)) & set(map(tuple, img_actions))) / len(dan_actions)
     print(f"Average score = {scores / len(obs_array)}")

@@ -1,6 +1,7 @@
 method: cond
-lookback: 140
-decay: 0
+k_neighbors: 140
+lookback: 1
+decay_rate: 0
 
 epochs: 405
 batch_size: 256
