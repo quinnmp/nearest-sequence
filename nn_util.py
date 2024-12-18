@@ -148,6 +148,48 @@ def compute_distance_with_rot(curr_ob: np.ndarray, flattened_obs_matrix: np.ndar
 
     return neighbor_distances, neighbor_vec_distances
 
+@njit([(float64[:], float64[:, :], int64[:], int64[:], float64[:])], parallel=True)
+def compute_cosine_distance(curr_ob: np.ndarray, flattened_obs_matrix: np.ndarray, 
+                            rot_indices: np.ndarray, non_rot_indices: np.ndarray, 
+                            rot_weights: np.ndarray):
+    m = len(flattened_obs_matrix)
+
+    neighbor_distances = np.empty(m, dtype=np.float64)
+    neighbor_vec_diff = np.empty_like(flattened_obs_matrix)
+
+    # Norm of curr_ob for non-rotational indices
+    curr_ob_norm = 0.0
+    for j in non_rot_indices:
+        curr_ob_norm += curr_ob[j] * curr_ob[j]
+    curr_ob_norm = np.sqrt(curr_ob_norm)
+
+    for neighbor in prange(m):
+        nb = flattened_obs_matrix[neighbor]
+
+        # Dot product and nb norm calculation
+        dot_product = 0.0
+        nb_norm = 0.0
+        
+        for j in non_rot_indices:
+            dot_product += nb[j] * curr_ob[j]
+            nb_norm += nb[j] * nb[j]
+            neighbor_vec_diff[neighbor, j] = nb[j] - curr_ob[j]
+
+        nb_norm = np.sqrt(nb_norm)
+
+        # Avoid division by zero
+        if curr_ob_norm > 0.0 and nb_norm > 0.0:
+            cosine_similarity = dot_product / (curr_ob_norm * nb_norm)
+        else:
+            cosine_similarity = 0.0
+
+        # Convert similarity to distance
+        cosine_distance = 1.0 - cosine_similarity
+
+        neighbor_distances[neighbor] = cosine_distance
+
+    return neighbor_distances, neighbor_vec_diff
+
 class NN_METHOD:
     NN, NS, LWR, GMM, COND, KNN_AND_DIST, BC = range(7)
 

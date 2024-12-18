@@ -39,6 +39,24 @@ def stack_with_previous(obs_list, stack_size=10):
         return np.concatenate([obs_list[0]] * (stack_size - len(obs_list)) + obs_list, axis=0)
     return np.concatenate(obs_list[-stack_size:], axis=0)
 
+def process_rgb_array(rgb_array):
+    # Handle 4-channel image (RGBA)
+    if rgb_array.shape[2] == 4:
+        # Convert RGBA to RGB by dropping the alpha channel
+        rgb_array = rgb_array[:, :, :3]
+
+    # Convert numpy array to PIL Image
+    image = Image.fromarray((rgb_array * 255).astype(np.uint8))
+    
+    # Apply transformations
+    input_tensor = transform(image).unsqueeze(0).to(device)  # Add batch dimension
+    
+    # Extract features
+    with torch.no_grad():
+        features = model(input_tensor)
+
+    return features.cpu().numpy()[0]
+
 def nn_eval(config, nn_agent):
     env_name = config['name']
     is_metaworld = config.get('metaworld', False)
@@ -58,24 +76,6 @@ def nn_eval(config, nn_agent):
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
-
-        def process_rgb_array(rgb_array):
-            # Handle 4-channel image (RGBA)
-            if rgb_array.shape[2] == 4:
-                # Convert RGBA to RGB by dropping the alpha channel
-                rgb_array = rgb_array[:, :, :3]
-
-            # Convert numpy array to PIL Image
-            image = Image.fromarray((rgb_array * 255).astype(np.uint8))
-            
-            # Apply transformations
-            input_tensor = transform(image).unsqueeze(0).to(device)  # Add batch dimension
-            
-            # Extract features
-            with torch.no_grad():
-                features = model(input_tensor)
-
-            return features.cpu().numpy()[0]
 
     if is_metaworld:
         env = _env_dict.MT50_V2[env_name]()
@@ -343,16 +343,41 @@ def nn_eval_closed_loop(config, nn_agent):
     )
     return np.mean(episode_rewards)
 
+def nn_eval_open_loop_img(config, nn_agent_dan, nn_agent_img):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    obs_matrix, act_matrix, traj_starts = nn_util.create_matrices(nn_util.load_expert_data("data/hopper-expert-v2_1_standardized.pkl")[:1])
+    img_obs_matrix, img_act_matrix, img_traj_starts = nn_util.create_matrices(nn_util.load_expert_data("data/hopper-expert-v2_1_img.pkl")[:1])
+
+    obs_array = np.concatenate(obs_matrix, dtype=np.float64)
+    act_array = np.concatenate(act_matrix)
+
+    scores = 0.0
+    for idx, (obs, act) in enumerate(zip(obs_array, act_array)):
+        state_traj = np.searchsorted(traj_starts, idx, side='right') - 1
+        state_num = idx - traj_starts[state_traj]
+
+        nn_agent_dan.obs_history = obs_matrix[state_traj][:state_num][::-1]
+        nn_agent_img.obs_history = img_obs_matrix[state_traj][:state_num][::-1]
+
+        stacked_observation = img_obs_matrix[state_traj][state_num]
+
+        _, dan_actions, _, _ = nn_agent_dan.get_action(obs, normalize=False)
+        _, img_actions, _, _ = nn_agent_img.get_action(stacked_observation)
+
+        scores += len(set(map(tuple, dan_actions)) & set(map(tuple, img_actions))) / len(dan_actions)
+    print(f"Average score = {scores / len(obs_array)}")
+
 def nn_eval_open_loop(config, nn_agent_dan, nn_agent_bc):
     import matplotlib.pyplot as plt
-    from mpl_toolkits.mplot3d import Axes3D
-    from matplotlib.animation import FFMpegWriter
+    from mpl_toolkits.mplot3d import axes3d
+    from matplotlib.animation import ffmpegwriter
 
     obs_matrix, act_matrix, traj_starts = nn_util.create_matrices(nn_util.load_expert_data("data/hopper-expert-v2_25_standardized.pkl")[:1])
     obs_array = np.concatenate(obs_matrix, dtype=np.float64)
     act_array = np.concatenate(act_matrix)
 
-    writer = FFMpegWriter(fps=60, metadata=dict(artist='Me'), bitrate=5000)
+    writer = ffmpegwriter(fps=60, metadata=dict(artist='me'), bitrate=5000)
     video_filename = 'nn_eval_sanity.mp4'
 
     fig = plt.figure()
@@ -369,8 +394,8 @@ def nn_eval_open_loop(config, nn_agent_dan, nn_agent_bc):
             nn_agent_dan.obs_history = obs_matrix[state_traj][:state_num][::-1]
 
             with torch.no_grad():
-                nn_agent_bc.get_action(obs, normalize=False)
-                nn_agent_dan.get_action(obs, normalize=False)
+                nn_agent_bc.get_action(obs, normalize=false)
+                nn_agent_dan.get_action(obs, normalize=false)
 
                 normalized_act = nn_agent_bc.model.action_scaler.transform(act)
 
@@ -388,13 +413,13 @@ def nn_eval_open_loop(config, nn_agent_dan, nn_agent_bc):
 
                 x, y, z = points[:, 0], points[:, 1], points[:, 2]
 
-                ax.scatter(x, y, z, c='b', marker='o', label='Predicted actions', alpha=0.1)
+                ax.scatter(x, y, z, c='b', marker='o', label='predicted actions', alpha=0.1)
 
-                ax.scatter(0, 0, 0, c='r', marker='o', s=100, label='Actual action')
+                ax.scatter(0, 0, 0, c='r', marker='o', s=100, label='actual action')
 
-                ax.scatter(bc_act_diff[0], bc_act_diff[1], bc_act_diff[2], c='y', s=100, label='BC action')
+                ax.scatter(bc_act_diff[0], bc_act_diff[1], bc_act_diff[2], c='y', s=100, label='bc action')
 
-                ax.scatter(mean_point[0], mean_point[1], mean_point[2], c='g', marker='o', s=100, label='Mean Predicted Action')
+                ax.scatter(mean_point[0], mean_point[1], mean_point[2], c='g', marker='o', s=100, label='mean predicted action')
 
                 ax.set_xlim([-4, 4])
                 ax.set_ylim([-4, 4])
@@ -402,7 +427,7 @@ def nn_eval_open_loop(config, nn_agent_dan, nn_agent_bc):
 
                 formatted_dan_error = np.array2string(np.mean(dan_errors, axis=0), formatter={'float_kind': lambda x: f"{x:.2f}"})
                 formatted_bc_error = np.array2string(np.mean(bc_errors, axis=0), formatter={'float_kind': lambda x: f"{x:.2f}"})
-                ax.set_title(f"Mean DAN Error: {formatted_dan_error}, Mean BC Error: {formatted_bc_error}")
+                ax.set_title(f"mean dan error: {formatted_dan_error}, mean bc error: {formatted_bc_error}")
 
                 ax.legend(loc='lower left')
                 writer.grab_frame()
@@ -423,8 +448,11 @@ if __name__ == "__main__":
 
     # for i in range(10):
     # NOT STANDARDIZED
-    dan_agent = nn_agent.NNAgentEuclidean(env_cfg, policy_cfg)
-    nn_eval(env_cfg, dan_agent)
+    dan_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
+    env_cfg_copy = env_cfg.copy()
+    env_cfg_copy['demo_pkl'] = "data/hopper-expert-v2_1_img.pkl"
+    img_agent = nn_agent.NNAgentEuclidean(env_cfg_copy, policy_cfg)
+    nn_eval_open_loop_img(env_cfg, dan_agent, img_agent)
     
     # policy_cfg_copy = policy_cfg.copy()
     # policy_cfg_copy['method'] = 'bc'

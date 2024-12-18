@@ -19,8 +19,9 @@ import math
 import faiss
 import os
 import gmm_regressor
-from nn_util import NN_METHOD, load_expert_data, save_expert_data, create_matrices, compute_accum_distance_with_rot, compute_distance_with_rot, set_seed
+from nn_util import NN_METHOD, load_expert_data, save_expert_data, create_matrices, compute_accum_distance_with_rot, compute_distance_with_rot, set_seed, compute_cosine_distance
 from sklearn.random_projection import GaussianRandomProjection
+from sklearn.decomposition import PCA
 
 DEBUG = False
 
@@ -174,30 +175,24 @@ class NNAgentEuclidean(NNAgent):
 
         self.update_obs_history(current_ob)
 
-        if self.method == NN_METHOD.KNN_AND_DIST:
-            self.candidates += 1
-
         # if len(self.rot_indices) > 0:
         if True:
             # If we have elements in our observation space that wraparound (rotations), we can't just do direct Euclidean distance
             current_ob[self.non_rot_indices] *= self.weights[self.non_rot_indices]
             all_distances, dist_vecs = compute_distance_with_rot(current_ob.astype(np.float64), self.reshaped_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
+
+            if np.min(all_distances) == 0:
+                all_distances[np.argmin(all_distances)] = np.max(all_distances) + 1
+
             nearest_neighbors = np.argpartition(all_distances, kth=self.candidates)[:self.candidates].astype(np.int64)
+            # print(nearest_neighbors)
+            # print(all_distances[nearest_neighbors])
         else:
             query_point = np.array([current_ob * self.weights[self.non_rot_indices]], dtype='float64')
             all_distances, nearest_neighbors = self.index.search(query_point, self.candidates)
             # This indexing is decieving - we aren't taking just the first neighbor
             # We only have one query point, so we take the nearest neighbors correlating to that query point [0]
             nearest_neighbors = np.array(nearest_neighbors[0], dtype=np.int64)
-
-        if self.method == NN_METHOD.KNN_AND_DIST:
-            # Remove the nearest neighbor
-            # We only use this method when training a model on states in the dataset
-            # So the closest neighbor will be itself - unhelpful!
-            nearest_index = np.argmin(all_distances)
-            all_distances = np.delete(all_distances, nearest_index)
-            nearest_neighbors = np.delete(nearest_neighbors, np.where(nearest_neighbors == nearest_index))
-            self.candidates -= 1
 
         # Find corresponding trajectories for each neighbor
         traj_nums = np.searchsorted(self.traj_starts, nearest_neighbors, side='right') - 1
@@ -257,11 +252,10 @@ class NNAgentEuclidean(NNAgent):
             obs_features = self.flattened_obs_matrix[final_neighbors]
             
             if obs_features.shape[1] > 100:
-                n_components = max(100, int(0.01 * obs_features.shape[1]))  # At least 1% or 50 components
-                rp = GaussianRandomProjection(n_components=n_components)
-                obs_features = rp.fit_transform(obs_features)
+                pca = PCA(n_components=0.99)
+                obs_features = pca.fit_transform(obs_features)
 
-                current_ob = rp.transform(current_ob.reshape(1, -1)).flatten()
+                current_ob = pca.transform(current_ob.reshape(1, -1)).flatten()
 
             X = np.empty((len(final_neighbors), obs_features.shape[1] + 1))
             X[:, 0] = 1  # First column of ones
