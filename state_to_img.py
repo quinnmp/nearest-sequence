@@ -49,7 +49,7 @@ def process_rgb_array(rgb_array):
     
     return features.cpu().numpy()[0]
 
-def stack_with_previous(obs_list, stack_size=10):
+def stack_with_previous(obs_list, stack_size):
     padded_obs = [obs_list[0] for _ in range(stack_size - 1)] + obs_list
     stacked_obs = []
 
@@ -75,6 +75,7 @@ for traj in data:
 obs = np.concatenate(obs_matrix)
 
 is_metaworld = env_cfg.get('metaworld', False)
+stack_size = env_cfg.get('stack_size', 10)
 if is_metaworld:
     env = _env_dict.MT50_V2[env_cfg['name']]()
     env._partially_observable = False
@@ -93,20 +94,13 @@ img_data = []
 for traj in range(len(data)):
     traj_obs = []
     for ob in range(len(data[traj]['observations'])):
-        env.reset()
-        if is_metaworld:
-            env.set_state(
-                np.hstack((np.zeros(unobserved_nq), data[traj]['observations'][ob][:nq])), 
-                data[traj]['observations'][ob][:-nq])
-        else:
-            env.set_state(
-                np.hstack((np.zeros(unobserved_nq), data[traj]['observations'][ob][:nq])), 
-                data[traj]['observations'][ob][-nv:])
+        env.set_state(
+            np.hstack((np.zeros(unobserved_nq), data[traj]['observations'][ob][:nq])), 
+            data[traj]['observations'][ob][-nv:])
         frame = env.render(mode='rgb_array')
-        breakpoint()
         traj_obs.append(process_rgb_array(frame))
         # plt.imsave('hopper_frame.png', frame)
-    stacked_traj_obs = stack_with_previous(traj_obs, stack_size=10)
+    stacked_traj_obs = stack_with_previous(traj_obs, stack_size=stack_size)
     img_data.append({'observations': stacked_traj_obs, 'actions': data[traj]['actions']})
 
 pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_img.pkl', 'wb'))

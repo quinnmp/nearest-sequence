@@ -19,7 +19,7 @@ import math
 import faiss
 import os
 import gmm_regressor
-from nn_util import NN_METHOD, load_expert_data, save_expert_data, create_matrices, compute_accum_distance_with_rot, compute_distance_with_rot, set_seed, compute_cosine_distance
+from nn_util import NN_METHOD, load_expert_data, save_expert_data, create_matrices, compute_accum_distance_with_rot, compute_distance, compute_distance_with_rot, set_seed, compute_cosine_distance
 from sklearn.random_projection import GaussianRandomProjection
 from sklearn.decomposition import PCA
 
@@ -31,13 +31,26 @@ class NNAgent:
         self.env_cfg = env_cfg
         self.policy_cfg = policy_cfg
 
+        self.method = NN_METHOD.from_string(policy_cfg.get('method'))
+
         # If this is already defined, a subclass has intentionally set it
         if not hasattr(self, 'expert_data_path'):
             self.expert_data_path = env_cfg.get('demo_pkl')
         self.expert_data = load_expert_data(self.expert_data_path)
-        self.method = NN_METHOD.from_string(policy_cfg.get('method'))
-
         self.obs_matrix, self.act_matrix, self.traj_starts = create_matrices(self.expert_data)
+        self.flattened_obs_matrix = np.concatenate(self.obs_matrix, dtype=np.float64)
+        self.flattened_act_matrix = np.concatenate(self.act_matrix)
+
+        if env_cfg.get('model_pkl'):
+            self.use_model_data = True
+            if not hasattr(self, 'model_data_path'):
+                self.model_data_path = env_cfg.get('model_pkl')
+            self.model_data = load_expert_data(self.model_data_path)
+            self.model_obs_matrix, self.model_act_matrix, _ = create_matrices(self.model_data)
+            self.flattened_model_obs_matrix = np.concatenate(self.model_obs_matrix, dtype=np.float64)
+            self.flattened_model_act_matrix = np.concatenate(self.model_act_matrix)
+        else:
+            self.use_model_data = False
 
         self.candidates = policy_cfg.get('k_neighbors', 100)
         self.lookback = policy_cfg.get('lookback', 10)
@@ -48,8 +61,6 @@ class NNAgent:
         self.non_rot_indices = np.array([i for i in range(self.obs_matrix[0][0].shape[0]) if i not in self.rot_indices], dtype=np.int64)
 
         # Precompute constants
-        self.flattened_obs_matrix = np.concatenate(self.obs_matrix, dtype=np.float64)
-        self.flattened_act_matrix = np.concatenate(self.act_matrix)
         self.obs_history = np.array([], dtype=np.float64)
 
         self.i_array = np.arange(1, self.lookback + 1, dtype=np.float64)
@@ -66,12 +77,6 @@ class NNAgent:
         self.index.hnsw.efConstruction = 1000
         self.index.hnsw.efSearch = 400
 
-        # Get the number of available CPU cores
-        num_threads = os.cpu_count()  # Number of logical CPUs
-        faiss.omp_set_num_threads(num_threads)  # Set to max threads
-
-        # Add the data points to the index
-        self.index.add(self.reshaped_obs_matrix.astype('float64'))
         if env_cfg.get('plot', False):
             self.plot = nn_plot.NNPlot(self.expert_data)
         else:
@@ -169,30 +174,20 @@ class NNAgent:
         self.obs_history = np.array([], dtype=np.float64)
 
 class NNAgentEuclidean(NNAgent):
-    def get_action(self, current_ob):
+    def get_action(self, current_ob, current_model_ob=None):
         if self.method == NN_METHOD.BC:
             return self.model(current_ob, -1, -1, -1)
 
         self.update_obs_history(current_ob)
 
-        # if len(self.rot_indices) > 0:
-        if True:
-            # If we have elements in our observation space that wraparound (rotations), we can't just do direct Euclidean distance
-            current_ob[self.non_rot_indices] *= self.weights[self.non_rot_indices]
-            all_distances, dist_vecs = compute_distance_with_rot(current_ob.astype(np.float64), self.reshaped_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
+        # If we have elements in our observation space that wraparound (rotations), we can't just do direct Euclidean distance
+        current_ob[self.non_rot_indices] *= self.weights[self.non_rot_indices]
+        all_distances, dist_vecs = compute_cosine_distance(current_ob.astype(np.float64), self.reshaped_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
 
-            if np.min(all_distances) == 0:
-                all_distances[np.argmin(all_distances)] = np.max(all_distances) + 1
+        if np.min(all_distances) == 0:
+            all_distances[np.argmin(all_distances)] = np.max(all_distances) + 1
 
-            nearest_neighbors = np.argpartition(all_distances, kth=self.candidates)[:self.candidates].astype(np.int64)
-            # print(nearest_neighbors)
-            # print(all_distances[nearest_neighbors])
-        else:
-            query_point = np.array([current_ob * self.weights[self.non_rot_indices]], dtype='float64')
-            all_distances, nearest_neighbors = self.index.search(query_point, self.candidates)
-            # This indexing is decieving - we aren't taking just the first neighbor
-            # We only have one query point, so we take the nearest neighbors correlating to that query point [0]
-            nearest_neighbors = np.array(nearest_neighbors[0], dtype=np.int64)
+        nearest_neighbors = np.argpartition(all_distances, kth=self.candidates)[:self.candidates].astype(np.int64)
 
         # Find corresponding trajectories for each neighbor
         traj_nums = np.searchsorted(self.traj_starts, nearest_neighbors, side='right') - 1
@@ -227,8 +222,14 @@ class NNAgentEuclidean(NNAgent):
             self.plot.update(traj_nums[final_neighbor_indices], obs_nums[final_neighbor_indices], self.obs_history, self.lookback)
 
         if self.method == NN_METHOD.KNN_AND_DIST or self.method == NN_METHOD.COND:
-            neighbor_states = self.flattened_obs_matrix[final_neighbors]
-            neighbor_actions = self.flattened_act_matrix[final_neighbors]
+            if self.use_model_data:
+                neighbor_states = self.flattened_model_obs_matrix[final_neighbors]
+                neighbor_actions = self.flattened_model_act_matrix[final_neighbors]
+                reshaped_model_obs_matrix = self.flattened_model_obs_matrix.reshape(-1, len(self.model_obs_matrix[0][0]))
+                _, dist_vecs = compute_distance(current_model_ob.astype(np.float64), reshaped_model_obs_matrix)
+            else:
+                neighbor_states = self.flattened_obs_matrix[final_neighbors]
+                neighbor_actions = self.flattened_act_matrix[final_neighbors]
 
             if self.sq_instead_of_diff:
                 neighbor_distances = np.tile(current_ob, (len(final_neighbors), 1))
@@ -479,9 +480,35 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
         save_expert_data(expert_data, new_path)
         self.expert_data_path = new_path
 
+        if env_cfg.get('model_pkl'):
+            expert_data_path = env_cfg['model_pkl']
+            expert_data = load_expert_data(expert_data_path)
+            observations = np.concatenate([traj['observations'] for traj in expert_data])
+
+            rot_indices = np.array(env_cfg.get('rot_indices', []), dtype=np.int64) 
+            # Separate non-rotational dimensions
+            non_rot_indices = [i for i in range(observations.shape[1]) if i not in rot_indices]
+            non_rot_observations = observations[:, non_rot_indices]
+
+            self.model_data_scaler = FastScaler()
+            self.model_data_scaler.fit(non_rot_observations)
+
+            self.old_model_data = copy.deepcopy(expert_data)
+
+            for traj in expert_data:
+                observations = traj['observations']
+                traj['observations'][:, non_rot_indices] = self.model_data_scaler.transform(observations[:, non_rot_indices])
+
+            new_path = expert_data_path[:-4] + '_standardized.pkl'
+            save_expert_data(expert_data, new_path)
+            self.model_data_path = new_path
+
         super().__init__(env_cfg, policy_cfg)
 
-    def get_action(self, current_ob, normalize=True):
+    def get_action(self, current_ob, current_model_ob=None, normalize=True):
         if normalize:
             current_ob[self.non_rot_indices] = self.scaler.transform(current_ob[self.non_rot_indices].reshape(1, -1)).flatten()
-        return super().get_action(current_ob)
+        if current_model_ob is not None:
+            current_model_ob = self.model_data_scaler.transform(current_model_ob.reshape(1, -1)).flatten()
+
+        return super().get_action(current_ob, current_model_ob=current_model_ob)
