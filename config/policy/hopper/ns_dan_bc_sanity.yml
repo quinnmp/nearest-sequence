@@ -1,0 +1,5 @@
+method: cond
+k_neighbors: 10
+lookback: 1
+decay_rate: 0
+ratio: 1
