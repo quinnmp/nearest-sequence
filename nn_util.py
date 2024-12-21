@@ -32,6 +32,46 @@ device = None
 img_transform = None
 img_env = None
 
+def construct_env(config):
+    env_name = config['name']
+    is_metaworld = config.get('metaworld', False)
+
+    if is_metaworld:
+        env = _env_dict.MT50_V2[env_name]()
+        env._partially_observable = False
+        env._freeze_rand_vec = False
+        env._set_task_called = True
+    elif env_name == 'push_t':
+        env = PushTEnv()
+    else:
+        env = gym.make(env_name)
+
+    return env
+
+def get_action_from_obs(config, model, observation, obs_history=None):
+    img = config.get('img', False)
+    stack_size = config.get('stack_size', 10)
+
+    if img:
+        assert obs_history is not None
+        # Stack observations with history
+        obs_history.append(env_state_to_dino(env_name, observation))
+
+        if len(obs_history) > stack_size:
+            obs_history.pop(0)
+        
+        if config.get("model_pkl"):
+            img_observation = stack_with_previous(obs_history, stack_size=stack_size)
+            action = model.get_action(img_observation, current_model_ob=observation)
+        else:
+            observation = stack_with_previous(obs_history, stack_size=stack_size)
+            action = model.get_action(observation)
+    else:
+        action = model.get_action(observation)
+
+    return action
+
+
 def stack_with_previous(obs_list, stack_size):
     if len(obs_list) < stack_size:
         return np.concatenate([obs_list[0]] * (stack_size - len(obs_list)) + obs_list, axis=0)
@@ -70,6 +110,13 @@ def process_rgb_array(rgb_array):
         features = dino_model(input_tensor)
 
     return features.cpu().numpy()[0]
+
+def should_end_eval(steps, config):
+    env_name = config['name']
+    is_metaworld = config.get('metaworld', False)
+
+    return is_metaworld and steps >= 500 \
+        or env_name == "push_t" and steps > 200
 
 def crop_obs_for_env(obs, env):
     if env == "ant-expert-v2":

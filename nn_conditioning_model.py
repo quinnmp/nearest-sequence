@@ -74,12 +74,6 @@ class KNNConditioningModel(nn.Module):
         self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
     
     def forward(self, states, actions, distances, weights):
-        if isinstance(states, list):
-            states = torch.cat(states, dim=0)
-            actions = torch.cat(actions, dim=0)
-            distances = torch.cat(distances, dim=0)
-            weights = torch.cat(weights, dim=0)
-
         # Will be batchless numpy arrays at inference time
         if isinstance(states, np.ndarray):
             states = torch.tensor(states, dtype=torch.float32, device=device).unsqueeze(0)
@@ -93,11 +87,6 @@ class KNNConditioningModel(nn.Module):
                 distances = self.distance_scaler.transform(distances)
                 distances = torch.tensor(distances, dtype=torch.float32, device=device).unsqueeze(0)
                 weights = torch.tensor(weights, dtype=torch.float32, device=device).unsqueeze(0)
-
-        states = states.to(device)
-        actions = actions.to(device)
-        distances = distances.to(device)
-        weights = weights.to(device)
 
         if self.bc_baseline:
             batch_size = states.size(0)

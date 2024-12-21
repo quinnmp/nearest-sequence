@@ -6,8 +6,8 @@
 
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=16
-#SBATCH --gpus-per-task=8
+#SBATCH --cpus-per-task=1
+#SBATCH --gpus-per-task=1
 #SBATCH --mem=64G
 #SBATCH --time=72:00:00
 #SBATCH -o log/%j.out
@@ -31,7 +31,8 @@ export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 export LD_PRELOAD=$CONDA_PREFIX/lib/libGLEW.so
 export LD_PRELOAD=$CONDA_PREFIX/lib/libEGL.so:$LD_PRELOAD
 
-python -u nn_model_optimizer.py config/env/hopper_img.yml config/policy/dan_img.yml
+python -u nn_model_optimizer.py config/env/hopper_img.yml config/policy/bc_img.yml
 #python -u nn_sweep_k.py config/env/hopper_img.yml config/policy/dan_img.yml
-#python -u nn_eval.py config/env/hopper_img.yml config/policy/bc.yml
+#python -u nn_eval.py config/env/hopper_img.yml config/policy/bc_img.yml
 #python -u state_to_img.py config/env/hopper.yml
+

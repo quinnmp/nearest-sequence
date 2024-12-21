@@ -19,70 +19,80 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import mujoco
 from typing import Dict, Any
-from nn_util import crop_obs_for_env, env_state_to_dino, stack_with_previous
+from nn_util import crop_obs_for_env, construct_env, get_action_from_obs
+import copy
 
 DEBUG = False
 
-def nn_eval(config, nn_agent):
+def nn_fork_eval(config, env, steps, episode_reward, dan_agent, observation):
+    env = copy.deepcopy(env)
+    unobserved_nq = 1
+    nq = env.model.nq - unobserved_nq
+    nv = env.model.nv
+    env.seed(0)
+    env.set_state(
+        np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
+        observation[-nv:])
+    img = config.get('img', False)
     env_name = config['name']
     is_metaworld = config.get('metaworld', False)
 
-    img = config.get('img', False)
-    stack_size = config.get('stack_size', 10)
+    while not (done or eval_over(steps, config)):
+        steps += 1
 
-    if is_metaworld:
-        env = _env_dict.MT50_V2[env_name]()
-        env._partially_observable = False
-        env._freeze_rand_vec = False
-        env._set_task_called = True
-    elif env_name == 'push_t':
-        env = PushTEnv()
-    else:
-        env = gym.make(env_name)
+        action = get_action_from_obs(config, dan_agent, observation, obs_history=None)
+
+        observation, reward, done, info = env.step(action)[:4]
+
+        if not img:
+            observation = crop_obs_for_env(observation, env_name)
+
+        if env_name == "push_t":
+            episode_reward = max(episode_reward, reward)
+        else:
+            episode_reward += reward
+
+        if False:
+            frame = env.render(mode='rgb_array')
+            video_frames.append(frame)
+            # env.render(mode='human')
+
+    return episode_reward
+
+def nn_eval_split(config, dan_agent, bc_agent, trials=10):
+    env = construct_env(config)
+    img = config.get('img', False)
+    env_name = config['name']
+    is_metaworld = config.get('metaworld', False)
 
     episode_rewards = []
     success = 0
-    trial = 0
-    while True:
+    for trial in range(trials):
         video_frames = []
         env.seed(trial)
+        obs_history = []
         if img:
             observation = env.reset()
-            obs_history = []
         else:
             if env_name == "push_t":
                 observation = crop_obs_for_env(env.reset()[0], env_name)
             else:
                 observation = crop_obs_for_env(env.reset(), env_name)
 
-        nn_agent.reset_obs_history()
+        dan_agent.reset_obs_history()
 
         episode_reward = 0.0
         steps = 0
 
-        while True:
-            start = time.time()
-            if img:
-                # Stack observations with history
-                obs_history.append(env_state_to_dino(env_name, observation))
+        while not (done or eval_over(steps, config)):
+            steps += 1
+            if steps % 10 == 0 or steps > 150:
+                print(nn_fork_eval(config, env, steps, episode_reward, dan_agent, observation))
 
-                if len(obs_history) > stack_size:
-                    obs_history.pop(0)
-                
-                if config.get("model_pkl"):
-                    img_observation = stack_with_previous(obs_history, stack_size=stack_size)
-                    action = nn_agent.get_action(img_observation, current_model_ob=observation)
-                else:
-                    observation = stack_with_previous(obs_history, stack_size=stack_size)
-                    action = nn_agent.get_action(observation)
-            else:
-                action = nn_agent.get_action(observation)
+            dan_agent.update_obs_history(observation)
+            action = get_action_from_obs(config, bc_agent, observation, obs_history=obs_history)
 
-
-            if env_name == "push_t":
-                observation, reward, done, truncated, info = env.step(action)
-            else:
-                observation, reward, done, info = env.step(action)
+            observation, reward, done, info = env.step(action)[:4]
 
             if not img:
                 observation = crop_obs_for_env(observation, env_name)
@@ -96,27 +106,74 @@ def nn_eval(config, nn_agent):
                 video_frames.append(frame)
 
                 # env.render(mode='human')
-            if done:
-                break
-            if is_metaworld and steps >= 500:
-                break
-            if env_name == "push_t" and steps > 200:
-                break
-            steps += 1
-            print(steps)
             # print(f"Step time: {time.time() - start}")
 
         # print(episode_reward)
         episode_rewards.append(episode_reward)
 
         success += info['success'] if 'success' in info else 0
-        trial += 1
 
         if len(video_frames) > 0:
             pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
 
-        if trial >= 10:
-            break
+    print(
+        f"mean {round(np.mean(episode_rewards), 2)}, std {round(np.std(episode_rewards), 2)}"
+    )
+    return np.mean(episode_rewards)
+
+def nn_eval(config, nn_agent, trials=10):
+    env = construct_env(config)
+    img = config.get('img', False)
+    env_name = config['name']
+    is_metaworld = config.get('metaworld', False)
+
+    episode_rewards = []
+    success = 0
+    for trial in range(trials):
+        video_frames = []
+        env.seed(trial)
+        if img:
+            observation = env.reset()
+            obs_history = []
+        else:
+            obs_history = None
+            if env_name == "push_t":
+                observation = crop_obs_for_env(env.reset()[0], env_name)
+            else:
+                observation = crop_obs_for_env(env.reset(), env_name)
+
+        nn_agent.reset_obs_history()
+
+        episode_reward = 0.0
+        steps = 0
+
+        while not (done or eval_over(steps, config)):
+            start = time.time()
+            steps += 1
+            action = get_action_from_obs(config, nn_agent, observation, obs_history=obs_history)
+            observation, reward, done, info = env.step(action)[:4]
+
+            if not img:
+                observation = crop_obs_for_env(observation, env_name)
+
+            if env_name == "push_t":
+                episode_reward = max(episode_reward, reward)
+            else:
+                episode_reward += reward
+            if False:
+                frame = env.render(mode='rgb_array')
+                video_frames.append(frame)
+
+                # env.render(mode='human')
+            # print(f"Step time: {time.time() - start}")
+
+        # print(episode_reward)
+        episode_rewards.append(episode_reward)
+
+        success += info['success'] if 'success' in info else 0
+
+        if len(video_frames) > 0:
+            pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
 
     os.makedirs('results', exist_ok=True)
     with open("results/" + str(env_name) + "_" + str(nn_agent.candidates) + "_" + str(nn_agent.lookback) + "_" + str(nn_agent.decay) + "_" + str(nn_agent.final_neighbors_ratio) + "_result.pkl", 'wb') as f:
@@ -132,6 +189,11 @@ def nn_eval_closed_loop(config, nn_agent):
     is_metaworld = config.get('metaworld', False)
 
     expert_data = nn_util.load_expert_data("data/hopper-expert-v2_1.pkl")
+
+    writer = ffmpegwriter(fps=60, metadata=dict(artist='me'), bitrate=5000)
+    video_filename = 'nn_eval_sanity_closed_loop.mp4'
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
 
     img = config.get('img', False)
 
@@ -187,94 +249,95 @@ def nn_eval_closed_loop(config, nn_agent):
     episode_rewards = []
     success = 0
     trial = 0
-    while True:
-        video_frames = []
-        env.seed(trial)
-        if img:
-            observation = env.reset()
-            img_env.set_state(
-                np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
-                observation[:-nq])
-            frame = img_env.render(mode='rgb_array')
-            observation = process_rgb_array(frame)
-            obs_history = [observation] 
-        else:
-            if env_name == "push_t":
-                observation = crop_obs_for_env(env.reset()[0], env_name)
-            else:
-                observation = env.reset()
-                expert_start = expert_data[trial]['observations'][0]
-                env.set_state(
-                    np.hstack((np.zeros(unobserved_nq), expert_start[:nq])), 
-                    expert_start[-nv:])
-                observation = expert_start
-
-        nn_agent.reset_obs_history()
-
-        episode_reward = 0.0
-        steps = 0
-
+    with writer.saving(fig, video_filename, 100):
         while True:
-            if True:
-                expert_start = expert_data[trial]['observations'][steps]
-                env.set_state(
-                    np.hstack((np.zeros(unobserved_nq), expert_start[:nq])), 
-                    expert_start[-nv:])
-                observation = expert_start
+            video_frames = []
+            env.seed(trial)
             if img:
-                # Stack observations with history
-                stacked_observation = stack_with_previous(obs_history)
-                action = nn_agent.get_action(stacked_observation)
-            else:
-                action = nn_agent.get_action(observation)
-
-            if env_name == "push_t":
-                observation, reward, done, truncated, info = env.step(action)
-            else:
-                observation, reward, done, info = env.step(action)
-
-            if img:
+                observation = env.reset()
                 img_env.set_state(
                     np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
                     observation[:-nq])
                 frame = img_env.render(mode='rgb_array')
                 observation = process_rgb_array(frame)
-                obs_history.append(observation)
-                if len(obs_history) > 3:
-                    obs_history.pop(0)
+                obs_history = [observation] 
             else:
-                observation = crop_obs_for_env(observation, env_name)
+                if env_name == "push_t":
+                    observation = crop_obs_for_env(env.reset()[0], env_name)
+                else:
+                    observation = env.reset()
+                    expert_start = expert_data[trial]['observations'][0]
+                    env.set_state(
+                        np.hstack((np.zeros(unobserved_nq), expert_start[:nq])), 
+                        expert_start[-nv:])
+                    observation = expert_start
 
-            if env_name == "push_t":
-                episode_reward = max(episode_reward, reward)
-            else:
-                episode_reward += reward
-            if False:
-                frame = env.render(mode='rgb_array')
-                video_frames.append(frame)
+            nn_agent.reset_obs_history()
 
-                # plt.imsave("hopper_img.png", frame)
-                # print(env.state_vector()[2])
-                # env.render(mode='human')
-            if done:
+            episode_reward = 0.0
+            steps = 0
+
+            while True:
+                if True:
+                    expert_start = expert_data[trial]['observations'][steps]
+                    env.set_state(
+                        np.hstack((np.zeros(unobserved_nq), expert_start[:nq])), 
+                        expert_start[-nv:])
+                    observation = expert_start
+                if img:
+                    # Stack observations with history
+                    stacked_observation = stack_with_previous(obs_history)
+                    action = nn_agent.get_action(stacked_observation)
+                else:
+                    action = nn_agent.get_action(observation)
+
+                if env_name == "push_t":
+                    observation, reward, done, truncated, info = env.step(action)
+                else:
+                    observation, reward, done, info = env.step(action)
+
+                if img:
+                    img_env.set_state(
+                        np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
+                        observation[:-nq])
+                    frame = img_env.render(mode='rgb_array')
+                    observation = process_rgb_array(frame)
+                    obs_history.append(observation)
+                    if len(obs_history) > 3:
+                        obs_history.pop(0)
+                else:
+                    observation = crop_obs_for_env(observation, env_name)
+
+                if env_name == "push_t":
+                    episode_reward = max(episode_reward, reward)
+                else:
+                    episode_reward += reward
+                if False:
+                    frame = env.render(mode='rgb_array')
+                    video_frames.append(frame)
+
+                    # plt.imsave("hopper_img.png", frame)
+                    # print(env.state_vector()[2])
+                    # env.render(mode='human')
+                if done:
+                    break
+                if is_metaworld and steps >= 500:
+                    break
+                if env_name == "push_t" and steps > 200:
+                    break
+                steps += 1
+
+            # print(episode_reward)
+            episode_rewards.append(episode_reward)
+
+            success += info['success'] if 'success' in info else 0
+            trial += 1
+
+            if len(video_frames) > 0:
+                pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
+
+            if trial >= len(expert_data):
                 break
-            if is_metaworld and steps >= 500:
-                break
-            if env_name == "push_t" and steps > 200:
-                break
-            steps += 1
-
-        # print(episode_reward)
-        episode_rewards.append(episode_reward)
-
-        success += info['success'] if 'success' in info else 0
-        trial += 1
-
-        if len(video_frames) > 0:
-            pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
-
-        if trial >= len(expert_data):
-            break
 
     os.makedirs('results', exist_ok=True)
     with open("results/" + str(env_name) + "_" + str(nn_agent.candidates) + "_" + str(nn_agent.lookback) + "_" + str(nn_agent.decay) + "_" + str(nn_agent.final_neighbors_ratio) + "_result.pkl", 'wb') as f:
@@ -401,18 +464,17 @@ if __name__ == "__main__":
     # for i in range(10):
     # NOT STANDARDIZED
     dan_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
-    nn_eval(env_cfg, dan_agent)
     # env_cfg_copy = env_cfg.copy()
+    # nn_eval(env_cfg, dan_agent)
     # env_cfg_copy['demo_pkl'] = "data/hopper-expert-v2_1_img.pkl"
     # img_agent = nn_agent.NNAgentEuclidean(env_cfg_copy, policy_cfg)
     # nn_eval_open_loop_img(env_cfg, dan_agent, img_agent)
     
-    # policy_cfg_copy = policy_cfg.copy()
-    # policy_cfg_copy['method'] = 'bc'
-    # policy_cfg_copy['model_name'] = 'bc_hopper_1'
-    #
-    # bc_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg_copy)
-    #
-    # # nn_eval_sanity(env_cfg, dan_agent, bc_agent)
+    policy_cfg_copy = policy_cfg.copy()
+    policy_cfg_copy['method'] = 'bc'
+    policy_cfg_copy['model_name'] = 'bc_hopper_1'
+
+    bc_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg_copy)
+    nn_eval_split(env_cfg, dan_agent, bc_agent, trials=1)
     # nn_eval(env_cfg, bc_agent)
     #

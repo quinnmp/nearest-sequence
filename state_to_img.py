@@ -19,7 +19,8 @@ import metaworld
 import metaworld.envs.mujoco.env_dict as _env_dict
 
 # Load the pre-trained DinoV2 model
-model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14').to(device)
 model.eval()
 
 # Preprocessing transforms
@@ -41,7 +42,7 @@ def process_rgb_array(rgb_array):
     image = Image.fromarray((rgb_array * 255).astype(np.uint8))
     
     # Apply transformations
-    input_tensor = transform(image).unsqueeze(0)  # Add batch dimension
+    input_tensor = transform(image).unsqueeze(0).to(device)  # Add batch dimension
 
     # Extract features
     with torch.no_grad():
