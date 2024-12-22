@@ -1,0 +1,6 @@
+seed: 42
+robosuite: True
+name: "Lift"
+robot: "Panda"
+demo_pkl: "data/robosuite_lift_200_img.pkl"
+stack_size: 1

@@ -31,6 +31,7 @@ dependencies:
     - scikit-optimize==0.10.2
     - numpy==1.26.4
     - numba==0.60.0
+    - robosuite=1.4.1
     # Just for Push T
     - pymunk==6.2.1
     - Shapely==1.8.4

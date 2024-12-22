@@ -127,6 +127,7 @@ def nn_eval(config, nn_agent, trials=10):
     img = config.get('img', False)
     env_name = config['name']
     is_metaworld = config.get('metaworld', False)
+    is_robosuite = config.get('robosuite', False)
 
     episode_rewards = []
     success = 0

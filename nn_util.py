@@ -35,12 +35,25 @@ img_env = None
 def construct_env(config):
     env_name = config['name']
     is_metaworld = config.get('metaworld', False)
+    is_robosuite = config.get('robosuite', False)
+    img = config.get('img', False)
 
     if is_metaworld:
         env = _env_dict.MT50_V2[env_name]()
         env._partially_observable = False
         env._freeze_rand_vec = False
         env._set_task_called = True
+    elif is_robosuite:
+        env = robosuite.make(
+            env_name=env_cfg['name'],
+            robots=env_cfg['robot'],
+            has_renderer=True,
+            has_offscreen_renderer=True,
+            ignore_done=True,
+            use_camera_obs=img,
+            reward_shaping=True,
+            control_freq=20,
+        )
     elif env_name == 'push_t':
         env = PushTEnv()
     else:
@@ -51,12 +64,13 @@ def construct_env(config):
 def get_action_from_obs(config, model, observation, obs_history=None):
     env_name = config['name']
     img = config.get('img', False)
+    is_robosuite = config.get('robosuite', False)
     stack_size = config.get('stack_size', 10)
 
     if img:
         assert obs_history is not None
         # Stack observations with history
-        obs_history.append(env_state_to_dino(env_name, observation))
+        obs_history.append(env_state_to_dino(env_name, observation, is_robosuite=is_robosuite))
 
         if len(obs_history) > stack_size:
             obs_history.pop(0)
@@ -71,7 +85,6 @@ def get_action_from_obs(config, model, observation, obs_history=None):
         action = model.get_action(observation)
 
     return action
-
 
 def stack_with_previous(obs_list, stack_size):
     if len(obs_list) < stack_size:
@@ -131,23 +144,29 @@ def crop_obs_for_env(obs, env):
     else:
         return obs
 
-def env_state_to_dino(env_name, observation):
+def env_state_to_dino(env_name, observation, is_robosuite=False):
     global img_env
     if img_env is None:
         img_env = gym.make(env_name)
 
-    if env_name == "hopper-expert-v2":
-        unobserved_nq = 1
-        nq = img_env.model.nq - unobserved_nq
-        nv = img_env.model.nv
+    if is_robosuite:
+        env.sim.set_state_from_flattened(observation)
+        env.sim.forward()
+        frame = env.sim.render(camera_name=env.camera_names[0], width=env.camera_widths[0], height=env.camera_heights[0], depth=env.camera_depths[0])
+        return process_rgb_array(frame)
     else:
-        print("Env not supported for state to img!")
+        if env_name == "hopper-expert-v2":
+            unobserved_nq = 1
+            nq = img_env.model.nq - unobserved_nq
+            nv = img_env.model.nv
+        else:
+            print("Env not supported for state to img!")
 
-    img_env.set_state(
-        np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
-        observation[-nv:])
+        img_env.set_state(
+            np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
+            observation[-nv:])
 
-    return process_rgb_array(img_env.render(mode='rgb_array'))
+        return process_rgb_array(img_env.render(mode='rgb_array'))
 
 def set_seed(seed):
     torch.manual_seed(seed)

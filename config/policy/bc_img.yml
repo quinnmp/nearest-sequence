@@ -1,6 +1,6 @@
 method: bc
 
-epochs: 405
+epochs: 1
 batch_size: 256
 hidden_dims:
    - 512
