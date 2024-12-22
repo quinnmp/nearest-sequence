@@ -1,5 +1,6 @@
 from numba import jit
 import numpy as np
+import torch
 
 class FastScaler:
     def __init__(self):
@@ -21,20 +22,36 @@ class FastScaler:
 
     @staticmethod
     @jit(nopython=True)
-    def _transform(X, mean, scale):
+    def _transform_numpy(X, mean, scale):
         return (X - mean) / scale
 
     @staticmethod
     @jit(nopython=True)
-    def _inverse_transform(X, mean, scale):
+    def _inverse_transform_numpy(X, mean, scale):
         return X * scale + mean
 
+    def _transform_torch(self, X, mean, scale):
+        mean_tensor = torch.tensor(mean, dtype=X.dtype, device=X.device)
+        scale_tensor = torch.tensor(scale, dtype=X.dtype, device=X.device)
+        return (X - mean_tensor) / scale_tensor
+
+    def _inverse_transform_torch(self, X, mean, scale):
+        mean_tensor = torch.tensor(mean, dtype=X.dtype, device=X.device)
+        scale_tensor = torch.tensor(scale, dtype=X.dtype, device=X.device)
+        return X * scale_tensor + mean_tensor
+
     def transform(self, X):
-        if isinstance(X, list):
-            X = np.array(X)
-        return self._transform(X, self.mean_, self.scale_)
+        if isinstance(X, torch.Tensor):
+            return self._transform_torch(X, self.mean_, self.scale_)
+        else:
+            if isinstance(X, list):
+                X = np.array(X)
+            return self._transform_numpy(X, self.mean_, self.scale_)
 
     def inverse_transform(self, X):
-        if isinstance(X, list):
-            X = np.array(X)
-        return self._inverse_transform(X, self.mean_, self.scale_)
+        if isinstance(X, torch.Tensor):
+            return self._inverse_transform_torch(X, self.mean_, self.scale_)
+        else:
+            if isinstance(X, list):
+                X = np.array(X)
+            return self._inverse_transform_numpy(X, self.mean_, self.scale_)

@@ -49,6 +49,7 @@ def construct_env(config):
     return env
 
 def get_action_from_obs(config, model, observation, obs_history=None):
+    env_name = config['name']
     img = config.get('img', False)
     stack_size = config.get('stack_size', 10)
 
@@ -111,7 +112,7 @@ def process_rgb_array(rgb_array):
 
     return features.cpu().numpy()[0]
 
-def should_end_eval(steps, config):
+def eval_over(steps, config):
     env_name = config['name']
     is_metaworld = config.get('metaworld', False)
 

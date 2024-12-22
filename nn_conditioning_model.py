@@ -76,7 +76,8 @@ class KNNConditioningModel(nn.Module):
     def forward(self, states, actions, distances, weights):
         # Will be batchless numpy arrays at inference time
         if isinstance(states, np.ndarray):
-            states = torch.tensor(states, dtype=torch.float32, device=device).unsqueeze(0)
+            #states = torch.tensor(states, dtype=torch.float32, device=device).unsqueeze(0)
+            states = torch.from_numpy(np.array(states, dtype=np.float32)).pin_memory().unsqueeze(0).to(device, non_blocking=True)
 
             if not self.bc_baseline:
                 actions = self.action_scaler.transform(actions)
@@ -84,8 +85,8 @@ class KNNConditioningModel(nn.Module):
 
                 if self.euclidean:
                     distances = np.sqrt(np.sum(distances**2, axis=-1, keepdims=True))
+                distances = torch.from_numpy(np.array(distances, dtype=np.float32)).pin_memory().unsqueeze(0).to(device, non_blocking=True)
                 distances = self.distance_scaler.transform(distances)
-                distances = torch.tensor(distances, dtype=torch.float32, device=device).unsqueeze(0)
                 weights = torch.tensor(weights, dtype=torch.float32, device=device).unsqueeze(0)
 
         if self.bc_baseline:
@@ -94,12 +95,12 @@ class KNNConditioningModel(nn.Module):
             inputs = inputs.view(batch_size, -1)
             output = self.model(inputs)
 
-            pickle.dump(output.cpu().detach().numpy(), open("data/bc_action.pkl", 'wb'))
+            #pickle.dump(output.cpu().detach().numpy(), open("data/bc_action.pkl", 'wb'))
 
             if self.training_mode:
                 return output
 
-            return self.action_scaler.inverse_transform(output.cpu().detach().numpy())[0]
+            return self.action_scaler.inverse_transform(output).cpu().detach().numpy()
 
         states = states.to(dtype=torch.float32)
         actions = actions.to(dtype=torch.float32)
@@ -120,7 +121,7 @@ class KNNConditioningModel(nn.Module):
 
             model_outputs = model_outputs.view(batch_size, num_neighbors, -1)
 
-            pickle.dump(model_outputs.cpu().detach().numpy(), open("data/neighbor_actions.pkl", 'wb'))
+            #pickle.dump(model_outputs.cpu().detach().numpy(), open("data/neighbor_actions.pkl", 'wb'))
             if False:
                 output = (model_outputs * weights.unsqueeze(-1)).sum(dim=1)
             else:
@@ -134,7 +135,7 @@ class KNNConditioningModel(nn.Module):
         if self.training_mode:
             return output
 
-        return self.action_scaler.inverse_transform(output.cpu().detach().numpy())[0]
+        return self.action_scaler.inverse_transform(output[0]).cpu().detach().numpy()
 
     def train(self, mode=True):
         """Override train method to set training_mode flag"""
@@ -249,9 +250,8 @@ class KNNExpertDataset(Dataset):
         policy_cfg_copy = policy_cfg.copy()
         policy_cfg_copy['method'] = 'knn_and_dist'
 
-        env_cfg_copy = policy_cfg.copy()
+        env_cfg_copy = env_cfg.copy()
         env_cfg_copy['demo_pkl'] = expert_data_path
-
 
         self.agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg_copy)
 
@@ -263,6 +263,15 @@ class KNNExpertDataset(Dataset):
         self.euclidean = euclidean
         self.bc_baseline = bc_baseline
 
+        save_neighbor_lookup = False
+        neighbor_lookup_pkl = env_cfg.get('neighbor_lookup_pkl', None)
+
+        if neighbor_lookup_pkl:
+            if os.path.exists(neighbor_lookup_pkl):
+                self.neighbor_lookup = pickle.load(open(env_cfg_copy['neighbor_lookup_pkl'], 'rb'))
+            else:
+                save_neighbor_lookup = True
+
         if not self.bc_baseline:
             all_distances = []
             for i in range(len(self)):
@@ -271,6 +280,9 @@ class KNNExpertDataset(Dataset):
 
             self.distance_scaler = FastScaler()
             self.distance_scaler.fit(all_distances)
+
+            if save_neighbor_lookup:
+                pickle.dump(self.neighbor_lookup, open(neighbor_lookup_pkl, 'wb'))
         else:
             self.distance_scaler = None
 
@@ -308,19 +320,17 @@ class KNNExpertDataset(Dataset):
             neighbor_actions = self.action_scaler.transform(neighbor_actions)
 
             self.neighbor_lookup[idx] = NeighborData(
-                states=torch.tensor(neighbor_states, dtype=torch.float32, device=device),
-                actions=torch.tensor(neighbor_actions, dtype=torch.float32, device=device),
-                distances=torch.tensor(neighbor_distances, dtype=torch.float32, device=device),
-                target_action=torch.tensor(action, dtype=torch.float32, device=device),
-                weights=torch.tensor(weights, dtype=torch.float32, device=device)
+                states=torch.as_tensor(neighbor_states, dtype=torch.float32, device=device),
+                actions=torch.as_tensor(neighbor_actions, dtype=torch.float32, device=device),
+                distances=torch.as_tensor(neighbor_distances, dtype=torch.float32, device=device),
+                target_action=torch.as_tensor(action, dtype=torch.float32, device=device),
+                weights=torch.as_tensor(weights, dtype=torch.float32, device=device)
             )
 
         data = self.neighbor_lookup[idx]
         if hasattr(self, "distance_scaler"):
-            distances_numpy = data.distances.cpu().numpy()
-            scaled_distances = self.distance_scaler.transform(distances_numpy)
-            scaled_distances_tensor = torch.tensor(scaled_distances, dtype=torch.float32, device=device)
-            return data.states, data.actions, scaled_distances_tensor, data.target_action, data.weights
+            scaled_distances = self.distance_scaler.transform(data.distances)
+            return data.states, data.actions, scaled_distances, data.target_action, data.weights
         else:
             return data.states, data.actions, data.distances, data.target_action, data.weights
 

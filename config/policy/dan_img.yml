@@ -1,13 +1,14 @@
 method: cond
-k_neighbors: 140
+k_neighbors: 440
 lookback: 1
 decay_rate: 0
 
-epochs: 405
-batch_size: 256
+epochs: 23
+batch_size: 16
 hidden_dims:
-   - 1024
-   - 1024
-   - 1024
-model_name: "bc_img"
+   - 2048
+   - 512
+   - 512
+   - 256
+model_name: "dan_img"
 cond_force_retrain: True

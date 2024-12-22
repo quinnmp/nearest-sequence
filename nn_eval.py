@@ -19,7 +19,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import mujoco
 from typing import Dict, Any
-from nn_util import crop_obs_for_env, construct_env, get_action_from_obs
+from nn_util import crop_obs_for_env, construct_env, get_action_from_obs, eval_over
 import copy
 
 DEBUG = False
@@ -84,6 +84,7 @@ def nn_eval_split(config, dan_agent, bc_agent, trials=10):
         episode_reward = 0.0
         steps = 0
 
+        done = False
         while not (done or eval_over(steps, config)):
             steps += 1
             if steps % 10 == 0 or steps > 150:
@@ -147,6 +148,7 @@ def nn_eval(config, nn_agent, trials=10):
         episode_reward = 0.0
         steps = 0
 
+        done = False
         while not (done or eval_over(steps, config)):
             start = time.time()
             steps += 1
@@ -165,7 +167,7 @@ def nn_eval(config, nn_agent, trials=10):
                 video_frames.append(frame)
 
                 # env.render(mode='human')
-            # print(f"Step time: {time.time() - start}")
+            #print(f"Step time: {time.time() - start}")
 
         # print(episode_reward)
         episode_rewards.append(episode_reward)
@@ -465,16 +467,16 @@ if __name__ == "__main__":
     # NOT STANDARDIZED
     dan_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
     # env_cfg_copy = env_cfg.copy()
-    # nn_eval(env_cfg, dan_agent)
+    nn_eval(env_cfg, dan_agent, trials=10)
     # env_cfg_copy['demo_pkl'] = "data/hopper-expert-v2_1_img.pkl"
     # img_agent = nn_agent.NNAgentEuclidean(env_cfg_copy, policy_cfg)
     # nn_eval_open_loop_img(env_cfg, dan_agent, img_agent)
     
-    policy_cfg_copy = policy_cfg.copy()
-    policy_cfg_copy['method'] = 'bc'
-    policy_cfg_copy['model_name'] = 'bc_hopper_1'
+    #policy_cfg_copy = policy_cfg.copy()
+    #policy_cfg_copy['method'] = 'bc'
+    #policy_cfg_copy['model_name'] = 'bc_hopper_1'
 
-    bc_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg_copy)
-    nn_eval_split(env_cfg, dan_agent, bc_agent, trials=1)
+    #bc_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg_copy)
+    #nn_eval_split(env_cfg, dan_agent, bc_agent, trials=1)
     # nn_eval(env_cfg, bc_agent)
     #

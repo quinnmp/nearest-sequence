@@ -31,8 +31,8 @@ export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
 export LD_PRELOAD=$CONDA_PREFIX/lib/libGLEW.so
 export LD_PRELOAD=$CONDA_PREFIX/lib/libEGL.so:$LD_PRELOAD
 
-python -u nn_model_optimizer.py config/env/hopper_img.yml config/policy/bc_img.yml
+#python -u nn_param_optimizer.py config/env/hopper_img.yml config/policy/dan_img.yml
 #python -u nn_sweep_k.py config/env/hopper_img.yml config/policy/dan_img.yml
-#python -u nn_eval.py config/env/hopper_img.yml config/policy/bc_img.yml
+python -u nn_eval.py config/env/hopper_img.yml config/policy/bc_img.yml
 #python -u state_to_img.py config/env/hopper.yml
 
