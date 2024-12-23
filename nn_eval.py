@@ -19,7 +19,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import mujoco
 from typing import Dict, Any
-from nn_util import crop_obs_for_env, construct_env, get_action_from_obs, eval_over
+from nn_util import crop_obs_for_env, construct_env, get_action_from_obs, get_action_from_env, eval_over
 import copy
 
 DEBUG = False
@@ -133,7 +133,8 @@ def nn_eval(config, nn_agent, trials=10):
     success = 0
     for trial in range(trials):
         video_frames = []
-        env.seed(trial)
+        if not is_robosuite:
+            env.seed(trial)
         if img:
             observation = env.reset()
             obs_history = []
@@ -153,7 +154,10 @@ def nn_eval(config, nn_agent, trials=10):
         while not (done or eval_over(steps, config)):
             start = time.time()
             steps += 1
-            action = get_action_from_obs(config, nn_agent, observation, obs_history=obs_history)
+            if is_robosuite and img:
+                action = get_action_from_env(config, env, nn_agent, obs_history=obs_history)
+            else:
+                action = get_action_from_obs(config, nn_agent, observation, obs_history=obs_history)
             observation, reward, done, info = env.step(action)[:4]
 
             if not img:

@@ -1,0 +1,3 @@
+demo_pkl: "/home/quinn/Documents/research/nn/data/square_task_D1/square_task_D1_10.pkl"
+demo_hdf5: "/tmp/core_datasets/square/demo_src_square_task_D1/demo.hdf5"
+stack_size: 1

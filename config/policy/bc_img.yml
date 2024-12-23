@@ -1,10 +1,10 @@
 method: bc
 
 epochs: 1
-batch_size: 256
+batch_size: 16
 hidden_dims:
-   - 512
-   - 512
-   - 512
+   - 1024
+   - 4096
+   - 4096
 model_name: "bc_img"
 cond_force_retrain: True

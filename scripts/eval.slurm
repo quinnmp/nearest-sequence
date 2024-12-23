@@ -19,8 +19,10 @@ cd /gscratch/weirdlab/quinn/nearest-sequence
 conda activate nearest-sequence
 
 # Force software rendering
-export MUJOCO_GL=osmesa
-export PYOPENGL_PLATFORM=osmesa
+# export MUJOCO_GL=osmesa
+# export PYOPENGL_PLATFORM=osmesa
+export MUJOCO_GL=egl
+export PYOPENGL_PLATFORM=egl
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 

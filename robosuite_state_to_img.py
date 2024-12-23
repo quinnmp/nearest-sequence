@@ -17,7 +17,18 @@ import torchvision.transforms as transforms
 from PIL import Image
 import metaworld
 import metaworld.envs.mujoco.env_dict as _env_dict
-import robosuite
+
+import robomimic
+import robomimic.utils.obs_utils as ObsUtils
+import robomimic.utils.env_utils as EnvUtils
+from robomimic.envs.env_base import EnvBase
+from robomimic.utils.file_utils import get_env_metadata_from_dataset
+
+import mimicgen
+import mimicgen.utils.file_utils as MG_FileUtils
+import mimicgen.utils.robomimic_utils as RobomimicUtils
+from mimicgen.utils.misc_utils import add_red_border_to_frame
+from mimicgen.configs import MG_TaskSpec
 
 # Load the pre-trained DinoV2 model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -77,28 +88,34 @@ for traj in data:
 obs = np.concatenate(obs_matrix)
 
 stack_size = env_cfg.get('stack_size', 10)
-env = robosuite.make(
-    env_name=env_cfg['name'],
-    robots="Panda",
-    has_renderer=True,
-    has_offscreen_renderer=True,
-    ignore_done=True,
-    use_camera_obs=True,
-    reward_shaping=True,
-    control_freq=20,
+
+dummy_spec = dict(
+    obs=dict(
+            low_dim=["robot0_eef_pos"],
+            rgb=[],
+        ),
 )
+ObsUtils.initialize_obs_utils_with_obs_specs(obs_modality_specs=dummy_spec)
+
+env_meta = get_env_metadata_from_dataset(dataset_path=env_cfg['demo_hdf5'])
+env = EnvUtils.create_env_from_metadata(env_meta=env_meta, render=True, render_offscreen=True)
+render_image_names = RobomimicUtils.get_default_env_cameras(env_meta=env_meta)
 
 img_data = []
 for traj in range(len(data)):
+    print(f"Processing traj {traj}...")
+    initial_state = data[traj]['states'][0]
     traj_obs = []
+    env.reset()
+    env.reset_to(initial_state)
     for ob in range(len(data[traj]['observations'])):
-        env.sim.set_state_from_flattened(data[traj]['observations'][ob])
-        env.sim.forward()
-        # env.render()
-        frame = env.sim.render(camera_name=env.camera_names[0], width=env.camera_widths[0], height=env.camera_heights[0], depth=env.camera_depths[0])
+        env.step(data[traj]['actions'][ob])
+        frame = env.render(mode='rgb_array', height=512, width=512, camera_name=render_image_names[0])
         traj_obs.append(process_rgb_array(frame))
-        plt.imsave('lift_frame.png', frame)
+        #plt.imsave('block_frame.png', frame)
     stacked_traj_obs = stack_with_previous(traj_obs, stack_size=stack_size)
     img_data.append({'observations': stacked_traj_obs, 'actions': data[traj]['actions']})
 
+
+print(f"Success! Dumping data to {env_cfg['demo_pkl'][:-4] + '_img.pkl'}")
 pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_img.pkl', 'wb'))

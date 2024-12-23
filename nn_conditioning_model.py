@@ -100,7 +100,7 @@ class KNNConditioningModel(nn.Module):
             if self.training_mode:
                 return output
 
-            return self.action_scaler.inverse_transform(output).cpu().detach().numpy()
+            return self.action_scaler.inverse_transform(output[0]).cpu().detach().numpy()
 
         states = states.to(dtype=torch.float32)
         actions = actions.to(dtype=torch.float32)

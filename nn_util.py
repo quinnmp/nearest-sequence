@@ -20,6 +20,19 @@ import random
 import torch
 import torchvision.transforms as transforms
 import gym
+
+import robomimic
+import robomimic.utils.obs_utils as ObsUtils
+import robomimic.utils.env_utils as EnvUtils
+from robomimic.envs.env_base import EnvBase
+from robomimic.utils.file_utils import get_env_metadata_from_dataset
+
+import mimicgen
+import mimicgen.utils.file_utils as MG_FileUtils
+import mimicgen.utils.robomimic_utils as RobomimicUtils
+from mimicgen.utils.misc_utils import add_red_border_to_frame
+from mimicgen.configs import MG_TaskSpec
+
 from PIL import Image
 DEBUG = False
 
@@ -31,11 +44,28 @@ dino_model = None
 device = None
 img_transform = None
 img_env = None
+camera_name = None
 
 def construct_env(config):
+    is_robosuite = config.get('robosuite', False)
+
+    if is_robosuite:
+        global camera_name
+        dummy_spec = dict(
+            obs=dict(
+                    low_dim=["robot0_eef_pos"],
+                    rgb=[],
+                ),
+        )
+        ObsUtils.initialize_obs_utils_with_obs_specs(obs_modality_specs=dummy_spec)
+
+        env_meta = get_env_metadata_from_dataset(dataset_path=config['demo_hdf5'])
+        env = EnvUtils.create_env_from_metadata(env_meta=env_meta, render=True, render_offscreen=True)
+        camera_name = RobomimicUtils.get_default_env_cameras(env_meta=env_meta)[0]
+        return env
+
     env_name = config['name']
     is_metaworld = config.get('metaworld', False)
-    is_robosuite = config.get('robosuite', False)
     img = config.get('img', False)
 
     if is_metaworld:
@@ -43,23 +73,32 @@ def construct_env(config):
         env._partially_observable = False
         env._freeze_rand_vec = False
         env._set_task_called = True
-    elif is_robosuite:
-        env = robosuite.make(
-            env_name=env_cfg['name'],
-            robots=env_cfg['robot'],
-            has_renderer=True,
-            has_offscreen_renderer=True,
-            ignore_done=True,
-            use_camera_obs=img,
-            reward_shaping=True,
-            control_freq=20,
-        )
     elif env_name == 'push_t':
         env = PushTEnv()
     else:
         env = gym.make(env_name)
 
     return env
+
+def get_action_from_env(config, env, model, obs_history=None):
+    global camera_name
+    assert obs_history is not None
+    stack_size = config.get('stack_size', 10)
+    
+    frame = env.render(mode='rgb_array', height=512, width=512, camera_name=camera_name)
+    obs_history.append(process_rgb_array(frame))
+
+    if len(obs_history) > stack_size:
+        obs_history.pop(0)
+    
+    if config.get("model_pkl"):
+        img_observation = stack_with_previous(obs_history, stack_size=stack_size)
+        action = model.get_action(img_observation, current_model_ob=observation)
+    else:
+        observation = stack_with_previous(obs_history, stack_size=stack_size)
+        action = model.get_action(observation)
+
+    return action
 
 def get_action_from_obs(config, model, observation, obs_history=None):
     env_name = config['name']
