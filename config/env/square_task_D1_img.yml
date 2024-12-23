@@ -1,5 +1,5 @@
-demo_pkl: "/home/quinn/Documents/research/nn/data/square_task_D1/square_task_D1_10_img.pkl"
-demo_hdf5: "/tmp/core_datasets/square/demo_src_square_task_D1/demo.hdf5"
+demo_pkl: "data/square_task_D1/square_task_D1_10_img.pkl"
+demo_hdf5: "data/square_task_D1/demo.hdf5"
 stack_size: 1
 robosuite: True
 img: True
