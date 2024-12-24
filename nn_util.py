@@ -20,6 +20,7 @@ import random
 import torch
 import torchvision.transforms as transforms
 import gym
+import matplotlib.pyplot as plt
 
 import robomimic
 import robomimic.utils.obs_utils as ObsUtils
@@ -86,6 +87,7 @@ def get_action_from_env(config, env, model, obs_history=None):
     stack_size = config.get('stack_size', 10)
     
     frame = env.render(mode='rgb_array', height=512, width=512, camera_name=camera_name)
+    # plt.imsave('block_frame.png', frame)
     obs_history.append(process_rgb_array(frame))
 
     if len(obs_history) > stack_size:

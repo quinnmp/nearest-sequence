@@ -104,15 +104,17 @@ render_image_names = RobomimicUtils.get_default_env_cameras(env_meta=env_meta)
 img_data = []
 for traj in range(len(data)):
     print(f"Processing traj {traj}...")
-    initial_state = data[traj]['states'][0]
+    initial_state = dict(states=data[traj]['states'][0])
+    initial_state["model"] = data[traj]["model_file"]
     traj_obs = []
     env.reset()
     env.reset_to(initial_state)
     for ob in range(len(data[traj]['observations'])):
         env.step(data[traj]['actions'][ob])
+        env.reset_to({"states" : data[traj]['states'][ob]})
         frame = env.render(mode='rgb_array', height=512, width=512, camera_name=render_image_names[0])
         traj_obs.append(process_rgb_array(frame))
-        #plt.imsave('block_frame.png', frame)
+        plt.imsave('block_frame.png', frame)
     stacked_traj_obs = stack_with_previous(traj_obs, stack_size=stack_size)
     img_data.append({'observations': stacked_traj_obs, 'actions': data[traj]['actions']})
 

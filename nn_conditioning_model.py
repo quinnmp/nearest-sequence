@@ -76,8 +76,7 @@ class KNNConditioningModel(nn.Module):
     def forward(self, states, actions, distances, weights):
         # Will be batchless numpy arrays at inference time
         if isinstance(states, np.ndarray):
-            #states = torch.tensor(states, dtype=torch.float32, device=device).unsqueeze(0)
-            states = torch.from_numpy(np.array(states, dtype=np.float32)).pin_memory().unsqueeze(0).to(device, non_blocking=True)
+            states = torch.tensor(states, dtype=torch.float32, device=device).unsqueeze(0)
 
             if not self.bc_baseline:
                 actions = self.action_scaler.transform(actions)
@@ -85,7 +84,7 @@ class KNNConditioningModel(nn.Module):
 
                 if self.euclidean:
                     distances = np.sqrt(np.sum(distances**2, axis=-1, keepdims=True))
-                distances = torch.from_numpy(np.array(distances, dtype=np.float32)).pin_memory().unsqueeze(0).to(device, non_blocking=True)
+                distances = torch.tensor(distances, dtype=torch.float32, device=device).unsqueeze(0)
                 distances = self.distance_scaler.transform(distances)
                 weights = torch.tensor(weights, dtype=torch.float32, device=device).unsqueeze(0)
 
@@ -398,7 +397,7 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                     torch.save(model, model_path)
                 
                 print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
-        #else:
+        # else:
             # If no validation loader, save the model at the end of training
             # print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")
             # torch.save({'model': model, 'optimizer': optimizer}, model_path)
