@@ -15,12 +15,12 @@ def objective(trial, env_config_path, policy_config_path):
 
     # Suggest parameter values for optimization
     policy_cfg['epochs'] = trial.suggest_int('epochs', 1, 1000)
-    policy_cfg['batch_size'] = trial.suggest_categorical('batch_size', [2**i for i in range(4, 8)])  # 8 to 256
+    # policy_cfg['batch_size'] = trial.suggest_categorical('batch_size', [2**i for i in range(4, 8)])  # 8 to 256
 
     #num_layers = trial.suggest_int('num_layers', 2, 5)
     #policy_cfg['hidden_dims'] = [trial.suggest_categorical(f'layer_size_{i}', [2**j for j in range(6, 14)]) for i in range(num_layers)]  # 64 to 16384
-    num_layers = trial.suggest_int('num_layers', 2, 3)
-    policy_cfg['hidden_dims'] = [trial.suggest_categorical(f'layer_size_{i}', [2**j for j in range(6, 10)]) for i in range(num_layers)]  # 64 to 16384
+    # num_layers = trial.suggest_int('num_layers', 2, 3)
+    # policy_cfg['hidden_dims'] = [trial.suggest_categorical(f'layer_size_{i}', [2**j for j in range(6, 10)]) for i in range(num_layers)]  # 64 to 16384
 
     # Initialize the NNAgent with the updated config
     nn_agent_instance = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
