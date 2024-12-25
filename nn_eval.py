@@ -37,6 +37,11 @@ def nn_fork_eval(config, env, steps, episode_reward, dan_agent, observation):
     env_name = config['name']
     is_metaworld = config.get('metaworld', False)
 
+    render = True
+    step_start = steps 
+    video_frames = []
+
+    done = False
     while not (done or eval_over(steps, config)):
         steps += 1
 
@@ -52,10 +57,13 @@ def nn_fork_eval(config, env, steps, episode_reward, dan_agent, observation):
         else:
             episode_reward += reward
 
-        if False:
+        if render:
             frame = env.render(mode='rgb_array')
             video_frames.append(frame)
             # env.render(mode='human')
+
+    if len(video_frames) > 0:
+        pickle.dump(video_frames, open(f"data/dan_split_video_{step_start}", 'wb'))
 
     return episode_reward
 
@@ -102,7 +110,7 @@ def nn_eval_split(config, dan_agent, bc_agent, trials=10):
                 episode_reward = max(episode_reward, reward)
             else:
                 episode_reward += reward
-            if False:
+            if True:
                 frame = env.render(mode='rgb_array')
                 video_frames.append(frame)
 
@@ -115,7 +123,7 @@ def nn_eval_split(config, dan_agent, bc_agent, trials=10):
         success += info['success'] if 'success' in info else 0
 
         if len(video_frames) > 0:
-            pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
+            pickle.dump(video_frames, open(f"data/bc_split_video", 'wb'))
 
     print(
         f"mean {round(np.mean(episode_rewards), 2)}, std {round(np.std(episode_rewards), 2)}"
@@ -477,11 +485,11 @@ if __name__ == "__main__":
     # img_agent = nn_agent.NNAgentEuclidean(env_cfg_copy, policy_cfg)
     # nn_eval_open_loop_img(env_cfg, dan_agent, img_agent)
     
-    #policy_cfg_copy = policy_cfg.copy()
-    #policy_cfg_copy['method'] = 'bc'
-    #policy_cfg_copy['model_name'] = 'bc_hopper_1'
-
-    #bc_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg_copy)
-    #nn_eval_split(env_cfg, dan_agent, bc_agent, trials=1)
+    # policy_cfg_copy = policy_cfg.copy()
+    # policy_cfg_copy['method'] = 'bc'
+    # policy_cfg_copy['model_name'] = 'bc_hopper_1'
+    #
+    # bc_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg_copy)
+    # nn_eval_split(env_cfg, dan_agent, bc_agent, trials=1)
     # nn_eval(env_cfg, bc_agent)
     #

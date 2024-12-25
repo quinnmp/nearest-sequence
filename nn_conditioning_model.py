@@ -38,7 +38,7 @@ class NeighborData:
     weights: torch.Tensor
 
 class KNNConditioningModel(nn.Module):
-    def __init__(self, state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False, bc_baseline=False):
+    def __init__(self, state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False, bc_baseline=False, mlp_combine=False):
         super(KNNConditioningModel, self).__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -48,6 +48,7 @@ class KNNConditioningModel(nn.Module):
         self.euclidean = euclidean
         self.combined_dim = combined_dim
         self.bc_baseline = bc_baseline
+        self.mlp_combine = mlp_combine
         
         self.distance_size = state_dim if not euclidean else 1
         self.input_dim = state_dim + action_dim + self.distance_size
@@ -72,6 +73,17 @@ class KNNConditioningModel(nn.Module):
 
         layers.append(nn.Linear(hidden_dims[-1], action_dim).to(device))
         self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
+
+        
+        num_neighbors = math.floor(k * final_neighbors_ratio)
+        input_size = num_neighbors * action_dim
+        self.action_combiner = nn.Sequential(
+            nn.Linear(input_size, 256),
+            nn.ReLU(),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, action_dim)
+        ).to(device=device, dtype=torch.float32)
     
     def forward(self, states, actions, distances, weights):
         # Will be batchless numpy arrays at inference time
@@ -123,6 +135,9 @@ class KNNConditioningModel(nn.Module):
             #pickle.dump(model_outputs.cpu().detach().numpy(), open("data/neighbor_actions.pkl", 'wb'))
             if False:
                 output = (model_outputs * weights.unsqueeze(-1)).sum(dim=1)
+            elif self.mlp_combine:
+                flattened_actions = model_outputs.view(batch_size, -1)
+                output = self.action_combiner(flattened_actions)
             else:
                 output = model_outputs.mean(dim=1)
 
@@ -397,9 +412,9 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                     torch.save(model, model_path)
                 
                 print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
-        # else:
+        else:
             # If no validation loader, save the model at the end of training
-            # print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")
+            print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")
             # torch.save({'model': model, 'optimizer': optimizer}, model_path)
 
     torch.save({'model': model, 'optimizer': original_model}, model_path)

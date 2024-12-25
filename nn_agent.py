@@ -146,7 +146,8 @@ class NNAgent:
                         final_neighbors_ratio=self.final_neighbors_ratio,
                         hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
                         dropout_rate=policy_cfg.get('dropout', 0.1),
-                        bc_baseline=self.method == NN_METHOD.BC
+                        bc_baseline=self.method == NN_METHOD.BC,
+                        mlp_combine=True
                     )
 
                 model = nn.DataParallel(model)
@@ -184,7 +185,8 @@ class NNAgentEuclidean(NNAgent):
 
         # If we have elements in our observation space that wraparound (rotations), we can't just do direct Euclidean distance
         current_ob[self.non_rot_indices] *= self.weights[self.non_rot_indices]
-        all_distances, dist_vecs = compute_cosine_distance(current_ob.astype(np.float64), self.reshaped_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
+        # all_distances, dist_vecs = compute_cosine_distance(current_ob.astype(np.float64), self.reshaped_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
+        all_distances, dist_vecs = compute_distance_with_rot(current_ob.astype(np.float64), self.reshaped_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
 
         if np.min(all_distances) == 0:
             all_distances[np.argmin(all_distances)] = np.max(all_distances) + 1
