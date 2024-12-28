@@ -32,7 +32,7 @@ from mimicgen.configs import MG_TaskSpec
 
 # Load the pre-trained DinoV2 model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14').to(device)
+model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14').to(device)
 model.eval()
 
 # Preprocessing transforms
@@ -102,6 +102,7 @@ env = EnvUtils.create_env_from_metadata(env_meta=env_meta, render=True, render_o
 render_image_names = RobomimicUtils.get_default_env_cameras(env_meta=env_meta)
 
 img_data = []
+frames = []
 for traj in range(len(data)):
     print(f"Processing traj {traj}...")
     initial_state = dict(states=data[traj]['states'][0])
@@ -114,10 +115,12 @@ for traj in range(len(data)):
         env.reset_to({"states" : data[traj]['states'][ob]})
         frame = env.render(mode='rgb_array', height=512, width=512, camera_name=render_image_names[0])
         traj_obs.append(process_rgb_array(frame))
-        plt.imsave('block_frame.png', frame)
+        frames.append(frame)
+        #plt.imsave('block_frame.png', frame)
     stacked_traj_obs = stack_with_previous(traj_obs, stack_size=stack_size)
     img_data.append({'observations': stacked_traj_obs, 'actions': data[traj]['actions']})
 
 
 print(f"Success! Dumping data to {env_cfg['demo_pkl'][:-4] + '_img.pkl'}")
 pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_img.pkl', 'wb'))
+pickle.dump(frames, open('data/robosuite_to_img_video', 'wb'))

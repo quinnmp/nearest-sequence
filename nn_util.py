@@ -87,7 +87,7 @@ def get_action_from_env(config, env, model, obs_history=None):
     stack_size = config.get('stack_size', 10)
     
     frame = env.render(mode='rgb_array', height=512, width=512, camera_name=camera_name)
-    plt.imsave('block_frame.png', frame)
+    #plt.imsave('block_frame.png', frame)
     obs_history.append(process_rgb_array(frame))
 
     if len(obs_history) > stack_size:
@@ -139,7 +139,7 @@ def process_rgb_array(rgb_array):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Load the pre-trained DinoV2 model
-        dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14').to(device)
+        dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14').to(device)
         dino_model.eval()
 
         img_transform = transforms.Compose([
@@ -171,7 +171,8 @@ def eval_over(steps, config):
     is_metaworld = config.get('metaworld', False)
 
     return is_metaworld and steps >= 500 \
-        or env_name == "push_t" and steps > 200
+        or env_name == "push_t" and steps >= 200 \
+        or steps >= 1000
 
 def crop_obs_for_env(obs, env):
     if env == "ant-expert-v2":
