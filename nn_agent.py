@@ -7,7 +7,7 @@ import copy
 from scipy.spatial import distance
 from scipy.spatial import KDTree
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from nn_conditioning_model import KNNExpertDataset, KNNConditioningModel, KNNConditioningTransformerModel, train_model, train_model_tqdm
+from nn_conditioning_model import KNNExpertDataset, KNNConditioningModel, train_model
 from torch.utils.data import Dataset, DataLoader, random_split
 import torch
 import torch.nn as nn
@@ -22,6 +22,7 @@ import gmm_regressor
 from nn_util import NN_METHOD, load_expert_data, save_expert_data, create_matrices, compute_accum_distance_with_rot, compute_distance, compute_distance_with_rot, set_seed, compute_cosine_distance
 from sklearn.random_projection import GaussianRandomProjection
 from sklearn.decomposition import PCA
+import random
 
 DEBUG = False
 
@@ -99,7 +100,6 @@ class NNAgent:
                 checkpoint = torch.load(model_path, weights_only=False)
                 self.model = checkpoint['model']
             else:
-
                 def worker_init_fn(worker_id):
                     np.random.seed(42 + worker_id)
 
@@ -122,7 +122,7 @@ class NNAgent:
                     val_loader = DataLoader(
                         val_dataset, 
                         batch_size=policy_cfg.get('batch_size', 64), 
-                        shuffle=False, 
+                        shuffle=True, 
                         num_workers=0, 
                         generator=generator
                     )
@@ -134,9 +134,10 @@ class NNAgent:
                 if os.path.exists(model_path) and policy_cfg.get('warm_start', False):
                     checkpoint = torch.load(model_path, weights_only=False)
                     model = checkpoint['model']
-                    optimizer = checkpoint['optimizer']
+                    optimizer_state_dict = checkpoint['optimizer_state_dict']
+                    train_loader.generator.set_state(checkpoint['dataloader_rng_state'])
                 else:
-                    optimizer = None
+                    optimizer_state_dict = None
                     model = KNNConditioningModel(
                         state_dim=state_dim,
                         action_dim=action_dim,
@@ -147,10 +148,10 @@ class NNAgent:
                         hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
                         dropout_rate=policy_cfg.get('dropout', 0.1),
                         bc_baseline=self.method == NN_METHOD.BC,
-                        mlp_combine=True
+                        #mlp_combine=True
                     )
 
-                model = nn.DataParallel(model)
+                # model = nn.DataParallel(model)
 
                 self.model = train_model(
                     model, 
@@ -160,7 +161,7 @@ class NNAgent:
                     lr=float(policy_cfg.get('lr', 1e-3)), 
                     decay=float(policy_cfg.get('weight_decay', 1e-5)), 
                     model_path=model_path,
-                    loaded_optimizer=optimizer
+                    loaded_optimizer_dict=optimizer_state_dict if optimizer_state_dict else None
                 )
 
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

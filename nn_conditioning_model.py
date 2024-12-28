@@ -67,7 +67,8 @@ class KNNConditioningModel(nn.Module):
             layers.extend([
                 nn.Linear(in_dim, hidden_dim),
                 nn.ReLU(),
-                # nn.Dropout(dropout_rate).to(device)
+                nn.BathNorm1d(hidden_dim),
+                nn.Dropout(dropout_rate),
             ])
             in_dim = hidden_dim
 
@@ -77,12 +78,11 @@ class KNNConditioningModel(nn.Module):
         
         num_neighbors = math.floor(k * final_neighbors_ratio)
         input_size = num_neighbors * action_dim
+        hidden_dim = 128
         self.action_combiner = nn.Sequential(
-            nn.Linear(input_size, 256),
+            nn.Linear(input_size, hidden_dim),
             nn.ReLU(),
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Linear(128, action_dim)
+            nn.Linear(hidden_dim, action_dim)
         ).to(device=device, dtype=torch.float32)
     
     def forward(self, states, actions, distances, weights):
@@ -157,106 +157,9 @@ class KNNConditioningModel(nn.Module):
         self.training_mode = mode
         return self
     
-    def eval(self, mode=False):
+    def eval(self):
         """Override eval method to set training_mode flag"""
         super().eval()
-        self.training_mode = mode
-        return self
-
-class KNNConditioningTransformerModel(nn.Module):
-    def __init__(self, state_dim, action_dim, k, action_scaler, final_neighbors_ratio=1, embed_dim=64, num_heads=2, num_layers=2, dropout_rate=0.1):
-        set_seed(42)
-        super(KNNConditioningTransformerModel, self).__init__()
-        self.state_dim = state_dim
-        self.action_dim = action_dim
-        self.k = k
-        self.final_neighbors_ratio = final_neighbors_ratio
-        self.input_dim = state_dim + action_dim + 1
-        self.action_scaler = action_scaler
-        self.training_mode = True
-
-        # Token embedding layer
-        self.token_embed = nn.Linear(self.input_dim, embed_dim)
-        self.token_embed_norm = nn.LayerNorm(embed_dim)
-
-        # Learnable positional encoding
-        self.embed_dim = embed_dim
-        max_seq_len = math.floor(k * final_neighbors_ratio)
-        self.positional_encoding = nn.Embedding(max_seq_len, embed_dim)
-
-        # Transformer encoder
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=embed_dim,
-            nhead=num_heads,
-            dim_feedforward=embed_dim * 4,
-            dropout=dropout_rate,
-            # norm_first=True,  # Pre-LayerNorm
-            batch_first=True  # Ensure batch is first dimension
-        )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-
-        # Weighted aggregation layer
-        self.aggregation_weights = nn.Linear(embed_dim, 1)
-
-        # Output layer for predicting actions
-        self.output_layer = nn.Linear(embed_dim, action_dim)
-
-    def forward(self, states, actions, distances):
-        if isinstance(states, list):
-            states = torch.cat(states, dim=0)
-            actions = torch.cat(actions, dim=0)
-            distances = torch.cat(distances, dim=0)
-
-        if isinstance(states, np.ndarray):
-            states = torch.tensor(states, dtype=torch.float32, device=device).unsqueeze(0)
-            actions = self.action_scaler.transform(actions)
-            actions = torch.tensor(actions, dtype=torch.float32, device=device).unsqueeze(0)
-            distances = torch.tensor(distances, dtype=torch.float32, device=device).unsqueeze(0)
-
-        states = states.to(dtype=torch.float32)
-        actions = actions.to(dtype=torch.float32)
-        distances = distances.to(dtype=torch.float32)
-
-        batch_size = states.size(0)
-        seq_len = num_neighbors
-
-        states = states.view(batch_size, seq_len, self.state_dim)
-        actions = actions.view(batch_size, seq_len, self.action_dim)
-        distances = distances.view(batch_size, seq_len, 1)
-
-        # Combine into tokens
-        tokens = torch.cat([states, actions, distances], dim=2)  # Shape: [batch_size, seq_len, input_dim]
-
-        # Embed tokens and apply normalization
-        embedded_tokens = self.token_embed_norm(self.token_embed(tokens))  # Shape: [batch_size, seq_len, embed_dim]
-
-        # Add positional encoding
-        positional_indices = torch.arange(seq_len, device=device).unsqueeze(0).repeat(batch_size, 1)  # Shape: [batch_size, seq_len]
-        embedded_tokens += self.positional_encoding(positional_indices)  # Add learnable positional encoding
-
-        # Pass through transformer
-        transformer_out = self.transformer_encoder(embedded_tokens)  # Shape: [seq_len, batch_size, embed_dim]
-
-        # Weighted Aggregation
-        weights = torch.softmax(self.aggregation_weights(transformer_out), dim=1)  # Shape: [batch_size, seq_len, 1]
-        aggregated_output = (transformer_out * weights).sum(dim=1)  # Shape: [batch_size, embed_dim]
-
-        # Predict actions
-        output = self.output_layer(aggregated_output)  # Shape: [batch_size, action_dim]
-
-        if self.training_mode:
-            return output
-
-        return self.action_scaler.inverse_transform(output.cpu().detach().numpy())[0]
-
-    def train(self, mode=True):
-        super().train(mode)
-        self.training_mode = mode
-        return self
-
-    def eval(self, mode=False):
-        super().eval(mode=mode)
-        self.training_mode = mode
         return self
 
 class KNNExpertDataset(Dataset):
@@ -348,7 +251,7 @@ class KNNExpertDataset(Dataset):
         else:
             return data.states, data.actions, data.distances, data.target_action, data.weights
 
-def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth", loaded_optimizer=None):
+def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth", loaded_optimizer_dict=None):
     if isinstance(model, nn.DataParallel):
         original_model = model.module
     else:
@@ -357,17 +260,16 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
 
     model.to(device)
+    model.train()
     criterion = nn.MSELoss()
-    if loaded_optimizer is not None:
-        optimizer = loaded_optimizer
-    else:
-        optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=decay, eps=1e-8, amsgrad=False)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=decay, eps=1e-8, amsgrad=False)
+    if loaded_optimizer_dict is not None:
+        optimizer.load_state_dict(loaded_optimizer_dict)
 
     best_val_loss = float('inf')
     
     for epoch in range(num_epochs):
         # Training phase
-        model.train()
         train_loss = 0.0
         num_train_batches = 0
         for neighbor_states, neighbor_actions, neighbor_distances, actions, weights in train_loader:
@@ -380,6 +282,19 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
             optimizer.zero_grad(set_to_none=True)
             predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
             loss = criterion(predicted_actions, actions)
+
+            if model.mlp_combine:
+                batch_size = neighbor_actions.size(0)
+                num_neighbors = neighbor_actions.size(1)
+                neighbor_actions_mean = neighbor_actions.view(batch_size, num_neighbors, -1).mean(dim=1)
+                neighbor_reg_loss = criterion(predicted_actions, neighbor_actions_mean)
+                l1_reg = torch.tensor(0., requires_grad=True, device=device)
+                # for param in model.module.parameters():
+                #     l1_reg = l1_reg + torch.norm(param, p=1)
+                # loss += neighbor_reg_loss * 0.5 + l1_reg * 0.01
+                # loss += neighbor_reg_loss * 0.5
+                loss = neighbor_reg_loss
+
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
@@ -388,7 +303,12 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
         
         # Validation phase
         if val_loader is not None:
-            model.eval(mode=True)
+            model.eval()
+            if isinstance(model, nn.DataParallel):
+                model.module.training_mode = True
+            else:
+                model.training_mode = True
+
             val_loss = 0.0
             num_val_batches = 0
             with torch.no_grad():
@@ -412,34 +332,20 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                     torch.save(model, model_path)
                 
                 print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+            model.train()
         else:
             # If no validation loader, save the model at the end of training
-            print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")
+            # print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")
             # torch.save({'model': model, 'optimizer': optimizer}, model_path)
+            pass
 
-    torch.save({'model': model, 'optimizer': original_model}, model_path)
-    return model
+    if isinstance(model, nn.DataParallel):
+        model = model.module
 
-def train_model_tqdm(model, train_loader, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth"):
-    print(num_epochs)
-    os.makedirs(os.path.dirname(model_path), exist_ok=True)
-
-    model.to(device)
-    criterion = nn.MSELoss()
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=decay)
-    
-    for epoch in tqdm(range(num_epochs), desc="Training Epochs"):
-        model.train()
-        train_loss = 0.0
-        for neighbor_states, neighbor_actions, neighbor_distances, actions in tqdm(train_loader, desc=f"Epoch {epoch+1}", leave=False):
-            optimizer.zero_grad()
-            predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances)
-            loss = criterion(predicted_actions, actions)
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item()
-
-    torch.save(model, model_path)
+    torch.save({'model': model,
+                'optimizer_state_dict': optimizer.state_dict(),
+                'dataloader_rng_state': train_loader.generator.get_state()
+}, model_path)
     return model
 
 def evaluate_model(model, test_loader):
