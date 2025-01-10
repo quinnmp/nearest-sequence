@@ -113,7 +113,7 @@ class NNAgent:
                     train_dataset, 
                     batch_size=policy_cfg.get('batch_size', 64), 
                     shuffle=True, 
-                    num_workers=0, 
+                    num_workers=0,
                     generator=generator
                 )
 
@@ -148,10 +148,10 @@ class NNAgent:
                         hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
                         dropout_rate=policy_cfg.get('dropout', 0.1),
                         bc_baseline=self.method == NN_METHOD.BC,
-                        #mlp_combine=True
+                        add_action=False
                     )
 
-                # model = nn.DataParallel(model)
+                model = nn.DataParallel(model)
 
                 self.model = train_model(
                     model, 
@@ -299,6 +299,9 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
         expert_data_path = env_cfg.get('demo_pkl')
         expert_data = load_expert_data(expert_data_path)
         observations = np.concatenate([traj['observations'] for traj in expert_data])
+
+        if env_cfg.get("img", False):
+            observations.reshape(-1)
 
         rot_indices = np.array(env_cfg.get('rot_indices', []), dtype=np.int64) 
         # Separate non-rotational dimensions

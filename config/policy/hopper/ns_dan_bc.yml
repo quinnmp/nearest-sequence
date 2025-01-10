@@ -9,6 +9,7 @@ ratio: 0.4314969702404607
 # epochs: 200
 epochs: 200
 batch_size: 64
+dropout: 0
 hidden_dims:
    - 128
    - 128

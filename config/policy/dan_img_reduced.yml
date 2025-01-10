@@ -1,0 +1,14 @@
+method: cond
+k_neighbors: 250
+lookback: 1
+decay_rate: 0
+#Best parameters:  {'epochs': 591, 'batch_size': 16, 'num_layers': 3, 'layer_size_0': 1024, 'layer_size_1': 64, 'layer_size_2': 64}
+
+epochs: 591
+batch_size: 256
+hidden_dims:
+   - 1024
+   - 64
+   - 64
+model_name: "dan_img"
+cond_force_retrain: True

@@ -1,4 +1,4 @@
-from nn_eval import nn_eval
+from nn_eval import nn_eval, nn_eval_closed_loop
 import nn_agent, nn_util
 import yaml
 from argparse import ArgumentParser
@@ -18,12 +18,12 @@ if __name__ == "__main__":
     print(env_cfg)
     print(policy_cfg)
 
-    policy_cfg['epochs'] = 20
+    policy_cfg['epochs'] = 50
     agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
     policy_cfg['warm_start'] = True
-    for k in range(20, 1000, 20):
+    for k in range(50, 10000, 50):
         print(k)
-        nn_eval(env_cfg, agent)
+        nn_eval_closed_loop(env_cfg, agent)
         # policy_cfg['epochs'] = k
         agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
 

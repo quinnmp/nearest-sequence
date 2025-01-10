@@ -24,6 +24,64 @@ import copy
 
 DEBUG = False
 
+@profile
+def single_trial_eval(config, agent, env, trial):
+    img = config.get('img', False)
+    env_name = config['name']
+    is_metaworld = config.get('metaworld', False)
+    is_robosuite = config.get('robosuite', False)
+    
+    video_frames = []
+    if not is_robosuite:
+        env.seed(trial)
+    if img:
+        observation = env.reset()
+        obs_history = []
+    else:
+        obs_history = None
+        if env_name == "push_t":
+            observation = crop_obs_for_env(env.reset()[0], env_name)
+        else:
+            observation = crop_obs_for_env(env.reset(), env_name)
+
+    agent.reset_obs_history()
+
+    episode_reward = 0.0
+    steps = 0
+
+    done = False
+    while not (done or eval_over(steps, config)):
+        steps += 1
+
+        if is_robosuite and img:
+            action = get_action_from_env(config, env, agent, obs_history=obs_history)
+        else:
+            action = get_action_from_obs(config, agent, observation, obs_history=obs_history)
+
+        observation, reward, done, info = env.step(action)[:4]
+
+        if not img:
+            observation = crop_obs_for_env(observation, env_name)
+
+        if env_name == "push_t":
+            episode_reward = max(episode_reward, reward)
+        else:
+            episode_reward += reward
+            if is_robosuite and episode_reward > 0:
+                break
+        if False:
+            frame = env.render(mode='rgb_array', width=512, height=512)
+            video_frames.append(frame)
+
+            # env.render(mode='human')
+
+    if len(video_frames) > 0:
+        pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
+
+    success = 1 if 'success' in info else 0
+
+    return episode_reward, success
+
 def nn_fork_eval(config, env, steps, episode_reward, dan_agent, observation):
     env = copy.deepcopy(env)
     unobserved_nq = 1
@@ -132,68 +190,17 @@ def nn_eval_split(config, dan_agent, bc_agent, trials=10):
 
 def nn_eval(config, nn_agent, trials=10):
     env = construct_env(config)
-    img = config.get('img', False)
-    env_name = config['name']
-    is_metaworld = config.get('metaworld', False)
-    is_robosuite = config.get('robosuite', False)
-
     episode_rewards = []
-    success = 0
+    successes = 0
+
     for trial in range(trials):
-        video_frames = []
-        if not is_robosuite:
-            env.seed(trial)
-        if img:
-            observation = env.reset()
-            obs_history = []
-        else:
-            obs_history = None
-            if env_name == "push_t":
-                observation = crop_obs_for_env(env.reset()[0], env_name)
-            else:
-                observation = crop_obs_for_env(env.reset(), env_name)
-
-        nn_agent.reset_obs_history()
-
-        episode_reward = 0.0
-        steps = 0
-
-        done = False
-        while not (done or eval_over(steps, config)):
-            start = time.time()
-            steps += 1
-            if is_robosuite and img:
-                action = get_action_from_env(config, env, nn_agent, obs_history=obs_history)
-            else:
-                action = get_action_from_obs(config, nn_agent, observation, obs_history=obs_history)
-            observation, reward, done, info = env.step(action)[:4]
-
-            if not img:
-                observation = crop_obs_for_env(observation, env_name)
-
-            if env_name == "push_t":
-                episode_reward = max(episode_reward, reward)
-            else:
-                episode_reward += reward
-            if False:
-                frame = env.render(mode='rgb_array', width=512, height=512)
-
-                video_frames.append(frame)
-
-                # env.render(mode='human')
-            #print(f"Step time: {time.time() - start}")
-
-        # print(episode_reward)
+        episode_reward, success = single_trial_eval(config, nn_agent, env, trial)
         episode_rewards.append(episode_reward)
+        successes += success
 
-        success += info['success'] if 'success' in info else 0
-
-        if len(video_frames) > 0:
-            pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
-
-    os.makedirs('results', exist_ok=True)
-    with open("results/" + str(env_name) + "_" + str(nn_agent.candidates) + "_" + str(nn_agent.lookback) + "_" + str(nn_agent.decay) + "_" + str(nn_agent.final_neighbors_ratio) + "_result.pkl", 'wb') as f:
-        pickle.dump(episode_rewards, f)
+    # os.makedirs('results', exist_ok=True)
+    # with open("results/" + str(env_name) + "_" + str(nn_agent.candidates) + "_" + str(nn_agent.lookback) + "_" + str(nn_agent.decay) + "_" + str(nn_agent.final_neighbors_ratio) + "_result.pkl", 'wb') as f:
+    #     pickle.dump(episode_rewards, f)
     print(
         f"Candidates {nn_agent.candidates}, lookback {nn_agent.lookback}, decay {nn_agent.decay}, ratio {nn_agent.final_neighbors_ratio}: "
         f"mean {round(np.mean(episode_rewards), 2)}, std {round(np.std(episode_rewards), 2)}"
@@ -207,7 +214,7 @@ def nn_eval_closed_loop(config, nn_agent):
     is_metaworld = config.get('metaworld', False)
     is_robosuite = config.get('robosuite', False)
 
-    expert_data = nn_util.load_expert_data("data/square_task_D1/square_task_D1_100.pkl")
+    expert_data = nn_util.load_expert_data("data/square_task_D1/square_task_D1_10.pkl")
 
     # writer = ffmpegwriter(fps=60, metadata=dict(artist='me'), bitrate=5000)
     # video_filename = 'nn_eval_sanity_closed_loop.mp4'
@@ -218,7 +225,6 @@ def nn_eval_closed_loop(config, nn_agent):
     success = 0
     # with writer.saving(fig, video_filename, 100):
     for trial in range(len(expert_data)):
-        print(trial)
         video_frames = []
         if not is_robosuite:
             env.seed(trial)
@@ -249,8 +255,8 @@ def nn_eval_closed_loop(config, nn_agent):
             else:
                 action = get_action_from_obs(config, nn_agent, observation, obs_history=obs_history)
             observation, reward, done, info = env.step(action)[:4]
-            if reward > 0:
-                print(f"Reward: {reward}, done {done}, info {info}")
+            if is_robosuite and reward == 1:
+                done = True
 
             if not img:
                 observation = crop_obs_for_env(observation, env_name)
@@ -259,12 +265,10 @@ def nn_eval_closed_loop(config, nn_agent):
                 episode_reward = max(episode_reward, reward)
             else:
                 episode_reward += reward
-            if False:
+            if True:
                 frame = env.render(mode='rgb_array', width=512, height=512)
                 video_frames.append(frame)
 
-
-        print(episode_reward)
         episode_rewards.append(episode_reward)
 
         success += info['success'] if 'success' in info else 0
@@ -410,8 +414,8 @@ if __name__ == "__main__":
     # for i in range(10):
     dan_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
     # env_cfg_copy = env_cfg.copy()
-    # nn_eval(env_cfg, dan_agent, trials=10)
-    nn_eval_closed_loop(env_cfg, dan_agent)
+    nn_eval(env_cfg, dan_agent, trials=10)
+    # nn_eval_closed_loop(env_cfg, dan_agent)
     # env_cfg_copy['demo_pkl'] = "data/hopper-expert-v2_1_img.pkl"
     # img_agent = nn_agent.NNAgentEuclidean(env_cfg_copy, policy_cfg)
     # nn_eval_open_loop_img(env_cfg, dan_agent, img_agent)

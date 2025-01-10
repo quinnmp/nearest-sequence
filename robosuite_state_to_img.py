@@ -32,13 +32,15 @@ from mimicgen.configs import MG_TaskSpec
 
 # Load the pre-trained DinoV2 model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14').to(device)
+model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14').to(device)
 model.eval()
 
 # Preprocessing transforms
 transform = transforms.Compose([
-    transforms.Resize(224),  # DinoV2 expects 224x224 input
-    transforms.CenterCrop(224),
+    #transforms.Resize(224),  # DinoV2 expects 224x224 input
+    #transforms.CenterCrop(224),
+    transforms.Resize(14 * 36),  # DinoV2 expects 224x224 input
+    transforms.CenterCrop(14 * 36),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])

@@ -23,7 +23,16 @@ demos = f['data']
 expert_data = []
 print(len(demos))
 for demo in demos:
-    obs = f['data'][demo]['obs']['robot0_eef_pos']
+    # Construct observation
+    demo_obs = f['data'][demo]['obs']
+    obj = demo_obs['object']
+    ee_pos = demo_obs['robot0_eef_pos']
+    ee_pos_vel = demo_obs['robot0_eef_vel_lin']
+    ee_ang = demo_obs['robot0_eef_quat']
+    ee_ang_vel = demo_obs['robot0_eef_vel_ang']
+    gripper_pos = demo_obs['robot0_gripper_qpos']
+    gripper_pos_vel = demo_obs['robot0_gripper_qpos']
+    obs = np.hstack((obj, ee_pos, ee_pos_vel, ee_ang, ee_ang_vel, gripper_pos, gripper_pos_vel))
     actions = f['data'][demo]['actions']
     states = f['data'][demo]['states']
     expert_data.append({"observations": np.array(obs[:]), "actions": np.array(actions[:]), "states": np.array(states[:]), "model_file": demos[demo].attrs['model_file']})

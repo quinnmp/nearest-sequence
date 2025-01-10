@@ -1,0 +1,10 @@
+#demo_pkl: "data/square_task_D1/square_task_D1_100_img_90_train.pkl"
+#val_pkl: "data/square_task_D1/square_task_D1_100_img_10_val.pkl"
+demo_pkl: "data/square_task_D1/square_task_D1_10_img.pkl"
+#val_pkl: "data/square_task_D1/square_task_D1_1000_val.pkl"
+demo_hdf5: "data/square_task_D1/demo.hdf5"
+neighbor_lookup_pkl: "data/square-img-bc-neighbor-lookup-sanity.pkl"
+stack_size: 1
+robosuite: True
+img: True
+name: Square_D1

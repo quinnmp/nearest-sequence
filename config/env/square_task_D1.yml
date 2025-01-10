@@ -1,4 +1,6 @@
-demo_pkl: "data/square_task_D1/square_task_D1_1000.pkl"
+demo_pkl: "data/square_task_D1/square_task_D1_10.pkl"
 demo_hdf5: "data/square_task_D1/demo.hdf5"
-
+neighbor_lookup_pkl: "data/square-bc-neighbor-lookup.pkl"
 stack_size: 1
+robosuite: True
+name: Square_D1

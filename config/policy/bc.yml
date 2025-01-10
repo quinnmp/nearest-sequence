@@ -7,3 +7,4 @@ hidden_dims:
    - 128
    - 128
 cond_force_retrain: True
+dropout: 0

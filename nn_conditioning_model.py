@@ -20,6 +20,7 @@ import os
 from dataclasses import dataclass
 from tqdm import tqdm
 import time
+from torch.amp import autocast, GradScaler
 REPRODUCE_RESULTS = False
 
 if REPRODUCE_RESULTS:
@@ -38,7 +39,7 @@ class NeighborData:
     weights: torch.Tensor
 
 class KNNConditioningModel(nn.Module):
-    def __init__(self, state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False, bc_baseline=False, mlp_combine=False):
+    def __init__(self, state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False, bc_baseline=False, mlp_combine=False, add_action=False):
         super(KNNConditioningModel, self).__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -49,13 +50,18 @@ class KNNConditioningModel(nn.Module):
         self.combined_dim = combined_dim
         self.bc_baseline = bc_baseline
         self.mlp_combine = mlp_combine
+        self.add_action = add_action
         
         self.distance_size = state_dim if not euclidean else 1
-        self.input_dim = state_dim + action_dim + self.distance_size
-        if combined_dim:
+        if add_action:
+            self.input_dim = state_dim + self.distance_size
+        elif combined_dim:
             self.input_dim = self.input_dim * math.floor(k * final_neighbors_ratio)
-        if bc_baseline:
+        elif bc_baseline:
             self.input_dim = state_dim
+        else:
+            self.input_dim = state_dim + action_dim + self.distance_size
+
 
         self.action_scaler = action_scaler
         self.distance_scaler = distance_scaler
@@ -67,14 +73,13 @@ class KNNConditioningModel(nn.Module):
             layers.extend([
                 nn.Linear(in_dim, hidden_dim),
                 nn.ReLU(),
-                nn.BathNorm1d(hidden_dim),
+                #nn.BatchNorm1d(hidden_dim),
                 nn.Dropout(dropout_rate),
             ])
             in_dim = hidden_dim
 
         layers.append(nn.Linear(hidden_dims[-1], action_dim).to(device))
         self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
-
         
         num_neighbors = math.floor(k * final_neighbors_ratio)
         input_size = num_neighbors * action_dim
@@ -125,7 +130,10 @@ class KNNConditioningModel(nn.Module):
         distances = distances.view(batch_size, num_neighbors, self.distance_size)
        
         if not self.combined_dim:
-            inputs = torch.cat([states, actions, distances], dim=-1)
+            if self.add_action:
+                inputs = torch.cat([states, distances], dim=-1)
+            else:
+                inputs = torch.cat([states, actions, distances], dim=-1)
             inputs = inputs.view(batch_size * num_neighbors, -1)
 
             model_outputs = self.model(inputs)
@@ -138,6 +146,8 @@ class KNNConditioningModel(nn.Module):
             elif self.mlp_combine:
                 flattened_actions = model_outputs.view(batch_size, -1)
                 output = self.action_combiner(flattened_actions)
+            elif self.add_action:
+                output = (model_outputs + actions).mean(dim=1)
             else:
                 output = model_outputs.mean(dim=1)
 
@@ -185,39 +195,41 @@ class KNNExpertDataset(Dataset):
 
         if neighbor_lookup_pkl:
             if os.path.exists(neighbor_lookup_pkl):
-                self.neighbor_lookup = pickle.load(open(env_cfg_copy['neighbor_lookup_pkl'], 'rb'))
+                neighbor_lookup_data = pickle.load(open(env_cfg_copy['neighbor_lookup_pkl'], 'rb'))
+                self.neighbor_lookup = neighbor_lookup_data['lookup']
+                self.distance_scaler = neighbor_lookup_data['distance_scaler']
             else:
                 save_neighbor_lookup = True
 
-        if not self.bc_baseline:
+        if not neighbor_lookup_pkl or save_neighbor_lookup:
             all_distances = []
             for i in range(len(self)):
                 _, _, distances, _, _ = self[i]
-                all_distances.extend(distances.cpu().numpy())
+                if self.bc_baseline:
+                    # Distances will be -1, just append to make interpreter happy
+                    all_distances.append(distances)
+                else:
+                    all_distances.extend(distances.cpu().numpy())
 
             self.distance_scaler = FastScaler()
             self.distance_scaler.fit(all_distances)
 
+            for i in range(len(self)):
+                _, _, distances, _, _ = self[i]
+                self.update_distance(i, self.distance_scaler.transform(distances))
+
             if save_neighbor_lookup:
-                pickle.dump(self.neighbor_lookup, open(neighbor_lookup_pkl, 'wb'))
-        else:
-            self.distance_scaler = None
+                pickle.dump({"lookup": self.neighbor_lookup, "distance_scaler": self.distance_scaler}, open(neighbor_lookup_pkl, 'wb'))
 
     def __len__(self):
         return len(self.agent.flattened_obs_matrix)
+
+    def update_distance(self, idx, new_dist):
+        data = self.neighbor_lookup[idx]
+
+        data.distance = new_dist
     
     def __getitem__(self, idx):
-        if self.bc_baseline:
-            # Figure out which trajectory this index in our flattened state array belongs to
-            state_traj = np.searchsorted(self.agent.traj_starts, idx, side='right') - 1
-            state_num = idx - self.agent.traj_starts[state_traj]
-            actual_state = self.agent.obs_matrix[state_traj][state_num]
-
-            # The corresponding action to this state
-            action = self.action_scaler.transform([self.agent.act_matrix[state_traj][state_num]])[0]
-
-            return torch.tensor(actual_state, dtype=torch.float32, device=device).unsqueeze(0), -1, -1, torch.tensor(action, dtype=torch.float32, device=device), -1
-
         if self.neighbor_lookup[idx] is None:
             # Figure out which trajectory this index in our flattened state array belongs to
             state_traj = np.searchsorted(self.agent.traj_starts, idx, side='right') - 1
@@ -227,29 +239,34 @@ class KNNExpertDataset(Dataset):
             # The corresponding action to this state
             action = self.action_scaler.transform([self.agent.act_matrix[state_traj][state_num]])[0]
 
-            self.agent.obs_history = self.agent.obs_matrix[state_traj][:state_num][::-1]
+            if self.bc_baseline:
+                self.neighbor_lookup[idx] = NeighborData(
+                        states=torch.tensor(actual_state, dtype=torch.float32, device=device).unsqueeze(0),
+                        actions=-1,
+                        distances=-1,
+                        target_action=torch.tensor(action, dtype=torch.float32, device=device),
+                        weights=-1
+                )
+            else:
+                self.agent.obs_history = self.agent.obs_matrix[state_traj][:state_num][::-1]
 
-            neighbor_states, neighbor_actions, neighbor_distances, weights = self.agent.get_action(self.agent.obs_matrix[state_traj][state_num], normalize=False)
+                neighbor_states, neighbor_actions, neighbor_distances, weights = self.agent.get_action(self.agent.obs_matrix[state_traj][state_num], normalize=False)
 
-            if self.euclidean:
-                neighbor_distances = np.sqrt(np.sum(neighbor_distances**2, axis=1, keepdims=True))
+                if self.euclidean:
+                    neighbor_distances = np.sqrt(np.sum(neighbor_distances**2, axis=1, keepdims=True))
 
-            neighbor_actions = self.action_scaler.transform(neighbor_actions)
+                neighbor_actions = self.action_scaler.transform(neighbor_actions)
 
-            self.neighbor_lookup[idx] = NeighborData(
-                states=torch.as_tensor(neighbor_states, dtype=torch.float32, device=device),
-                actions=torch.as_tensor(neighbor_actions, dtype=torch.float32, device=device),
-                distances=torch.as_tensor(neighbor_distances, dtype=torch.float32, device=device),
-                target_action=torch.as_tensor(action, dtype=torch.float32, device=device),
-                weights=torch.as_tensor(weights, dtype=torch.float32, device=device)
-            )
+                self.neighbor_lookup[idx] = NeighborData(
+                    states=torch.as_tensor(neighbor_states, dtype=torch.float32, device=device),
+                    actions=torch.as_tensor(neighbor_actions, dtype=torch.float32, device=device),
+                    distances=torch.as_tensor(neighbor_distances, dtype=torch.float32, device=device),
+                    target_action=torch.as_tensor(action, dtype=torch.float32, device=device),
+                    weights=torch.as_tensor(weights, dtype=torch.float32, device=device)
+                )
 
         data = self.neighbor_lookup[idx]
-        if hasattr(self, "distance_scaler"):
-            scaled_distances = self.distance_scaler.transform(data.distances)
-            return data.states, data.actions, scaled_distances, data.target_action, data.weights
-        else:
-            return data.states, data.actions, data.distances, data.target_action, data.weights
+        return data.states, data.actions, data.distances, data.target_action, data.weights
 
 def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth", loaded_optimizer_dict=None):
     if isinstance(model, nn.DataParallel):
@@ -266,12 +283,22 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
     if loaded_optimizer_dict is not None:
         optimizer.load_state_dict(loaded_optimizer_dict)
 
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode='min',
+        factor=0.5,
+        patience=6,
+    )
+
     best_val_loss = float('inf')
+    early_stopping_patience = 18
+    early_stopping_counter = 0
     
     for epoch in range(num_epochs):
         # Training phase
-        train_loss = 0.0
+        #train_loss = 0.0
         num_train_batches = 0
+        start = time.time()
         for neighbor_states, neighbor_actions, neighbor_distances, actions, weights in train_loader:
             neighbor_states = neighbor_states.to(device)
             neighbor_actions = neighbor_actions.to(device)
@@ -280,10 +307,11 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
             weights = weights.to(device)
             
             optimizer.zero_grad(set_to_none=True)
-            predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
-            loss = criterion(predicted_actions, actions)
+            with autocast('cuda'):
+                predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
+                loss = criterion(predicted_actions, actions)
 
-            if model.mlp_combine:
+            if model.module.mlp_combine:
                 batch_size = neighbor_actions.size(0)
                 num_neighbors = neighbor_actions.size(1)
                 neighbor_actions_mean = neighbor_actions.view(batch_size, num_neighbors, -1).mean(dim=1)
@@ -297,9 +325,10 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
 
             loss.backward()
             optimizer.step()
-            train_loss += loss.item()
+            #train_loss += loss.item()
             num_train_batches += 1
-        avg_train_loss = train_loss / num_train_batches
+        #print(f"Time for epoch {epoch}: {time.time() - start}")
+        #avg_train_loss = train_loss / num_train_batches
         
         # Validation phase
         if val_loader is not None:
@@ -326,12 +355,24 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                 
                 avg_val_loss = val_loss / num_val_batches
                 
+                scheduler.step(avg_val_loss)
                 # Save the best model based on validation loss
                 if avg_val_loss < best_val_loss:
                     best_val_loss = avg_val_loss
-                    torch.save(model, model_path)
+                    early_stopping_counter = 0
+                    best_check ={'model': model.module if isinstance(model, nn.DataParallel) else model,
+                                'optimizer_state_dict': optimizer.state_dict(),
+                                'dataloader_rng_state': train_loader.generator.get_state()}
+                else:
+                    early_stopping_counter += 1
+
+                if early_stopping_counter >= early_stopping_patience:
+                    print(f'Recommend early stopping after {epoch+1 - early_stopping_patience} epochs')
+                    torch.save(best_check, model_path)
+                    return best_check[model]
+
                 
-                print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+                #print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
             model.train()
         else:
             # If no validation loader, save the model at the end of training

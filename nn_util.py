@@ -14,6 +14,7 @@ from sklearn.preprocessing import StandardScaler
 import math
 import faiss
 import os
+import sys
 import gmm_regressor
 import torch
 import random
@@ -21,6 +22,7 @@ import torch
 import torchvision.transforms as transforms
 import gym
 import matplotlib.pyplot as plt
+import warnings
 
 import robomimic
 import robomimic.utils.obs_utils as ObsUtils
@@ -46,8 +48,10 @@ device = None
 img_transform = None
 img_env = None
 camera_name = None
+pca = None
 
 def construct_env(config):
+    global pca
     is_robosuite = config.get('robosuite', False)
 
     if is_robosuite:
@@ -58,10 +62,19 @@ def construct_env(config):
                     rgb=[],
                 ),
         )
-        ObsUtils.initialize_obs_utils_with_obs_specs(obs_modality_specs=dummy_spec)
 
-        env_meta = get_env_metadata_from_dataset(dataset_path=config['demo_hdf5'])
-        env = EnvUtils.create_env_from_metadata(env_meta=env_meta, render=True, render_offscreen=True)
+        # Suppress logs
+        original_stdout = sys.stdout
+        sys.stdout = open('/dev/null', 'w')
+        try:
+            ObsUtils.initialize_obs_utils_with_obs_specs(obs_modality_specs=dummy_spec)
+
+            env_meta = get_env_metadata_from_dataset(dataset_path=config['demo_hdf5'])
+            env = EnvUtils.create_env_from_metadata(env_meta=env_meta, render_offscreen=True)
+        finally:
+            sys.stdout.close()
+            sys.stdout = original_stdout
+
         camera_name = RobomimicUtils.get_default_env_cameras(env_meta=env_meta)[0]
         return env
 
@@ -79,10 +92,14 @@ def construct_env(config):
     else:
         env = gym.make(env_name)
 
+    if 'pca_pkl' in config:
+        with open(config['pca_pkl'], 'rb') as f:
+            pca = pickle.load(f)
+
     return env
 
 def get_action_from_env(config, env, model, obs_history=None):
-    global camera_name
+    global camera_name, pca
     assert obs_history is not None
     stack_size = config.get('stack_size', 10)
     
@@ -133,18 +150,21 @@ def stack_with_previous(obs_list, stack_size):
     return np.concatenate(obs_list[-stack_size:], axis=0)
 
 def process_rgb_array(rgb_array):
-    global dino_model, device, img_transform
+    global dino_model, device, img_transform, pca
 
     if dino_model is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Load the pre-trained DinoV2 model
-        dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14').to(device)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="xFormers is not available*") 
+            dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14', verbose=False).to(device)
+
         dino_model.eval()
 
         img_transform = transforms.Compose([
-            transforms.Resize(224),  # DinoV2 expects 224x224 input
-            transforms.CenterCrop(224),
+            transforms.Resize(14 * 36),  # DinoV2 expects 224x224 input
+            transforms.CenterCrop(14 * 36),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
@@ -164,7 +184,11 @@ def process_rgb_array(rgb_array):
     with torch.no_grad():
         features = dino_model(input_tensor)
 
-    return features.cpu().numpy()[0]
+    obs = features.cpu().numpy()[0]
+    if pca is not None:
+        obs = pca.transform(obs)
+
+    return obs
 
 def eval_over(steps, config):
     env_name = config['name']
@@ -177,12 +201,21 @@ def eval_over(steps, config):
 def crop_obs_for_env(obs, env):
     if env == "ant-expert-v2":
         return obs[:27]
-    if env == "coffee-pull-v2" or env == "coffee-push-v2":
+    elif env == "coffee-pull-v2" or env == "coffee-push-v2":
         return np.concatenate((obs[:11], obs[18:29], obs[-3:len(obs)]))
-    if env == "button-press-topdown-v2":
+    elif env == "button-press-topdown-v2":
         return np.concatenate((obs[:9], obs[18:27], obs[-2:len(obs)]))
-    if env == "drawer-close-v2":
+    elif env == "drawer-close-v2":
         return np.concatenate((obs[:7], obs[18:25], obs[-3:len(obs)]))
+    elif env == "Square_D1":
+        obj = obs['object']
+        ee_pos = obs['robot0_eef_pos']
+        ee_pos_vel = obs['robot0_eef_vel_lin']
+        ee_ang = obs['robot0_eef_quat']
+        ee_ang_vel = obs['robot0_eef_vel_ang']
+        gripper_pos = obs['robot0_gripper_qpos']
+        gripper_pos_vel = obs['robot0_gripper_qpos']
+        return np.hstack((obj, ee_pos, ee_pos_vel, ee_ang, ee_ang_vel, gripper_pos, gripper_pos_vel))
     else:
         return obs
 
