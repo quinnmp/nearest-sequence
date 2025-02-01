@@ -54,3 +54,12 @@ profile*
 
 # Big model files
 model_checkpoints/
+
+# All pkl files unless stated otherwise
+data/
+*.png
+*.lprof
+MUJOCO_LOG.TXT
+cond_models/
+log/
+results/

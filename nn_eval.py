@@ -19,14 +19,15 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import mujoco
 from typing import Dict, Any
-from nn_util import crop_obs_for_env, construct_env, get_action_from_obs, get_action_from_env, eval_over
+from nn_util import crop_obs_for_env, construct_env, get_action_from_obs, get_action_from_env, eval_over, get_keypoint_viz
 import copy
 
 DEBUG = False
 
-@profile
+#@profile
 def single_trial_eval(config, agent, env, trial):
     img = config.get('img', False)
+    keypoint = config.get('keypoint', False)
     env_name = config['name']
     is_metaworld = config.get('metaworld', False)
     is_robosuite = config.get('robosuite', False)
@@ -53,10 +54,13 @@ def single_trial_eval(config, agent, env, trial):
     while not (done or eval_over(steps, config)):
         steps += 1
 
+        frame = env.render(mode='rgb_array')
+        video_frames.append(frame)
+
         if is_robosuite and img:
             action = get_action_from_env(config, env, agent, obs_history=obs_history)
         else:
-            action = get_action_from_obs(config, agent, observation, obs_history=obs_history)
+            action = get_action_from_obs(config, agent, frame if keypoint else observation, obs_history=obs_history)
 
         observation, reward, done, info = env.step(action)[:4]
 
@@ -69,14 +73,24 @@ def single_trial_eval(config, agent, env, trial):
             episode_reward += reward
             if is_robosuite and episode_reward > 0:
                 break
-        if False:
-            frame = env.render(mode='rgb_array', width=512, height=512)
-            video_frames.append(frame)
 
             # env.render(mode='human')
 
-    if len(video_frames) > 0:
-        pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
+    if len(video_frames) > 0 and False:
+        from tapnet.utils import transforms
+        from tapnet.utils import viz_utils
+
+        tracks, visibles = get_keypoint_viz()
+
+        video_frames = np.array(video_frames)
+        height, width = video_frames.shape[1:3]
+        tracks = transforms.convert_grid_coordinates(
+            tracks, (256, 256), (width, height)
+        )
+        video_viz = viz_utils.paint_point_track(video_frames, tracks, visibles)
+
+        #pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
+        pickle.dump(video_viz, open(f"data/{trial}", 'wb'))
 
     success = 1 if 'success' in info else 0
 

@@ -17,6 +17,7 @@ import torchvision.transforms as transforms
 from PIL import Image
 import metaworld
 import metaworld.envs.mujoco.env_dict as _env_dict
+import mujoco_py
 
 # Load the pre-trained DinoV2 model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -93,14 +94,17 @@ else:
 
 img_data = []
 for traj in range(len(data)):
+    print("PROCESSING TRAJ")
     traj_obs = []
     for ob in range(len(data[traj]['observations'])):
         env.set_state(
             np.hstack((np.zeros(unobserved_nq), data[traj]['observations'][ob][:nq])), 
             data[traj]['observations'][ob][-nv:])
+        #frame = env.sim.render(height=520, width=520)
         frame = env.render(mode='rgb_array')
+        print(frame)
         traj_obs.append(process_rgb_array(frame))
-        # plt.imsave('hopper_frame.png', frame)
+        plt.imsave('hopper_frame.png', frame)
     stacked_traj_obs = stack_with_previous(traj_obs, stack_size=stack_size)
     img_data.append({'observations': stacked_traj_obs, 'actions': data[traj]['actions']})
 

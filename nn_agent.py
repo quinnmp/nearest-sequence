@@ -42,7 +42,7 @@ class NNAgent:
         self.flattened_obs_matrix = np.concatenate(self.obs_matrix, dtype=np.float64)
         self.flattened_act_matrix = np.concatenate(self.act_matrix)
 
-        if env_cfg.get('model_pkl'):
+        if env_cfg.get('model_pkl', False):
             self.use_model_data = True
             if not hasattr(self, 'model_data_path'):
                 self.model_data_path = env_cfg.get('model_pkl')
@@ -146,9 +146,9 @@ class NNAgent:
                         distance_scaler=train_dataset.distance_scaler,
                         final_neighbors_ratio=self.final_neighbors_ratio,
                         hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
-                        dropout_rate=policy_cfg.get('dropout', 0.1),
+                        dropout_rate=policy_cfg.get('dropout', 0.0),
                         bc_baseline=self.method == NN_METHOD.BC,
-                        add_action=False
+                        reduce_delta_s=False
                     )
 
                 model = nn.DataParallel(model)
@@ -227,7 +227,7 @@ class NNAgentEuclidean(NNAgent):
             self.plot.update(traj_nums[final_neighbor_indices], obs_nums[final_neighbor_indices], self.obs_history, self.lookback)
 
         if self.method == NN_METHOD.KNN_AND_DIST or self.method == NN_METHOD.COND:
-            if self.use_model_data:
+            if self.use_model_data and current_model_ob is not None:
                 neighbor_states = self.flattened_model_obs_matrix[final_neighbors]
                 neighbor_actions = self.flattened_model_act_matrix[final_neighbors]
                 reshaped_model_obs_matrix = self.flattened_model_obs_matrix.reshape(-1, len(self.model_obs_matrix[0][0]))
@@ -300,7 +300,7 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
         expert_data = load_expert_data(expert_data_path)
         observations = np.concatenate([traj['observations'] for traj in expert_data])
 
-        if env_cfg.get("img", False):
+        if env_cfg.get("img", False) and False:
             observations.reshape(-1)
 
         rot_indices = np.array(env_cfg.get('rot_indices', []), dtype=np.int64) 

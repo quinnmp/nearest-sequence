@@ -2,4 +2,5 @@ seed: 42
 name: "hopper-expert-v2"
 demo_pkl: "data/hopper-expert-v2_1_img.pkl"
 model_pkl: "data/hopper-expert-v2_1.pkl"
+neighbor_lookup_pkl: "data/hopper-mix-neighbor-lookup.pkl"
 img: True

@@ -18,12 +18,11 @@ if __name__ == "__main__":
     print(env_cfg)
     print(policy_cfg)
 
-    policy_cfg['epochs'] = 50
+    policy_cfg['epochs'] = 1
     agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
     policy_cfg['warm_start'] = True
-    for k in range(50, 10000, 50):
+    for k in range(1, 10000, 1):
         print(k)
-        nn_eval_closed_loop(env_cfg, agent)
-        # policy_cfg['epochs'] = k
+        nn_eval(env_cfg, agent)
         agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
 

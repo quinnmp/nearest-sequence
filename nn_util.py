@@ -35,6 +35,13 @@ import mimicgen.utils.file_utils as MG_FileUtils
 import mimicgen.utils.robomimic_utils as RobomimicUtils
 from mimicgen.utils.misc_utils import add_red_border_to_frame
 from mimicgen.configs import MG_TaskSpec
+import jax
+import mediapy as media
+import numpy as np
+from tapnet.models import tapir_model
+from tapnet.utils import model_utils
+from tapnet.utils import transforms
+from tapnet.utils import viz_utils
 
 from PIL import Image
 DEBUG = False
@@ -49,6 +56,72 @@ img_transform = None
 img_env = None
 camera_name = None
 pca = None
+
+tapir = None
+online_model_init = None
+online_model_predict = None
+
+query_features = None
+causal_state = None
+last_tracks = None
+keypoint_viz = []
+
+def online_model_init_func(frames, query_points):
+    """Initialize query features for the query points."""
+    frames = model_utils.preprocess_frames(frames)[np.newaxis, np.newaxis, :, :, :]
+    feature_grids = tapir.get_feature_grids(frames, is_training=False)
+    query_features = tapir.get_query_features(
+      frames,
+      is_training=False,
+      query_points=query_points,
+      feature_grids=feature_grids,
+    )
+    return query_features
+
+def online_model_predict_func(frames, query_features, causal_context):
+    """Compute point tracks and occlusions given frames and query points."""
+    frames = model_utils.preprocess_frames(frames)[np.newaxis, np.newaxis, :, :, :]
+    feature_grids = tapir.get_feature_grids(frames, is_training=False)
+    trajectories = tapir.estimate_trajectories(
+      frames.shape[-3:-1],
+      is_training=False,
+      feature_grids=feature_grids,
+      query_features=query_features,
+      query_points_in_video=None,
+      query_chunk_size=64,
+      causal_context=causal_context,
+      get_causal_context=True,
+    )
+    causal_context = trajectories['causal_context']
+    del trajectories['causal_context']
+    # Take only the predictions for the final resolution.
+    # For running on higher resolution, it's typically better to average across
+    # resolutions.
+    tracks = trajectories['tracks'][-1]
+    occlusions = trajectories['occlusion'][-1]
+    uncertainty = trajectories['expected_dist'][-1]
+    visibles = model_utils.postprocess_occlusions(occlusions, uncertainty)
+    return tracks, visibles, causal_context
+
+def init_tapir():
+    global tapir, online_model_init, online_model_predict
+    checkpoint_path = './model_checkpoints/tapnet/checkpoints/causal_bootstapir_checkpoint.npy'
+    ckpt_state = np.load(checkpoint_path, allow_pickle=True).item()
+    params, state = ckpt_state['params'], ckpt_state['state']
+
+    kwargs = dict(
+        use_causal_conv=True,
+        bilinear_interp_with_depthwise_conv=False,
+        pyramid_level=0,
+    )
+
+    kwargs.update(
+        dict(pyramid_level=1, extra_convs=True, softmax_temperature=10.0)
+    )
+
+    tapir = tapir_model.ParameterizedTAPIR(params, state, tapir_kwargs=kwargs)
+    online_model_init = jax.jit(online_model_init_func)
+    online_model_predict = jax.jit(online_model_predict_func)
 
 def construct_env(config):
     global pca
@@ -91,6 +164,25 @@ def construct_env(config):
         env = PushTEnv()
     else:
         env = gym.make(env_name)
+        if env_name == "hopper-expert-v2":
+            distinct_colors = [
+                [1, 0, 0, 1],  # Red
+                [0, 1, 0, 1],  # Green
+                [0, 0, 1, 1],  # Blue
+                [1, 1, 0, 1],  # Yellow
+                [1, 0, 1, 1],  # Magenta
+            ]
+
+            geoms = env.sim.model.geom_names
+            for i, geom in enumerate(geoms):
+                geom_id = env.sim.model.geom_name2id(geom)
+                if geom == 'floor':
+                    floor_mat_id = env.sim.model.geom_matid[geom_id]
+                    env.sim.model.geom_matid[geom_id] = -1
+                    env.sim.model.geom_rgba[geom_id] = [1, 1, 1, 1]
+                else:
+                    env.sim.model.geom_matid[geom_id] = 1
+                    env.sim.model.geom_rgba[geom_id] = distinct_colors[i]
 
     if 'pca_pkl' in config:
         with open(config['pca_pkl'], 'rb') as f:
@@ -122,27 +214,43 @@ def get_action_from_env(config, env, model, obs_history=None):
 def get_action_from_obs(config, model, observation, obs_history=None):
     env_name = config['name']
     img = config.get('img', False)
+    keypoint = config.get('keypoint', False)
     is_robosuite = config.get('robosuite', False)
     stack_size = config.get('stack_size', 10)
 
     if img:
         assert obs_history is not None
         # Stack observations with history
-        obs_history.append(env_state_to_dino(env_name, observation, is_robosuite=is_robosuite))
+        if keypoint:
+            obs_history.append(frame_to_keypoints(observation, is_robosuite=is_robosuite, is_first_ob=(len(obs_history) == 0)))
+        else:
+            obs_history.append(env_state_to_dino(env_name, observation, is_robosuite=is_robosuite))
 
         if len(obs_history) > stack_size:
             obs_history.pop(0)
         
         if config.get("model_pkl"):
             img_observation = stack_with_previous(obs_history, stack_size=stack_size)
-            action = model.get_action(img_observation, current_model_ob=observation)
+            image_compare = True
+
+            if image_compare:
+                action = model.get_action(img_observation, current_model_ob=observation)
+            else:
+                action = model.get_action(observation, current_model_ob=img_observation)
         else:
             observation = stack_with_previous(obs_history, stack_size=stack_size)
-            action = model.get_action(observation)
-    else:
-        action = model.get_action(observation)
+
+    action = model.get_action(observation)
 
     return action
+
+def get_keypoint_viz():
+    global keypoint_viz
+
+    tracks = np.concatenate([x['tracks'][0] for x in keypoint_viz], axis=1)
+    visibles = np.concatenate([x['visibles'][0] for x in keypoint_viz], axis=1)
+
+    return tracks, visibles
 
 def stack_with_previous(obs_list, stack_size):
     if len(obs_list) < stack_size:
@@ -190,6 +298,14 @@ def process_rgb_array(rgb_array):
 
     return obs
 
+def process_rgb_array_keypoints(rgb_array):
+    # Handle 4-channel image (RGBA)
+    if rgb_array.shape[2] == 4:
+        # Convert RGBA to RGB by dropping the alpha channel
+        rgb_array = rgb_array[:, :, :3]
+
+    return media.resize_image(rgb_array, (256, 256))
+
 def eval_over(steps, config):
     env_name = config['name']
     is_metaworld = config.get('metaworld', False)
@@ -220,15 +336,44 @@ def crop_obs_for_env(obs, env):
         return obs
 
 def env_state_to_dino(env_name, observation, is_robosuite=False):
-    global img_env
-    if img_env is None:
-        img_env = gym.make(env_name)
-
     if is_robosuite:
         env.sim.set_state_from_flattened(observation)
         env.sim.forward()
         frame = env.sim.render(camera_name=env.camera_names[0], width=env.camera_widths[0], height=env.camera_heights[0], depth=env.camera_depths[0])
         return process_rgb_array(frame)
+
+def env_state_to_keypoints(env_name, observation, is_robosuite=False, is_first_ob=False):
+    global img_env, tapir, query_features, causal_state, online_model_init, online_model_predict, last_tracks, keypoint_viz
+    if img_env is None:
+        img_env = gym.make(env_name)
+        if env_name == "hopper-expert-v2":
+            distinct_colors = [
+                [1, 0, 0, 1],  # Red
+                [0, 1, 0, 1],  # Green
+                [0, 0, 1, 1],  # Blue
+                [1, 1, 0, 1],  # Yellow
+                [1, 0, 1, 1],  # Magenta
+            ]
+
+            geoms = img_env.sim.model.geom_names
+            for i, geom in enumerate(geoms):
+                geom_id = img_env.sim.model.geom_name2id(geom)
+                if geom == 'floor':
+                    floor_mat_id = img_env.sim.model.geom_matid[geom_id]
+                    img_env.sim.model.geom_matid[geom_id] = -1
+                    img_env.sim.model.geom_rgba[geom_id] = [1, 1, 1, 1]
+                else:
+                    img_env.sim.model.geom_matid[geom_id] = 1
+                    img_env.sim.model.geom_rgba[geom_id] = distinct_colors[i]
+
+    if tapir is None:
+        init_tapir()
+
+    if is_robosuite:
+        env.sim.set_state_from_flattened(observation)
+        env.sim.forward()
+        frame = env.sim.render(camera_name=env.camera_names[0], width=env.camera_widths[0], height=env.camera_heights[0], depth=env.camera_depths[0])
+        return process_rgb_array_keypoints(frame)
     else:
         if env_name == "hopper-expert-v2":
             unobserved_nq = 1
@@ -241,7 +386,77 @@ def env_state_to_dino(env_name, observation, is_robosuite=False):
             np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
             observation[-nv:])
 
-        return process_rgb_array(img_env.render(mode='rgb_array'))
+        frame = process_rgb_array_keypoints(img_env.render(mode='rgb_array'))
+
+        if is_first_ob:
+            query_points = np.array(
+                    [[0,140,71],
+ [0,220,140],
+ [0,220,120],
+ [0,171,128],
+ [0,124,128],
+ [0,79,128]]
+                )
+            query_points[:, 1] -= 3
+            query_points[:, 2] -= 4
+
+            query_features = online_model_init(np.array(frame), query_points[None])
+            causal_state = tapir.construct_initial_causal_state(
+                query_points.shape[0], len(query_features.resolutions) - 1
+            )
+            last_tracks = []
+            keypoint_viz = []
+            return env_state_to_keypoints(env_name, observation, is_first_ob=False)
+        else:
+            tracks, visibles, causal_state = online_model_predict(
+                frames=np.array(frame),
+                query_features=query_features,
+                causal_context=causal_state,
+            )
+            keypoint_viz.append({'tracks': tracks, 'visibles': visibles})
+
+            tracks = tracks.flatten()
+            keypoint_obs = np.hstack((tracks, (tracks - last_tracks) if len(last_tracks) > 0 else np.zeros_like(tracks)))
+            last_tracks = tracks
+            return keypoint_obs
+
+def frame_to_keypoints(frame, is_robosuite=False, is_first_ob=False):
+    global tapir, query_features, causal_state, online_model_init, online_model_predict, last_tracks, keypoint_viz
+    if tapir is None:
+        init_tapir()
+
+    frame = process_rgb_array_keypoints(frame)
+    if is_first_ob:
+        query_points = np.array(
+                [[0,140,71],
+[0,220,140],
+[0,220,120],
+[0,171,128],
+[0,124,128],
+[0,79,128]]
+            )
+        query_points[:, 1] -= 3
+        query_points[:, 2] -= 4
+
+        query_features = online_model_init(np.array(frame), query_points[None])
+        causal_state = tapir.construct_initial_causal_state(
+            query_points.shape[0], len(query_features.resolutions) - 1
+        )
+        last_tracks = []
+        keypoint_viz = []
+        return frame_to_keypoints(frame, is_first_ob=False)
+    else:
+        tracks, visibles, causal_state = online_model_predict(
+            frames=np.array(frame),
+            query_features=query_features,
+            causal_context=causal_state,
+        )
+        keypoint_viz.append({'tracks': tracks, 'visibles': visibles})
+
+        tracks = tracks.flatten()
+        keypoint_obs = np.hstack((tracks, (tracks - last_tracks) if len(last_tracks) > 0 else np.zeros_like(tracks)))
+        last_tracks = tracks
+        return keypoint_obs
 
 def set_seed(seed):
     torch.manual_seed(seed)

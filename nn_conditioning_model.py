@@ -38,8 +38,48 @@ class NeighborData:
     target_action: torch.Tensor
     weights: torch.Tensor
 
+class DeepSetsActionCombiner(nn.Module):
+    def __init__(self, action_dim, hidden_dim=64, device='cpu'):
+        super().__init__()
+        
+        # φ network: processes each action independently
+        self.phi = nn.Sequential(
+            nn.Linear(action_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        ).to(device=device, dtype=torch.float32)
+        
+        # ρ network: processes the aggregated features
+        self.rho = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, action_dim),
+        ).to(device=device, dtype=torch.float32)
+        
+        self.device = device
+        self.action_dim = action_dim
+    
+    def forward(self, x):
+        # x shape: (batch_size, num_neighbors, action_dim)
+        batch_size, all_actions = x.shape
+        num_neighbors = all_actions // self.action_dim
+        # Apply φ to each action independently
+        # Reshape to (batch_size * num_neighbors, action_dim)
+        x_flat = x.reshape(-1, self.action_dim)
+        phi_out = self.phi(x_flat)
+        
+        # Reshape back and sum across neighbors
+        phi_out = phi_out.reshape(batch_size, num_neighbors, -1)
+        summed = torch.sum(phi_out, dim=1)  # (batch_size, hidden_dim)
+        
+        # Apply ρ to get final output
+        output = self.rho(summed)  # (batch_size, action_dim)
+        
+        return output
+
+
 class KNNConditioningModel(nn.Module):
-    def __init__(self, state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False, bc_baseline=False, mlp_combine=False, add_action=False):
+    def __init__(self, state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False, bc_baseline=False, mlp_combine=False, add_action=False, reduce_delta_s=False):
         super(KNNConditioningModel, self).__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -51,6 +91,7 @@ class KNNConditioningModel(nn.Module):
         self.bc_baseline = bc_baseline
         self.mlp_combine = mlp_combine
         self.add_action = add_action
+        self.reduce_delta_s = reduce_delta_s
         
         self.distance_size = state_dim if not euclidean else 1
         if add_action:
@@ -67,13 +108,28 @@ class KNNConditioningModel(nn.Module):
         self.distance_scaler = distance_scaler
         self.training_mode = True
 
+        if reduce_delta_s:
+            delta_s_hidden_dims = []
+            delta_s_layers = []
+            delta_s_final_embedding = 64
+            in_dim = self.state_dim
+            for hidden_dim in delta_s_hidden_dims:
+                delta_s_layers.extend([
+                    nn.Linear(in_dim, hidden_dim),
+                    nn.ReLU(),
+                ])
+                in_dim = hidden_dim
+
+            delta_s_layers.append(nn.Linear(in_dim, delta_s_final_embedding).to(device))
+            self.delta_s_reducer = nn.Sequential(*delta_s_layers).to(device=device, dtype=torch.float32)
+
         layers = []
-        in_dim = self.input_dim
+        in_dim = self.input_dim if not reduce_delta_s else delta_s_final_embedding * 2 + action_dim
         for hidden_dim in hidden_dims:
             layers.extend([
                 nn.Linear(in_dim, hidden_dim),
+                nn.BatchNorm1d(hidden_dim),
                 nn.ReLU(),
-                #nn.BatchNorm1d(hidden_dim),
                 nn.Dropout(dropout_rate),
             ])
             in_dim = hidden_dim
@@ -81,14 +137,13 @@ class KNNConditioningModel(nn.Module):
         layers.append(nn.Linear(hidden_dims[-1], action_dim).to(device))
         self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
         
-        num_neighbors = math.floor(k * final_neighbors_ratio)
-        input_size = num_neighbors * action_dim
-        hidden_dim = 128
-        self.action_combiner = nn.Sequential(
-            nn.Linear(input_size, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, action_dim)
-        ).to(device=device, dtype=torch.float32)
+        if mlp_combine:
+            num_neighbors = math.floor(k * final_neighbors_ratio)
+            self.action_combiner = DeepSetsActionCombiner(
+                action_dim=action_dim,
+                hidden_dim=32,  # Can be tuned
+                device=device
+            )
     
     def forward(self, states, actions, distances, weights):
         # Will be batchless numpy arrays at inference time
@@ -128,6 +183,10 @@ class KNNConditioningModel(nn.Module):
         states = states.view(batch_size, num_neighbors, self.state_dim)
         actions = actions.view(batch_size, num_neighbors, self.action_dim)
         distances = distances.view(batch_size, num_neighbors, self.distance_size)
+
+        if self.reduce_delta_s:
+            states = self.delta_s_reducer(states)
+            distances = self.delta_s_reducer(distances)
        
         if not self.combined_dim:
             if self.add_action:
@@ -227,7 +286,7 @@ class KNNExpertDataset(Dataset):
     def update_distance(self, idx, new_dist):
         data = self.neighbor_lookup[idx]
 
-        data.distance = new_dist
+        data.distances = new_dist
     
     def __getitem__(self, idx):
         if self.neighbor_lookup[idx] is None:
@@ -250,7 +309,11 @@ class KNNExpertDataset(Dataset):
             else:
                 self.agent.obs_history = self.agent.obs_matrix[state_traj][:state_num][::-1]
 
-                neighbor_states, neighbor_actions, neighbor_distances, weights = self.agent.get_action(self.agent.obs_matrix[state_traj][state_num], normalize=False)
+                if self.agent.use_model_data:
+                    model_state = self.agent.model_obs_matrix[state_traj][state_num]
+                    neighbor_states, neighbor_actions, neighbor_distances, weights = self.agent.get_action(actual_state, current_model_ob=model_state, normalize=False)
+                else:
+                    neighbor_states, neighbor_actions, neighbor_distances, weights = self.agent.get_action(actual_state, normalize=False)
 
                 if self.euclidean:
                     neighbor_distances = np.sqrt(np.sum(neighbor_distances**2, axis=1, keepdims=True))
@@ -296,7 +359,7 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
     
     for epoch in range(num_epochs):
         # Training phase
-        #train_loss = 0.0
+        train_loss = 0.0
         num_train_batches = 0
         start = time.time()
         for neighbor_states, neighbor_actions, neighbor_distances, actions, weights in train_loader:
@@ -307,28 +370,15 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
             weights = weights.to(device)
             
             optimizer.zero_grad(set_to_none=True)
-            with autocast('cuda'):
-                predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
-                loss = criterion(predicted_actions, actions)
-
-            if model.module.mlp_combine:
-                batch_size = neighbor_actions.size(0)
-                num_neighbors = neighbor_actions.size(1)
-                neighbor_actions_mean = neighbor_actions.view(batch_size, num_neighbors, -1).mean(dim=1)
-                neighbor_reg_loss = criterion(predicted_actions, neighbor_actions_mean)
-                l1_reg = torch.tensor(0., requires_grad=True, device=device)
-                # for param in model.module.parameters():
-                #     l1_reg = l1_reg + torch.norm(param, p=1)
-                # loss += neighbor_reg_loss * 0.5 + l1_reg * 0.01
-                # loss += neighbor_reg_loss * 0.5
-                loss = neighbor_reg_loss
+            predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
+            loss = criterion(predicted_actions, actions)
 
             loss.backward()
             optimizer.step()
-            #train_loss += loss.item()
+            train_loss += loss.item()
             num_train_batches += 1
         #print(f"Time for epoch {epoch}: {time.time() - start}")
-        #avg_train_loss = train_loss / num_train_batches
+        avg_train_loss = train_loss / num_train_batches
         
         # Validation phase
         if val_loader is not None:
@@ -369,14 +419,14 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                 if early_stopping_counter >= early_stopping_patience:
                     print(f'Recommend early stopping after {epoch+1 - early_stopping_patience} epochs')
                     torch.save(best_check, model_path)
-                    return best_check[model]
+                    return best_check['model']
 
                 
-                #print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+                print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
             model.train()
         else:
             # If no validation loader, save the model at the end of training
-            # print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")
+            #print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")
             # torch.save({'model': model, 'optimizer': optimizer}, model_path)
             pass
 

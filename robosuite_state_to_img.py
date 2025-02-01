@@ -29,6 +29,8 @@ import mimicgen.utils.file_utils as MG_FileUtils
 import mimicgen.utils.robomimic_utils as RobomimicUtils
 from mimicgen.utils.misc_utils import add_red_border_to_frame
 from mimicgen.configs import MG_TaskSpec
+import traceback
+
 
 # Load the pre-trained DinoV2 model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -118,7 +120,7 @@ for traj in range(len(data)):
         frame = env.render(mode='rgb_array', height=512, width=512, camera_name=render_image_names[0])
         traj_obs.append(process_rgb_array(frame))
         frames.append(frame)
-        #plt.imsave('block_frame.png', frame)
+        plt.imsave('block_frame.png', frame)
     stacked_traj_obs = stack_with_previous(traj_obs, stack_size=stack_size)
     img_data.append({'observations': stacked_traj_obs, 'actions': data[traj]['actions']})
 
