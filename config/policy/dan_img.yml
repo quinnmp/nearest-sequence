@@ -13,5 +13,5 @@ hidden_dims:
    - 256
    - 256
 model_name: "dan_img"
-cond_force_retrain: False
+cond_force_retrain: True
 dropout_rate: 0.0

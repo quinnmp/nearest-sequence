@@ -45,11 +45,11 @@ unset LD_PRELOAD
 #python -u robosuite_state_to_img.py config/env/stack_task_D0.yml
 #python -u state_to_img.py config/env/hopper.yml
 #python -u opengl_test.py
-python -u nn_model_optimizer.py config/env/hopper_img_keypoint.yml config/policy/bc_img.yml
+#python -u nn_model_optimizer.py config/env/hopper_img_keypoint.yml config/policy/dan_img.yml
 #python -u nn_sweep_epochs.py config/env/hopper_img_keypoint.yml config/policy/bc_img.yml
 #python -u nn_sweep_k.py config/env/stack_task_D0_img.yml config/policy/dan_img.yml
 #python -u nn_eval.py config/env/stack_task_D0.yml config/policy/bc.yml
-#python -u nn_eval.py config/env/hopper.yml config/policy/hopper/ns_dan_bc.yml
+python -u nn_eval.py config/env/hopper.yml config/policy/hopper/ns_dan_bc.yml
 #python -u state_to_tapir.py config/env/hopper_new.yml
 #python -u nn_eval.py config/env/hopper_img_keypoint.yml config/policy/bc_img.yml
 #python -u hdf5_to_d4rl.py data/stack_task_D0/demo.hdf5 data/stack_task_D0/stack_task_D0_100.pkl

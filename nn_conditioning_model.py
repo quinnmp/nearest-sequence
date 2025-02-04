@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils import data
 from torch.utils.data import Dataset, DataLoader, random_split
 import numpy as np
 from scipy.spatial.distance import cdist
@@ -21,6 +22,8 @@ from dataclasses import dataclass
 from tqdm import tqdm
 import time
 from torch.amp import autocast, GradScaler
+from typing import List
+
 REPRODUCE_RESULTS = False
 
 if REPRODUCE_RESULTS:
@@ -77,11 +80,11 @@ class DeepSetsActionCombiner(nn.Module):
         
         return output
 
-
 class KNNConditioningModel(nn.Module):
-    def __init__(self, state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False, bc_baseline=False, mlp_combine=False, add_action=False, reduce_delta_s=False):
+    def __init__(self, state_dim, delta_state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False, bc_baseline=False, mlp_combine=False, add_action=False, reduce_delta_s=False):
         super(KNNConditioningModel, self).__init__()
         self.state_dim = state_dim
+        self.delta_state_dim = delta_state_dim
         self.action_dim = action_dim
         self.k = k
         self.final_neighbors_ratio = final_neighbors_ratio
@@ -93,7 +96,7 @@ class KNNConditioningModel(nn.Module):
         self.add_action = add_action
         self.reduce_delta_s = reduce_delta_s
         
-        self.distance_size = state_dim if not euclidean else 1
+        self.distance_size = delta_state_dim if not euclidean else 1
         if add_action:
             self.input_dim = state_dim + self.distance_size
         elif combined_dim:
@@ -102,7 +105,6 @@ class KNNConditioningModel(nn.Module):
             self.input_dim = state_dim
         else:
             self.input_dim = state_dim + action_dim + self.distance_size
-
 
         self.action_scaler = action_scaler
         self.distance_scaler = distance_scaler
@@ -138,7 +140,6 @@ class KNNConditioningModel(nn.Module):
         self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
         
         if mlp_combine:
-            num_neighbors = math.floor(k * final_neighbors_ratio)
             self.action_combiner = DeepSetsActionCombiner(
                 action_dim=action_dim,
                 hidden_dim=32,  # Can be tuned
@@ -232,19 +233,17 @@ class KNNConditioningModel(nn.Module):
         return self
 
 class KNNExpertDataset(Dataset):
-    def __init__(self, expert_data_path, env_cfg, policy_cfg, euclidean=False, bc_baseline=False):
+    def __init__(self, datasets, env_cfg, policy_cfg, euclidean=False, bc_baseline=False):
         policy_cfg_copy = policy_cfg.copy()
         policy_cfg_copy['method'] = 'knn_and_dist'
 
-        env_cfg_copy = env_cfg.copy()
-        env_cfg_copy['demo_pkl'] = expert_data_path
-
+        self.datasets = datasets
         self.agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg_copy)
 
         self.action_scaler = FastScaler()
-        self.action_scaler.fit(np.concatenate(self.agent.act_matrix))
+        self.action_scaler.fit(np.concatenate(datasets['retrieval'].act_matrix))
 
-        self.neighbor_lookup: List[NeighborData | None] = [None] * len(self.agent.flattened_obs_matrix)
+        self.neighbor_lookup: List[NeighborData | None] = [None] * len(datasets['retrieval'].flattened_obs_matrix)
 
         self.euclidean = euclidean
         self.bc_baseline = bc_baseline
@@ -254,7 +253,7 @@ class KNNExpertDataset(Dataset):
 
         if neighbor_lookup_pkl:
             if os.path.exists(neighbor_lookup_pkl):
-                neighbor_lookup_data = pickle.load(open(env_cfg_copy['neighbor_lookup_pkl'], 'rb'))
+                neighbor_lookup_data = pickle.load(open(env_cfg['neighbor_lookup_pkl'], 'rb'))
                 self.neighbor_lookup = neighbor_lookup_data['lookup']
                 self.distance_scaler = neighbor_lookup_data['distance_scaler']
             else:
@@ -281,7 +280,7 @@ class KNNExpertDataset(Dataset):
                 pickle.dump({"lookup": self.neighbor_lookup, "distance_scaler": self.distance_scaler}, open(neighbor_lookup_pkl, 'wb'))
 
     def __len__(self):
-        return len(self.agent.flattened_obs_matrix)
+        return len(self.datasets['retrieval'].flattened_obs_matrix)
 
     def update_distance(self, idx, new_dist):
         data = self.neighbor_lookup[idx]
@@ -291,12 +290,13 @@ class KNNExpertDataset(Dataset):
     def __getitem__(self, idx):
         if self.neighbor_lookup[idx] is None:
             # Figure out which trajectory this index in our flattened state array belongs to
-            state_traj = np.searchsorted(self.agent.traj_starts, idx, side='right') - 1
-            state_num = idx - self.agent.traj_starts[state_traj]
-            actual_state = self.agent.obs_matrix[state_traj][state_num]
+            state_traj = np.searchsorted(self.datasets['retrieval'].traj_starts, idx, side='right') - 1
+            state_num = idx - self.datasets['retrieval'].traj_starts[state_traj]
+            actual_state = self.datasets['retrieval'].obs_matrix[state_traj][state_num]
+            delta_state = self.datasets['delta_state'].obs_matrix[state_traj][state_num]
 
             # The corresponding action to this state
-            action = self.action_scaler.transform([self.agent.act_matrix[state_traj][state_num]])[0]
+            action = self.action_scaler.transform([self.datasets['retrieval'].act_matrix[state_traj][state_num]])[0]
 
             if self.bc_baseline:
                 self.neighbor_lookup[idx] = NeighborData(
@@ -307,13 +307,14 @@ class KNNExpertDataset(Dataset):
                         weights=-1
                 )
             else:
-                self.agent.obs_history = self.agent.obs_matrix[state_traj][:state_num][::-1]
+                self.agent.obs_history = self.datasets['retrieval'].obs_matrix[state_traj][:state_num][::-1]
+                
 
-                if self.agent.use_model_data:
-                    model_state = self.agent.model_obs_matrix[state_traj][state_num]
-                    neighbor_states, neighbor_actions, neighbor_distances, weights = self.agent.get_action(actual_state, current_model_ob=model_state, normalize=False)
-                else:
-                    neighbor_states, neighbor_actions, neighbor_distances, weights = self.agent.get_action(actual_state, normalize=False)
+                observation = {
+                    'retrieval': actual_state,
+                    'delta_state': delta_state
+                }
+                neighbor_states, neighbor_actions, neighbor_distances, weights = self.agent.get_action(observation, normalize=False)
 
                 if self.euclidean:
                     neighbor_distances = np.sqrt(np.sum(neighbor_distances**2, axis=1, keepdims=True))
@@ -332,11 +333,6 @@ class KNNExpertDataset(Dataset):
         return data.states, data.actions, data.distances, data.target_action, data.weights
 
 def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth", loaded_optimizer_dict=None):
-    if isinstance(model, nn.DataParallel):
-        original_model = model.module
-    else:
-        original_model = model
-
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
 
     model.to(device)
@@ -425,9 +421,7 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                 print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
             model.train()
         else:
-            # If no validation loader, save the model at the end of training
-            #print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")
-            # torch.save({'model': model, 'optimizer': optimizer}, model_path)
+            print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")
             pass
 
     if isinstance(model, nn.DataParallel):

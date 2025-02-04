@@ -19,7 +19,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 import mujoco
 from typing import Dict, Any
-from nn_util import crop_obs_for_env, construct_env, get_action_from_obs, get_action_from_env, eval_over, get_keypoint_viz
+from nn_util import crop_obs_for_env, construct_env, get_action_from_obs, eval_over, get_keypoint_viz
 import copy
 
 DEBUG = False
@@ -57,10 +57,7 @@ def single_trial_eval(config, agent, env, trial):
         frame = env.render(mode='rgb_array')
         video_frames.append(frame)
 
-        if is_robosuite and img:
-            action = get_action_from_env(config, env, agent, obs_history=obs_history)
-        else:
-            action = get_action_from_obs(config, agent, frame if keypoint else observation, obs_history=obs_history)
+        action = get_action_from_obs(config, agent, observation, frame, obs_history=obs_history)
 
         observation, reward, done, info = env.step(action)[:4]
 
@@ -264,10 +261,7 @@ def nn_eval_closed_loop(config, nn_agent):
         done = False
         while not (done or eval_over(steps, config)):
             steps += 1
-            if is_robosuite and img:
-                action = get_action_from_env(config, env, nn_agent, obs_history=obs_history)
-            else:
-                action = get_action_from_obs(config, nn_agent, observation, obs_history=obs_history)
+            action = get_action_from_obs(config, nn_agent, observation, obs_history=obs_history)
             observation, reward, done, info = env.step(action)[:4]
             if is_robosuite and reward == 1:
                 done = True

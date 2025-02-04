@@ -42,8 +42,9 @@ from tapnet.models import tapir_model
 from tapnet.utils import model_utils
 from tapnet.utils import transforms
 from tapnet.utils import viz_utils
-
+from fast_scaler import FastScaler
 from PIL import Image
+from typing import List, Dict
 DEBUG = False
 
 TWO_PI = 2 * np.pi
@@ -65,6 +66,53 @@ query_features = None
 causal_state = None
 last_tracks = None
 keypoint_viz = []
+
+@dataclass
+class Dataset:
+    name: str
+    scaler: FastScaler
+    rot_indices: np.ndarray
+    weights: np.ndarray
+    non_rot_indices: np.ndarray
+    obs_matrix: List
+    act_matrix: List
+    traj_starts: np.ndarray
+    flattened_obs_matrix: np.ndarray
+    flattened_act_matrix: np.ndarray
+    processed_obs_matrix: np.ndarray
+
+def load_and_scale_data(path, rot_indices, weights):
+    expert_data = load_expert_data(path)
+    observations = np.concatenate([traj['observations'] for traj in expert_data])
+
+    rot_indices = np.array(rot_indices, dtype=np.int64) 
+
+    # Separate non-rotational dimensions
+    non_rot_indices = np.array([i for i in range(observations.shape[-1]) if i not in rot_indices], dtype=np.int64)
+    non_rot_observations = observations[:, non_rot_indices]
+
+    scaler = FastScaler()
+    scaler.fit(non_rot_observations)
+
+    for traj in expert_data:
+        observations = traj['observations']
+        traj['observations'][:, non_rot_indices] = scaler.transform(observations[:, non_rot_indices])
+
+    new_path = path[:-4] + '_standardized.pkl'
+    save_expert_data(expert_data, new_path)
+    
+    obs_matrix, act_matrix, traj_starts = create_matrices(expert_data)
+    flattened_obs_matrix = np.concatenate(obs_matrix, dtype=np.float64)
+    flattened_act_matrix = np.concatenate(act_matrix)
+
+    if len(weights) > 0:
+        weights = np.array(weights, dtype=np.float64)
+    else:
+        weights = np.ones(obs_matrix[0][0].shape[0], dtype=np.float64)
+
+    processed_obs_matrix = flattened_obs_matrix[:, non_rot_indices] * weights[non_rot_indices]
+
+    return Dataset(new_path, scaler, rot_indices, weights, non_rot_indices, obs_matrix, act_matrix, traj_starts, flattened_obs_matrix, flattened_act_matrix, processed_obs_matrix)
 
 def online_model_init_func(frames, query_points):
     """Initialize query features for the query points."""
@@ -190,57 +238,54 @@ def construct_env(config):
 
     return env
 
-def get_action_from_env(config, env, model, obs_history=None):
-    global camera_name, pca
-    assert obs_history is not None
-    stack_size = config.get('stack_size', 10)
-    
-    frame = env.render(mode='rgb_array', height=512, width=512, camera_name=camera_name)
-    #plt.imsave('block_frame.png', frame)
-    obs_history.append(process_rgb_array(frame))
-
-    if len(obs_history) > stack_size:
-        obs_history.pop(0)
-    
-    if config.get("model_pkl"):
-        img_observation = stack_with_previous(obs_history, stack_size=stack_size)
-        action = model.get_action(img_observation, current_model_ob=observation)
-    else:
-        observation = stack_with_previous(obs_history, stack_size=stack_size)
-        action = model.get_action(observation)
-
-    return action
-
-def get_action_from_obs(config, model, observation, obs_history=None):
-    env_name = config['name']
-    img = config.get('img', False)
-    keypoint = config.get('keypoint', False)
+def get_action_from_obs(config, model, observation, frame, obs_history=None):
     is_robosuite = config.get('robosuite', False)
     stack_size = config.get('stack_size', 10)
 
-    if img:
-        assert obs_history is not None
-        # Stack observations with history
-        if keypoint:
-            obs_history.append(frame_to_keypoints(observation, is_robosuite=is_robosuite, is_first_ob=(len(obs_history) == 0)))
-        else:
-            obs_history.append(env_state_to_dino(env_name, observation, is_robosuite=is_robosuite))
+    # Three types of observations:
+    # state, dino, keypoint
+    if config.get('mixed'):
+        obs = {}
+        for dataset in ['retrieval', 'state', 'delta_state']:
+            obs_type = config[dataset]['type']
+            stack = config[dataset].get("stack?", False)
+            
+            match obs_type:
+                case 'state':
+                    obs[dataset] = observation
+                case 'dino':
+                    obs[dataset] = frame_to_dino(frame)
+                case 'keypoint':
+                    obs[dataset] = frame_to_keypoints(frame, is_robosuite=is_robosuite, is_first_ob=(len(obs_history[dataset]) == 0))
 
-        if len(obs_history) > stack_size:
-            obs_history.pop(0)
+            if stack:
+                assert obs_history is not None
+                obs_history.append(obs[dataset])
+                if len(obs_history[dataset]) > stack_size:
+                    obs_history[dataset].pop(0)
+            
+                obs[dataset] = stack_with_previous(obs_history, stack_size=stack_size)
+    else:
+        obs_type = config['type']
+        stack = config.get("stack?", False)
         
-        if config.get("model_pkl"):
-            img_observation = stack_with_previous(obs_history, stack_size=stack_size)
-            image_compare = True
+        match obs_type:
+            case 'state':
+                obs = observation
+            case 'dino':
+                obs = frame_to_dino(frame)
+            case 'keypoint':
+                obs = frame_to_keypoints(frame, is_robosuite=is_robosuite, is_first_ob=(len(obs_history) == 0))
 
-            if image_compare:
-                action = model.get_action(img_observation, current_model_ob=observation)
-            else:
-                action = model.get_action(observation, current_model_ob=img_observation)
-        else:
-            observation = stack_with_previous(obs_history, stack_size=stack_size)
+        if stack:
+            assert obs_history is not None
+            obs_history.append(obs)
+            if len(obs_history) > stack_size:
+                obs_history.pop(0)
+        
+                obs = stack_with_previous(obs_history, stack_size=stack_size)
 
-    action = model.get_action(observation)
+    action = model.get_action(obs)
 
     return action
 
@@ -257,7 +302,7 @@ def stack_with_previous(obs_list, stack_size):
         return np.concatenate([obs_list[0]] * (stack_size - len(obs_list)) + obs_list, axis=0)
     return np.concatenate(obs_list[-stack_size:], axis=0)
 
-def process_rgb_array(rgb_array):
+def frame_to_dino(rgb_array):
     global dino_model, device, img_transform, pca
 
     if dino_model is None:
@@ -334,91 +379,6 @@ def crop_obs_for_env(obs, env):
         return np.hstack((obj, ee_pos, ee_pos_vel, ee_ang, ee_ang_vel, gripper_pos, gripper_pos_vel))
     else:
         return obs
-
-def env_state_to_dino(env_name, observation, is_robosuite=False):
-    if is_robosuite:
-        env.sim.set_state_from_flattened(observation)
-        env.sim.forward()
-        frame = env.sim.render(camera_name=env.camera_names[0], width=env.camera_widths[0], height=env.camera_heights[0], depth=env.camera_depths[0])
-        return process_rgb_array(frame)
-
-def env_state_to_keypoints(env_name, observation, is_robosuite=False, is_first_ob=False):
-    global img_env, tapir, query_features, causal_state, online_model_init, online_model_predict, last_tracks, keypoint_viz
-    if img_env is None:
-        img_env = gym.make(env_name)
-        if env_name == "hopper-expert-v2":
-            distinct_colors = [
-                [1, 0, 0, 1],  # Red
-                [0, 1, 0, 1],  # Green
-                [0, 0, 1, 1],  # Blue
-                [1, 1, 0, 1],  # Yellow
-                [1, 0, 1, 1],  # Magenta
-            ]
-
-            geoms = img_env.sim.model.geom_names
-            for i, geom in enumerate(geoms):
-                geom_id = img_env.sim.model.geom_name2id(geom)
-                if geom == 'floor':
-                    floor_mat_id = img_env.sim.model.geom_matid[geom_id]
-                    img_env.sim.model.geom_matid[geom_id] = -1
-                    img_env.sim.model.geom_rgba[geom_id] = [1, 1, 1, 1]
-                else:
-                    img_env.sim.model.geom_matid[geom_id] = 1
-                    img_env.sim.model.geom_rgba[geom_id] = distinct_colors[i]
-
-    if tapir is None:
-        init_tapir()
-
-    if is_robosuite:
-        env.sim.set_state_from_flattened(observation)
-        env.sim.forward()
-        frame = env.sim.render(camera_name=env.camera_names[0], width=env.camera_widths[0], height=env.camera_heights[0], depth=env.camera_depths[0])
-        return process_rgb_array_keypoints(frame)
-    else:
-        if env_name == "hopper-expert-v2":
-            unobserved_nq = 1
-            nq = img_env.model.nq - unobserved_nq
-            nv = img_env.model.nv
-        else:
-            print("Env not supported for state to img!")
-
-        img_env.set_state(
-            np.hstack((np.zeros(unobserved_nq), observation[:nq])), 
-            observation[-nv:])
-
-        frame = process_rgb_array_keypoints(img_env.render(mode='rgb_array'))
-
-        if is_first_ob:
-            query_points = np.array(
-                    [[0,140,71],
- [0,220,140],
- [0,220,120],
- [0,171,128],
- [0,124,128],
- [0,79,128]]
-                )
-            query_points[:, 1] -= 3
-            query_points[:, 2] -= 4
-
-            query_features = online_model_init(np.array(frame), query_points[None])
-            causal_state = tapir.construct_initial_causal_state(
-                query_points.shape[0], len(query_features.resolutions) - 1
-            )
-            last_tracks = []
-            keypoint_viz = []
-            return env_state_to_keypoints(env_name, observation, is_first_ob=False)
-        else:
-            tracks, visibles, causal_state = online_model_predict(
-                frames=np.array(frame),
-                query_features=query_features,
-                causal_context=causal_state,
-            )
-            keypoint_viz.append({'tracks': tracks, 'visibles': visibles})
-
-            tracks = tracks.flatten()
-            keypoint_obs = np.hstack((tracks, (tracks - last_tracks) if len(last_tracks) > 0 else np.zeros_like(tracks)))
-            last_tracks = tracks
-            return keypoint_obs
 
 def frame_to_keypoints(frame, is_robosuite=False, is_first_ob=False):
     global tapir, query_features, causal_state, online_model_init, online_model_predict, last_tracks, keypoint_viz
