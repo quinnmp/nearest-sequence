@@ -1,7 +1,7 @@
 method: cond
 k_neighbors: 237
 lookback: 27
-decay_rate: -2.785717325929091
+decay_rate: -2.78517325929091
 ratio: 0.4314969702404607
 # Candidates 237, lookback 27, decay -2.785717325929091, ratio 0.4314969702404607: mean 3486.49, std 441.07
 
@@ -15,4 +15,4 @@ hidden_dims:
    - 128
    - 128
 model_name: "dan_hopper_1"
-cond_force_retrain: True
+cond_force_retrain: False

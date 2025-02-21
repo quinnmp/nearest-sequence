@@ -75,6 +75,27 @@ def stack_with_previous(obs_list, stack_size):
     
     return np.array(stacked_obs)
 
+def get_object_pixel_coords(sim, obj_name, camera_name="agentview"):
+    obj_id = sim.model.geom_name2id(obj_name)
+    obj_pos = sim.data.geom_xpos[obj_id]
+
+    cam_id = sim.model.camera_name2id(camera_name)
+    cam_pos = sim.data.cam_xpos[cam_id]
+    cam_mat = sim.data.cam_xmat[cam_id].reshape(3, 3)
+
+    obj_pos_cam = cam_mat.T @ (obj_pos - cam_pos)
+
+    height, width = 512, 512
+    fovy = sim.model.cam_fovy[cam_id]
+    f = (height / 2) / np.tan(np.deg2rad(fovy) / 2)
+
+    x, y, z = obj_pos_cam
+
+    u = int(width / 2 + (f * x / z))
+    v = int(height / 2 - (f * y / z))
+
+    return (u, v)
+
 parser = ArgumentParser()
 parser.add_argument("env_config_path", help="Path to environment config file")
 args, _ = parser.parse_known_args()
@@ -121,6 +142,7 @@ for traj in range(len(data)):
         traj_obs.append(process_rgb_array(frame))
         frames.append(frame)
         plt.imsave('block_frame.png', frame)
+        #print(get_object_pixel_coords(env.env.sim, "cubeA_g0"))
     stacked_traj_obs = stack_with_previous(traj_obs, stack_size=stack_size)
     img_data.append({'observations': stacked_traj_obs, 'actions': data[traj]['actions']})
 

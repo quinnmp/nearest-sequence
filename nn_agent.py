@@ -156,7 +156,7 @@ class NNAgent:
 class NNAgentEuclidean(NNAgent):
     def get_action(self, current_ob):
         if self.method == NN_METHOD.BC:
-            return self.model(current_ob, -1, -1, -1)
+            return self.model(current_ob['retrieval'], -1, -1, -1)
 
         self.update_obs_history(current_ob['retrieval'])
 
@@ -165,7 +165,6 @@ class NNAgentEuclidean(NNAgent):
         # all_distances, dist_vecs = compute_cosine_distance(current_ob.astype(np.float64), self.processed_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
         all_distances, dist_vecs = compute_distance_with_rot(current_ob['retrieval'].astype(np.float64), self.datasets['retrieval'].processed_obs_matrix, self.datasets['retrieval'].rot_indices, self.datasets['retrieval'].non_rot_indices, self.datasets['retrieval'].weights[self.datasets['retrieval'].rot_indices])
 
-        breakpoint()
         if np.min(all_distances) == 0:
             all_distances[np.argmin(all_distances)] = np.max(all_distances) + 1
 
@@ -212,9 +211,10 @@ class NNAgentEuclidean(NNAgent):
             else:
                 # If we want to use a different dataset for delta_s, we have to calculate that now
                 if self.datasets['retrieval'].name != self.datasets['delta_state'].name:
-                    _, dist_vecs = compute_distance(current_ob['delta_state'].astype(np.float64), self.datasets['delta_state'].processed_obs_matrix)
-
-                neighbor_distances = dist_vecs[final_neighbors]
+                    #_, dist_vecs = compute_distance(current_ob['delta_state'].astype(np.float64), self.datasets['delta_state'].processed_obs_matrix)
+                    _, neighbor_distances = compute_distance(current_ob['delta_state'].astype(np.float64), self.datasets['delta_state'].processed_obs_matrix[final_neighbors])
+                else:
+                    neighbor_distances = dist_vecs[final_neighbors]
 
             neighbor_weights = 1 / accum_distances[final_neighbor_indices]
             neighbor_weights = neighbor_weights / neighbor_weights.sum()
@@ -306,8 +306,8 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
     def get_action(self, current_ob, normalize=True):
         if not isinstance(current_ob, dict):
             current_ob = {
-                'retrieval': current_ob,
-                'delta_state': current_ob
+                'retrieval': np.copy(current_ob),
+                'delta_state': np.copy(current_ob)
             }
 
         # Check that this observation dict is fully defined

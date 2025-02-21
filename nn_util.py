@@ -62,10 +62,10 @@ tapir = None
 online_model_init = None
 online_model_predict = None
 
-query_features = None
-causal_state = None
-last_tracks = None
-keypoint_viz = []
+query_features = {}
+causal_state = {}
+last_tracks = {}
+keypoint_viz = {}
 
 @dataclass
 class Dataset:
@@ -81,7 +81,7 @@ class Dataset:
     flattened_act_matrix: np.ndarray
     processed_obs_matrix: np.ndarray
 
-def load_and_scale_data(path, rot_indices, weights):
+def load_and_scale_data(path, rot_indices, weights, ob_type='state'):
     expert_data = load_expert_data(path)
     observations = np.concatenate([traj['observations'] for traj in expert_data])
 
@@ -92,7 +92,10 @@ def load_and_scale_data(path, rot_indices, weights):
     non_rot_observations = observations[:, non_rot_indices]
 
     scaler = FastScaler()
-    scaler.fit(non_rot_observations)
+    if ob_type == 'keypoint' and False:
+        scaler.fit(np.concatenate(non_rot_observations))
+    else:
+        scaler.fit(non_rot_observations)
 
     for traj in expert_data:
         observations = traj['observations']
@@ -171,6 +174,28 @@ def init_tapir():
     online_model_init = jax.jit(online_model_init_func)
     online_model_predict = jax.jit(online_model_predict_func)
 
+def get_object_pixel_coords(sim, obj_name, camera_name="agentview"):
+    obj_id = sim.model.geom_name2id(obj_name)
+    obj_pos = sim.data.geom_xpos[obj_id]
+
+    cam_id = sim.model.camera_name2id(camera_name)
+    cam_pos = sim.data.cam_xpos[cam_id]
+    cam_mat = sim.data.cam_xmat[cam_id].reshape(3, 3)
+
+    obj_pos_cam = cam_mat.T @ (obj_pos - cam_pos)
+
+    height, width = 256, 256
+    fovy = sim.model.cam_fovy[cam_id]
+    f = (height / 2) / np.tan(np.deg2rad(fovy) / 2)
+
+    x, y, z = obj_pos_cam
+
+    u = int(width / 2 + (f * x / z))
+    v = int(height / 2 - (f * y / z))
+
+    # y, x
+    return (height - v, width - u)
+
 def construct_env(config):
     global pca
     is_robosuite = config.get('robosuite', False)
@@ -231,6 +256,8 @@ def construct_env(config):
                 else:
                     env.sim.model.geom_matid[geom_id] = 1
                     env.sim.model.geom_rgba[geom_id] = distinct_colors[i]
+        if env_name == "maze2d-umaze-v1":
+            env.env.reward_type = 'sparse'
 
     if 'pca_pkl' in config:
         with open(config['pca_pkl'], 'rb') as f:
@@ -238,33 +265,57 @@ def construct_env(config):
 
     return env
 
-def get_action_from_obs(config, model, observation, frame, obs_history=None):
+def get_proprio(config, obs):
+    is_robosuite = config.get('robosuite', False)
+    if is_robosuite:
+        ee_pos = obs['robot0_eef_pos']
+        ee_pos_vel = obs['robot0_eef_vel_lin']
+        ee_ang = obs['robot0_eef_quat']
+        ee_ang_vel = obs['robot0_eef_vel_ang']
+        gripper_pos = obs['robot0_gripper_qpos']
+        gripper_pos_vel = obs['robot0_gripper_qpos']
+        return np.hstack((ee_pos, ee_pos_vel, ee_ang, ee_ang_vel, gripper_pos, gripper_pos_vel))
+    else:
+        return obs
+
+def get_action_from_obs(config, model, env, observation, frame, obs_history=None):
     is_robosuite = config.get('robosuite', False)
     stack_size = config.get('stack_size', 10)
+    env_name = config.get('name', 10)
+
+    if config.get('add_proprio', False):
+        proprio_state = get_proprio(config, observation)
+    else:
+        proprio_state = []
 
     # Three types of observations:
     # state, dino, keypoint
     if config.get('mixed'):
         obs = {}
-        for dataset in ['retrieval', 'state', 'delta_state']:
+        processed_obs_types = {}
+        for dataset in ['retrieval', 'delta_state']:
             obs_type = config[dataset]['type']
-            stack = config[dataset].get("stack?", False)
-            
-            match obs_type:
-                case 'state':
-                    obs[dataset] = observation
-                case 'dino':
-                    obs[dataset] = frame_to_dino(frame)
-                case 'keypoint':
-                    obs[dataset] = frame_to_keypoints(frame, is_robosuite=is_robosuite, is_first_ob=(len(obs_history[dataset]) == 0))
+            if obs_type not in processed_obs_types.keys():
+                stack = config[dataset].get("stack?", False)
+                
+                match obs_type:
+                    case 'state':
+                        obs[dataset] = crop_obs_for_env(observation, env_name, env_instance=env)
+                    case 'dino':
+                        obs[dataset] = frame_to_dino(frame)
+                    case 'keypoint':
+                        obs[dataset] = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=(len(obs_history[dataset]) == 0), proprio_state=proprio_state)
 
-            if stack:
-                assert obs_history is not None
-                obs_history.append(obs[dataset])
-                if len(obs_history[dataset]) > stack_size:
-                    obs_history[dataset].pop(0)
-            
-                obs[dataset] = stack_with_previous(obs_history, stack_size=stack_size)
+                processed_obs_types[obs_type] = dataset
+                if stack:
+                    assert obs_history is not None
+                    obs_history[dataset].append(obs[dataset])
+                    if len(obs_history[dataset]) > stack_size:
+                        obs_history[dataset].pop(0)
+                
+                    obs[dataset] = stack_with_previous(obs_history[dataset], stack_size=stack_size)
+            else:
+                obs[dataset] = np.copy(obs[processed_obs_types[obs_type]])
     else:
         obs_type = config['type']
         stack = config.get("stack?", False)
@@ -289,11 +340,14 @@ def get_action_from_obs(config, model, observation, frame, obs_history=None):
 
     return action
 
-def get_keypoint_viz():
+def get_keypoint_viz(cam_names):
     global keypoint_viz
 
-    tracks = np.concatenate([x['tracks'][0] for x in keypoint_viz], axis=1)
-    visibles = np.concatenate([x['visibles'][0] for x in keypoint_viz], axis=1)
+    tracks = {}
+    visibles = {}
+    for cam in cam_names:
+        tracks[cam] = np.concatenate([x['tracks'][0] for x in keypoint_viz[cam]], axis=1)
+        visibles[cam] = np.concatenate([x['visibles'][0] for x in keypoint_viz[cam]], axis=1)
 
     return tracks, visibles
 
@@ -351,15 +405,18 @@ def process_rgb_array_keypoints(rgb_array):
 
     return media.resize_image(rgb_array, (256, 256))
 
-def eval_over(steps, config):
+def eval_over(steps, config, env_instance):
     env_name = config['name']
     is_metaworld = config.get('metaworld', False)
+    is_robosuite = config.get('robosuite', False)
 
     return is_metaworld and steps >= 500 \
         or env_name == "push_t" and steps >= 200 \
+        or is_robosuite and steps >= 200 \
+        or env_name == "maze2d-umaze-v1" and np.linalg.norm(env_instance._get_obs()[0:2] - env_instance._target) <= 0.5 \
         or steps >= 1000
 
-def crop_obs_for_env(obs, env):
+def crop_obs_for_env(obs, env, env_instance=None):
     if env == "ant-expert-v2":
         return obs[:27]
     elif env == "coffee-pull-v2" or env == "coffee-push-v2":
@@ -377,46 +434,96 @@ def crop_obs_for_env(obs, env):
         gripper_pos = obs['robot0_gripper_qpos']
         gripper_pos_vel = obs['robot0_gripper_qpos']
         return np.hstack((obj, ee_pos, ee_pos_vel, ee_ang, ee_ang_vel, gripper_pos, gripper_pos_vel))
+    elif env == "maze2d-umaze-v1":
+        return np.hstack((obs, env_instance._target))
     else:
         return obs
 
-def frame_to_keypoints(frame, is_robosuite=False, is_first_ob=False):
+def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=False, proprio_state=[]):
     global tapir, query_features, causal_state, online_model_init, online_model_predict, last_tracks, keypoint_viz
     if tapir is None:
         init_tapir()
 
-    frame = process_rgb_array_keypoints(frame)
-    if is_first_ob:
-        query_points = np.array(
-                [[0,140,71],
-[0,220,140],
-[0,220,120],
-[0,171,128],
-[0,124,128],
-[0,79,128]]
-            )
-        query_points[:, 1] -= 3
-        query_points[:, 2] -= 4
+    camera_names = frame.keys()
 
-        query_features = online_model_init(np.array(frame), query_points[None])
-        causal_state = tapir.construct_initial_causal_state(
-            query_points.shape[0], len(query_features.resolutions) - 1
+    ob = np.array(proprio_state)
+
+    for camera in camera_names:
+        frame[camera] = process_rgb_array_keypoints(frame[camera])
+        if is_first_ob:
+            print("FIRST OB")
+            if camera == "sideview":
+                query_points = np.array(
+                    [
+                        np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
+                        np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
+                    ]
+                )
+            elif camera == "frontview":
+                query_points = np.array(
+                    [
+                        np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
+                        np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
+                    ]
+                )
+            elif camera == "agentview":
+                query_points = np.array(
+                    [
+                        np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
+                        np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
+                    ]
+                )
+            else:
+                query_points = np.array(
+                        [[0,140,71],
+                        [0,220,140],
+                        [0,220,120],
+                        [0,171,128],
+                        [0,124,128],
+                        [0,79,128]]
+                    )
+                query_points[:, 1] -= 3
+                query_points[:, 2] -= 4
+
+            assert online_model_init is not None
+            query_features[camera] = online_model_init(np.array(frame[camera]), query_points[None])
+            causal_state[camera] = tapir.construct_initial_causal_state(
+                query_points.shape[0], len(query_features[camera].resolutions) - 1
+            )
+            last_tracks[camera] = []
+            keypoint_viz[camera] = []
+
+        assert online_model_predict is not None
+        print("online model predict")
+        tracks, visibles, causal_state[camera] = online_model_predict(
+            frames=np.array(frame[camera]),
+            query_features=query_features[camera],
+            causal_context=causal_state[camera],
         )
-        last_tracks = []
-        keypoint_viz = []
-        return frame_to_keypoints(frame, is_first_ob=False)
-    else:
-        tracks, visibles, causal_state = online_model_predict(
-            frames=np.array(frame),
-            query_features=query_features,
-            causal_context=causal_state,
-        )
-        keypoint_viz.append({'tracks': tracks, 'visibles': visibles})
+        keypoint_viz[camera].append({'tracks': tracks, 'visibles': visibles})
 
         tracks = tracks.flatten()
-        keypoint_obs = np.hstack((tracks, (tracks - last_tracks) if len(last_tracks) > 0 else np.zeros_like(tracks)))
-        last_tracks = tracks
-        return keypoint_obs
+        tracks_r = tracks.reshape(-1, 2)
+
+        angles = np.zeros(len(tracks_r))
+        magnitudes = np.zeros(len(tracks_r))
+
+        if len(last_tracks[camera]) > 0:
+            last_tracks_r = last_tracks[camera].reshape(-1, 2)
+
+            for kpt in range(len(tracks_r)):
+                dot_product = np.dot(tracks_r[kpt], last_tracks_r[kpt])
+                norm_a = np.linalg.norm(tracks_r[kpt])
+                norm_b = np.linalg.norm(last_tracks_r[kpt])
+                angles[kpt] = np.arccos(np.clip(dot_product / (norm_a * norm_b), -1.0, 1.0))
+                magnitudes[kpt] = np.linalg.norm(tracks_r[kpt] - last_tracks_r[kpt])
+
+        last_tracks[camera] = tracks
+
+        keypoint_obs = np.hstack((tracks, angles, magnitudes))
+        ob = np.hstack((ob, keypoint_obs))
+
+    return ob
 
 def set_seed(seed):
     torch.manual_seed(seed)

@@ -27,6 +27,55 @@ from tapnet.utils import model_utils
 from tapnet.utils import transforms
 from tapnet.utils import viz_utils
 
+def get_object_pixel_coords(sim, obj_name, camera_name="track", offset=np.array([0, 0, 0])):
+    obj_id = sim.model.geom_name2id(obj_name)
+    obj_pos = sim.data.geom_xpos[obj_id] + offset
+
+    cam_id = sim.model.camera_name2id(camera_name)
+    cam_pos = sim.data.cam_xpos[cam_id]
+    cam_mat = sim.data.cam_xmat[cam_id].reshape(3, 3)
+
+    obj_pos_cam = cam_mat.T @ (obj_pos - cam_pos)
+
+    height, width = 256, 256
+    fovy = sim.model.cam_fovy[cam_id]
+    f = (height / 2) / np.tan(np.deg2rad(fovy) / 2)
+
+    x, y, z = obj_pos_cam
+
+    u = int(width / 2 + (f * x / z))
+    v = int(height / 2 - (f * y / z))
+
+    # y, x
+    return (height - v, width - u)
+
+def get_joint_pixel_coords(sim, joint_name, body_name, camera_name="track"):
+    body_id = sim.model.body_name2id(body_name)
+    body_pos = sim.data.body_xpos[body_id]
+
+    joint_id = sim.model.joint_name2id(joint_name)
+    joint_offset = sim.model.jnt_pos[joint_id]
+
+    joint_pos = body_pos + joint_offset
+
+    cam_id = sim.model.camera_name2id(camera_name)
+    cam_pos = sim.data.cam_xpos[cam_id]
+    cam_mat = sim.data.cam_xmat[cam_id].reshape(3, 3)
+
+    obj_pos_cam = cam_mat.T @ (joint_pos - cam_pos)
+
+    height, width = 256, 256
+    fovy = sim.model.cam_fovy[cam_id]
+    f = (height / 2) / np.tan(np.deg2rad(fovy) / 2)
+
+    x, y, z = obj_pos_cam
+
+    u = int(width / 2 + (f * x / z))
+    v = int(height / 2 - (f * y / z))
+
+    # y, x
+    return (height - v, width - u)
+
 def online_model_init(frames, query_points):
     """Initialize query features for the query points."""
     frames = model_utils.preprocess_frames(frames)[np.newaxis, np.newaxis, :, :, :]
@@ -152,10 +201,11 @@ else:
         geom_id = env.sim.model.geom_name2id(geom)
         if geom == 'floor':
             floor_mat_id = env.sim.model.geom_matid[geom_id]
-            env.sim.model.geom_matid[geom_id] = -1
-            env.sim.model.geom_rgba[geom_id] = [1, 1, 1, 1]
+            print(env.sim.model.mat_texid[floor_mat_id])
+            # env.sim.model.geom_matid[geom_id] = -1
+            # env.sim.model.geom_rgba[geom_id] = [1, 1, 1, 1]
         else:
-            env.sim.model.geom_matid[geom_id] = 1
+            env.sim.model.geom_matid[geom_id] = 0
             env.sim.model.geom_rgba[geom_id] = distinct_colors[i]
 
 
@@ -167,6 +217,7 @@ for traj in range(len(data)):
     video = []
     last_tracks = []
     for ob in range(len(data[traj]['observations'])):
+        print(ob)
         env.set_state(
             np.hstack((np.zeros(unobserved_nq), data[traj]['observations'][ob][:nq])), 
             data[traj]['observations'][ob][-nv:])
@@ -184,14 +235,14 @@ for traj in range(len(data)):
                 query_points = np.array([[0, y, x] for x, y in selected_points], dtype=np.int32)
             else:
                 query_points = np.array(
-                    [[0,140,71],
- [0,220,140],
- [0,220,120],
- [0,171,128],
- [0,124,128],
- [0,79,128]]
+                    [
+                    np.hstack(([0], get_joint_pixel_coords(env.sim, "thigh_joint", "thigh"))),
+                    np.hstack(([0], get_joint_pixel_coords(env.sim, "leg_joint", "leg"))),
+                    np.hstack(([0], get_joint_pixel_coords(env.sim, "foot_joint", "foot"))),
+                    np.hstack(([0], get_object_pixel_coords(env.sim, "foot_geom", offset=np.array([0, 0, 0])))),
+                    ]
                 )
-                query_points[:, 1] -= 3
+                query_points[:, 1] -= 2
                 query_points[:, 2] -= 4
             #print(np.array2string(query_points, separator=',', formatter={'all': lambda x: f'{x:.0f}'}))
 
@@ -204,18 +255,30 @@ for traj in range(len(data)):
             )
             #print(causal_state)
 
-            ob -= 1
-        else:
-            tracks, visibles, causal_state = online_model_predict(
-                frames=np.array(frame),
-                query_features=query_features,
-                causal_context=causal_state,
-            )
-            predictions.append({'frame': frame, 'tracks': tracks, 'visibles': visibles})
-            tracks = tracks.flatten()
+        tracks, visibles, causal_state = online_model_predict(
+            frames=np.array(frame),
+            query_features=query_features,
+            causal_context=causal_state,
+        )
+        predictions.append({'frame': frame, 'tracks': tracks, 'visibles': visibles})
+        tracks = tracks.flatten()
 
-            traj_obs.append(np.hstack((tracks, (tracks - last_tracks) if len(last_tracks) > 0 else np.zeros_like(tracks))))
-            last_tracks = tracks
+        tracks_r = tracks.reshape(-1, 2)
+        angles = np.zeros(len(tracks_r))
+        magnitudes = np.zeros(len(tracks_r))
+
+        if len(last_tracks) > 0:
+            last_tracks_r = last_tracks.reshape(-1, 2)
+
+            for kpt in range(len(tracks_r)):
+                dot_product = np.dot(tracks_r[kpt], last_tracks_r[kpt])
+                norm_a = np.linalg.norm(tracks_r[kpt])
+                norm_b = np.linalg.norm(last_tracks_r[kpt])
+                angles[kpt] = np.arccos(np.clip(dot_product / (norm_a * norm_b), -1.0, 1.0))
+                magnitudes[kpt] = np.linalg.norm(tracks_r[kpt] - last_tracks_r[kpt])
+
+        traj_obs.append(np.hstack((tracks, angles, magnitudes)))
+        last_tracks = tracks
         #plt.imsave('hopper_frame.png', frame)
     img_data.append({'observations': np.array(traj_obs), 'actions': data[traj]['actions']})
     tracks = np.concatenate([x['tracks'][0] for x in predictions], axis=1)

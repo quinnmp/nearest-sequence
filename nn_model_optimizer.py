@@ -13,15 +13,15 @@ def objective(trial, env_config_path, policy_config_path):
     with open(policy_config_path, 'r') as f:
         policy_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
-    # Suggest parameter values for optimization
+        # Suggest parameter values for optimization
     policy_cfg['epochs'] = trial.suggest_int('epochs', 1, 1000)
-    policy_cfg['k_neighbors'] = trial.suggest_int('neighbors', 1, 999)
+    #policy_cfg['k_neighbors'] = trial.suggest_int('neighbors', 1, 999)
     policy_cfg['batch_size'] = trial.suggest_categorical('batch_size', [2**i for i in range(4, 9)])  # 16 to 1024
 
     num_layers = trial.suggest_int('num_layers', 3, 4)
     policy_cfg['hidden_dims'] = [trial.suggest_categorical(f'layer_size_{i}', [2**j for j in range(6, 11)]) for i in range(num_layers)]  # 64 to 2048
 
-    policy_cfg['dropout'] = trial.suggest_float('dropout', 0.05, 0.5)
+    #policy_cfg['dropout'] = trial.suggest_float('dropout', 0.05, 0.5)
     #policy_cfg['lr'] = trial.suggest_categorical('lr', [1e-2, 1e-3, 1e-4])
     #policy_cfg['weight_decay'] = trial.suggest_categorical('weight_decay', [1e-4, 1e-5, 1e-6])
 

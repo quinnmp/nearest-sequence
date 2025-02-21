@@ -1,6 +1,5 @@
 demo_pkl: "data/stack_task_D0/stack_task_D0_100_img.pkl"
 demo_hdf5: "data/stack_task_D0/demo.hdf5"
-#neighbor_lookup_pkl: "data/stack-img-dan-neighbor-lookup.pkl"
 stack_size: 1
 robosuite: True
 img: True

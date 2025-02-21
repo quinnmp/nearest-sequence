@@ -1,0 +1,13 @@
+seed: 42
+name: "hopper-expert-v2"
+retrieval:
+        demo_pkl: "data/hopper-expert-v2_1.pkl"
+        type: 'state'
+state:
+        demo_pkl: "data/hopper-expert-v2_1.pkl"
+        type: 'state'
+delta_state:
+        demo_pkl: "data/hopper-expert-v2_1_copy.pkl"
+        type: 'state'
+neighbor_lookup_pkl: "data/hopper-mix-neighbor-lookup.pkl"
+mixed: True

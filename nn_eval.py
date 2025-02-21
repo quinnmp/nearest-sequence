@@ -1,4 +1,8 @@
 import os
+
+from cv2.gapi import video
+
+from rgb_arrays_to_mp4 import rgb_arrays_to_mp4
 os.environ["D4RL_SUPPRESS_IMPORT_ERROR"] = "1"
 import gym
 gym.logger.set_level(40)
@@ -24,26 +28,33 @@ import copy
 
 DEBUG = False
 
-#@profile
 def single_trial_eval(config, agent, env, trial):
     img = config.get('img', False)
-    keypoint = config.get('keypoint', False)
     env_name = config['name']
-    is_metaworld = config.get('metaworld', False)
     is_robosuite = config.get('robosuite', False)
+    cam_names = config.get("cams", [])
     
-    video_frames = []
+    if len(cam_names) > 0:
+        video_frames = {}
+    else:
+        video_frames = []
+
+    for cam in cam_names:
+        video_frames[cam] = []
+
     if not is_robosuite:
         env.seed(trial)
-    if img:
-        observation = env.reset()
-        obs_history = []
-    else:
-        obs_history = None
-        if env_name == "push_t":
-            observation = crop_obs_for_env(env.reset()[0], env_name)
-        else:
-            observation = crop_obs_for_env(env.reset(), env_name)
+
+    observation = env.reset()
+    obs_history = {
+            'retrieval': [],
+            'delta_state': []
+    }
+
+    #if env_name == "push_t":
+    #    observation = crop_obs_for_env(env.reset()[0], env_name)
+    #else:
+    #    observation = crop_obs_for_env(env.reset(), env_name)
 
     agent.reset_obs_history()
 
@@ -51,18 +62,22 @@ def single_trial_eval(config, agent, env, trial):
     steps = 0
 
     done = False
-    while not (done or eval_over(steps, config)):
+    while not (steps > 0 and (done or eval_over(steps, config, env.env))):
         steps += 1
 
-        frame = env.render(mode='rgb_array')
-        video_frames.append(frame)
+        if len(cam_names) > 0:
+            frame = {}
+            for cam in cam_names:
+                curr_frame = env.render(mode='rgb_array', height=512, width=512, camera_name=cam)
+                frame[cam] = curr_frame
+                video_frames[cam].append(curr_frame)
+        else:
+            frame = env.render(mode='rgb_array')
+            video_frames.append(frame)
 
-        action = get_action_from_obs(config, agent, observation, frame, obs_history=obs_history)
+        action = get_action_from_obs(config, agent, env.env, observation, frame, obs_history=obs_history)
 
         observation, reward, done, info = env.step(action)[:4]
-
-        if not img:
-            observation = crop_obs_for_env(observation, env_name)
 
         if env_name == "push_t":
             episode_reward = max(episode_reward, reward)
@@ -73,21 +88,26 @@ def single_trial_eval(config, agent, env, trial):
 
             # env.render(mode='human')
 
-    if len(video_frames) > 0 and False:
+    if len(video_frames) > 0:
         from tapnet.utils import transforms
         from tapnet.utils import viz_utils
 
-        tracks, visibles = get_keypoint_viz()
+        #tracks, visibles = get_keypoint_viz(cam_names)
 
-        video_frames = np.array(video_frames)
-        height, width = video_frames.shape[1:3]
-        tracks = transforms.convert_grid_coordinates(
-            tracks, (256, 256), (width, height)
-        )
-        video_viz = viz_utils.paint_point_track(video_frames, tracks, visibles)
+        if len(cam_names) > 0:
+            for cam in cam_names:
+                video_frames[cam] = np.array(video_frames[cam])
+                height, width = video_frames[cam].shape[1:3]
+                tracks[cam] = transforms.convert_grid_coordinates(
+                    tracks[cam], (256, 256), (width, height)
+                )
+                video_viz = viz_utils.paint_point_track(video_frames[cam], tracks[cam], visibles[cam])
 
-        #pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
-        pickle.dump(video_viz, open(f"data/{trial}", 'wb'))
+                #pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
+                pickle.dump(video_viz, open(f"data/{trial}_{cam}", 'wb'))
+        else:
+            video_frames = np.array(video_frames)
+            rgb_arrays_to_mp4(video_frames, f"data/{trial}.mp4")
 
     success = 1 if 'success' in info else 0
 
@@ -114,7 +134,7 @@ def nn_fork_eval(config, env, steps, episode_reward, dan_agent, observation):
     while not (done or eval_over(steps, config)):
         steps += 1
 
-        action = get_action_from_obs(config, dan_agent, observation, obs_history=None)
+        action = get_action_from_obs(config, dan_agent, env, observation, frame, obs_history=None)
 
         observation, reward, done, info = env.step(action)[:4]
 
@@ -259,7 +279,7 @@ def nn_eval_closed_loop(config, nn_agent):
         steps = 0
 
         done = False
-        while not (done or eval_over(steps, config)):
+        while not (done or eval_over(steps, config, env)):
             steps += 1
             action = get_action_from_obs(config, nn_agent, observation, obs_history=obs_history)
             observation, reward, done, info = env.step(action)[:4]
@@ -423,6 +443,7 @@ if __name__ == "__main__":
     dan_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
     # env_cfg_copy = env_cfg.copy()
     nn_eval(env_cfg, dan_agent, trials=10)
+    pickle.dump(dan_agent.model.eval_distances, open("hopper_eval_distances.pkl", 'wb'))
     # nn_eval_closed_loop(env_cfg, dan_agent)
     # env_cfg_copy['demo_pkl'] = "data/hopper-expert-v2_1_img.pkl"
     # img_agent = nn_agent.NNAgentEuclidean(env_cfg_copy, policy_cfg)
