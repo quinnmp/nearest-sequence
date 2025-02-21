@@ -46,6 +46,8 @@ def single_trial_eval(config, agent, env, trial):
         env.seed(trial)
 
     observation = env.reset()
+    if env_name == "maze2d-umaze-v1":
+        env.set_target()
     obs_history = {
             'retrieval': [],
             'delta_state': []
@@ -88,7 +90,7 @@ def single_trial_eval(config, agent, env, trial):
 
             # env.render(mode='human')
 
-    if len(video_frames) > 0:
+    if len(video_frames) > 0 and False:
         from tapnet.utils import transforms
         from tapnet.utils import viz_utils
 
@@ -442,7 +444,7 @@ if __name__ == "__main__":
     # for i in range(10):
     dan_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
     # env_cfg_copy = env_cfg.copy()
-    nn_eval(env_cfg, dan_agent, trials=10)
+    nn_eval(env_cfg, dan_agent, trials=100)
     pickle.dump(dan_agent.model.eval_distances, open("hopper_eval_distances.pkl", 'wb'))
     # nn_eval_closed_loop(env_cfg, dan_agent)
     # env_cfg_copy['demo_pkl'] = "data/hopper-expert-v2_1_img.pkl"

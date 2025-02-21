@@ -1,0 +1,13 @@
+seed: 42
+name: "maze2d-umaze-v1"
+retrieval:
+        demo_pkl: "data/maze2d-umaze-v1_10_val.pkl"
+        type: 'state'
+state:
+        demo_pkl: "data/maze2d-umaze-v1_10_val.pkl"
+        type: 'state'
+delta_state:
+        demo_pkl: "data/maze2d-umaze-v1_10_val.pkl"
+        type: 'state'
+#neighbor_lookup_pkl: "data/maze-bc-lookup-val.pkl"
+mixed: True

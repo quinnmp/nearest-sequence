@@ -23,6 +23,7 @@ from nn_util import NN_METHOD, load_and_scale_data, load_expert_data, save_exper
 from sklearn.random_projection import GaussianRandomProjection
 from sklearn.decomposition import PCA
 import random
+import yaml
 
 DEBUG = False
 
@@ -64,7 +65,7 @@ class NNAgent:
         if self.method == NN_METHOD.COND or self.method == NN_METHOD.BC:
             model_path = policy_cfg.get('model_name')
             if model_path is None:
-                model_path = "cond_models/" + os.path.basename(self.datasets['retrieval'])[:-4] + "_cond_model.pth"
+                model_path = "cond_models/" + os.path.basename(self.env_cfg['retrieval']['demo_pkl'])[:-4] + "_cond_model.pth"
             else:
                 model_path = "cond_models/" + model_path + ".pth"
 
@@ -81,7 +82,7 @@ class NNAgent:
                 generator.manual_seed(42)
 
                 # Train the model if it doesn't exist
-                train_dataset = KNNExpertDataset(self.datasets, env_cfg, policy_cfg, euclidean=False, bc_baseline=self.method == NN_METHOD.BC)
+                train_dataset = KNNExpertDataset(env_cfg, policy_cfg, euclidean=False, bc_baseline=self.method == NN_METHOD.BC)
 
                 train_loader = DataLoader(
                     train_dataset, 
@@ -91,8 +92,10 @@ class NNAgent:
                     generator=generator
                 )
 
-                if env_cfg.get('val_pkl'):
-                    val_dataset = KNNExpertDataset(env_cfg['val_pkl'], env_cfg, policy_cfg, euclidean=False, bc_baseline=self.method == NN_METHOD.BC)
+                if env_cfg.get('val_cfg'):
+                    with open(env_cfg['val_cfg'], 'r') as f:
+                        val_env_cfg = yaml.load(f, Loader=yaml.FullLoader)
+                    val_dataset = KNNExpertDataset(val_env_cfg, policy_cfg, euclidean=False, bc_baseline=self.method == NN_METHOD.BC)
                     val_loader = DataLoader(
                         val_dataset, 
                         batch_size=policy_cfg.get('batch_size', 64), 

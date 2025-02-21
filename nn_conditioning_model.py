@@ -235,17 +235,17 @@ class KNNConditioningModel(nn.Module):
         return self
 
 class KNNExpertDataset(Dataset):
-    def __init__(self, datasets, env_cfg, policy_cfg, euclidean=False, bc_baseline=False):
+    def __init__(self, env_cfg, policy_cfg, euclidean=False, bc_baseline=False):
         policy_cfg_copy = policy_cfg.copy()
         policy_cfg_copy['method'] = 'knn_and_dist'
 
-        self.datasets = datasets
         self.agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg_copy)
+        self.datasets = self.agent.datasets
 
         self.action_scaler = FastScaler()
-        self.action_scaler.fit(np.concatenate(datasets['retrieval'].act_matrix))
+        self.action_scaler.fit(np.concatenate(self.datasets['retrieval'].act_matrix))
 
-        self.neighbor_lookup: List[NeighborData | None] = [None] * len(datasets['retrieval'].flattened_obs_matrix)
+        self.neighbor_lookup: List[NeighborData | None] = [None] * len(self.datasets['retrieval'].flattened_obs_matrix)
 
         self.euclidean = euclidean
         self.bc_baseline = bc_baseline

@@ -435,7 +435,7 @@ def crop_obs_for_env(obs, env, env_instance=None):
         gripper_pos_vel = obs['robot0_gripper_qpos']
         return np.hstack((obj, ee_pos, ee_pos_vel, ee_ang, ee_ang_vel, gripper_pos, gripper_pos_vel))
     elif env == "maze2d-umaze-v1":
-        return np.hstack((obs, env_instance._target))
+        return np.hstack((env_instance._target, obs))
     else:
         return obs
 
