@@ -53,11 +53,6 @@ def single_trial_eval(config, agent, env, trial):
             'delta_state': []
     }
 
-    #if env_name == "push_t":
-    #    observation = crop_obs_for_env(env.reset()[0], env_name)
-    #else:
-    #    observation = crop_obs_for_env(env.reset(), env_name)
-
     agent.reset_obs_history()
 
     episode_reward = 0.0
@@ -236,6 +231,110 @@ def nn_eval(config, nn_agent, trials=10):
     #     pickle.dump(episode_rewards, f)
     print(
         f"Candidates {nn_agent.candidates}, lookback {nn_agent.lookback}, decay {nn_agent.decay}, ratio {nn_agent.final_neighbors_ratio}: "
+        f"mean {round(np.mean(episode_rewards), 2)}, std {round(np.std(episode_rewards), 2)}"
+    )
+    return np.mean(episode_rewards)
+
+def single_trial_eval_ensemble(config, agents, env, trial):
+    img = config.get('img', False)
+    env_name = config['name']
+    is_robosuite = config.get('robosuite', False)
+    cam_names = config.get("cams", [])
+    
+    if len(cam_names) > 0:
+        video_frames = {}
+    else:
+        video_frames = []
+
+    for cam in cam_names:
+        video_frames[cam] = []
+
+    if not is_robosuite:
+        env.seed(trial)
+
+    observation = env.reset()
+    if env_name == "maze2d-umaze-v1":
+        env.set_target()
+    obs_history = {
+            'retrieval': [],
+            'delta_state': []
+    }
+
+    for agent in agents:
+        agent.reset_obs_history()
+
+    episode_reward = 0.0
+    steps = 0
+
+    done = False
+    while not (steps > 0 and (done or eval_over(steps, config, env.env))):
+        steps += 1
+
+        if len(cam_names) > 0:
+            frame = {}
+            for cam in cam_names:
+                curr_frame = env.render(mode='rgb_array', height=512, width=512, camera_name=cam)
+                frame[cam] = curr_frame
+                video_frames[cam].append(curr_frame)
+        else:
+            frame = env.render(mode='rgb_array')
+            video_frames.append(frame)
+
+        actions = []
+        for agent in agents:
+            actions.append(get_action_from_obs(config, agent, env.env, observation, frame, obs_history=obs_history))
+
+        observation, reward, done, info = env.step(np.mean(actions, axis=0))[:4]
+
+        if env_name == "push_t":
+            episode_reward = max(episode_reward, reward)
+        else:
+            episode_reward += reward
+            if is_robosuite and episode_reward > 0:
+                break
+
+            # env.render(mode='human')
+
+    if len(video_frames) > 0 and False:
+        from tapnet.utils import transforms
+        from tapnet.utils import viz_utils
+
+        #tracks, visibles = get_keypoint_viz(cam_names)
+
+        if len(cam_names) > 0:
+            for cam in cam_names:
+                video_frames[cam] = np.array(video_frames[cam])
+                height, width = video_frames[cam].shape[1:3]
+                tracks[cam] = transforms.convert_grid_coordinates(
+                    tracks[cam], (256, 256), (width, height)
+                )
+                video_viz = viz_utils.paint_point_track(video_frames[cam], tracks[cam], visibles[cam])
+
+                #pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
+                pickle.dump(video_viz, open(f"data/{trial}_{cam}", 'wb'))
+        else:
+            video_frames = np.array(video_frames)
+            rgb_arrays_to_mp4(video_frames, f"data/{trial}.mp4")
+
+    success = 1 if 'success' in info else 0
+
+    return episode_reward, success
+
+def nn_eval_ensemble(config, nn_agents, trials=10):
+    env = construct_env(config)
+    episode_rewards = []
+    successes = 0
+
+    for trial in range(trials):
+        episode_reward, success = single_trial_eval_ensemble(config, nn_agents, env, trial)
+        episode_rewards.append(episode_reward)
+        successes += success
+
+    # os.makedirs('results', exist_ok=True)
+    # with open("results/" + str(env_name) + "_" + str(nn_agent.candidates) + "_" + str(nn_agent.lookback) + "_" + str(nn_agent.decay) + "_" + str(nn_agent.final_neighbors_ratio) + "_result.pkl", 'wb') as f:
+    #     pickle.dump(episode_rewards, f)
+    print(
+        f"Candidates {nn_agents[0].candidates}, lookback {nn_agents[0].lookback}, decay {nn_agents[0].decay}, ratio {nn_agents[0].final_neighbors_ratio}: "
         f"mean {round(np.mean(episode_rewards), 2)}, std {round(np.std(episode_rewards), 2)}"
     )
     return np.mean(episode_rewards)
@@ -441,11 +540,16 @@ if __name__ == "__main__":
     print(env_cfg)
     print(policy_cfg)
 
-    # for i in range(10):
-    dan_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
+    env_cfg['seed'] = 42
+    agents = []
+    for i in range(10):
+        env_cfg['seed'] += 1
+        print(f"Training agent {i}")
+        agents.append(nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg))
     # env_cfg_copy = env_cfg.copy()
-    nn_eval(env_cfg, dan_agent, trials=100)
-    pickle.dump(dan_agent.model.eval_distances, open("hopper_eval_distances.pkl", 'wb'))
+    #nn_eval(env_cfg, dan_agent, trials=100)
+    nn_eval_ensemble(env_cfg, agents, trials=100)
+    #pickle.dump(dan_agent.model.eval_distances, open("hopper_eval_distances.pkl", 'wb'))
     # nn_eval_closed_loop(env_cfg, dan_agent)
     # env_cfg_copy['demo_pkl'] = "data/hopper-expert-v2_1_img.pkl"
     # img_agent = nn_agent.NNAgentEuclidean(env_cfg_copy, policy_cfg)

@@ -29,7 +29,8 @@ DEBUG = False
 
 class NNAgent:
     def __init__(self, env_cfg, policy_cfg):
-        set_seed(42)
+        #print(f"Seeding with {env_cfg.get('seed', 42)}")
+        set_seed(env_cfg.get("seed", 42))
         self.env_cfg = env_cfg
         self.policy_cfg = policy_cfg
 
@@ -95,6 +96,7 @@ class NNAgent:
                 if env_cfg.get('val_cfg'):
                     with open(env_cfg['val_cfg'], 'r') as f:
                         val_env_cfg = yaml.load(f, Loader=yaml.FullLoader)
+                    val_env_cfg['seed'] = env_cfg.get('seed', 42)
                     val_dataset = KNNExpertDataset(val_env_cfg, policy_cfg, euclidean=False, bc_baseline=self.method == NN_METHOD.BC)
                     val_loader = DataLoader(
                         val_dataset, 
