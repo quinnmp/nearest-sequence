@@ -21,6 +21,7 @@ terminals = np.where(f['terminals'][:])[0]
 
 last_index = 0
 trajectories = []
+print(f"Processing {len(terminals)} trajectories...")
 for i in range(len(terminals)):
     idx = terminals[i]
     obs_cut = np.hstack((infos['goal'][last_index:idx],infos['qpos'][last_index:idx],infos['qvel'][last_index:idx]))

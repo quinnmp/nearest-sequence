@@ -15,16 +15,16 @@ def objective(trial, env_config_path, policy_config_path):
 
     # Suggest parameter values for optimization
     #policy_cfg['epochs'] = trial.suggest_int('epochs', 10, 1000)
-    policy_cfg['k_neighbors'] = trial.suggest_int('k_neighbors', 10, 640)
-    #policy_cfg['lookback'] = trial.suggest_int('lookback', 1, 50)
-    #policy_cfg['decay_rate'] = trial.suggest_float('decay_rate', -3.0, 0.0)
-    #policy_cfg['ratio'] = trial.suggest_float('ratio', max(0.05, 1 / policy_cfg['k_neighbors']), 1.0)
+    policy_cfg['k_neighbors'] = trial.suggest_int('k_neighbors', 10, 1000)
+    policy_cfg['lookback'] = trial.suggest_int('lookback', 1, 50)
+    policy_cfg['decay_rate'] = trial.suggest_float('decay_rate', -3.0, 0.0)
+    policy_cfg['ratio'] = trial.suggest_float('ratio', max(0.05, 1 / policy_cfg['k_neighbors']), 1.0)
 
     # Initialize the NNAgent with the updated config
     nn_agent_instance = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
 
     # Call nn_eval_sanity and return its result
-    result = nn_eval(env_cfg, nn_agent_instance, trials=100)
+    result = nn_eval(env_cfg, nn_agent_instance, trials=10)
     
     # Assuming nn_eval_sanity returns a score that we want to maximize
     return result

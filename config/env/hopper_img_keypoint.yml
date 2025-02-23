@@ -1,8 +1,11 @@
 seed: 42
 name: "hopper-expert-v2"
 demo_pkl: "data/hopper-expert-v2_1_kpt.pkl"
+type: "keypoint"
 #val_pkl: "data/hopper-expert-v2_1_new_kpt.pkl"
-#neighbor_lookup_pkl: "data/hopper-kpt-dan-neighbor-lookup.pkl"
+neighbor_lookup_pkl: "data/hopper-kpt-dan-neighbor-lookup.pkl"
 img: True
 keypoint: True
 stack_size: 1
+cams:
+- track

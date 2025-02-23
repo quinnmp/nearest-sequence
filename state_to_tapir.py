@@ -26,6 +26,7 @@ from tapnet.models import tapir_model
 from tapnet.utils import model_utils
 from tapnet.utils import transforms
 from tapnet.utils import viz_utils
+import xml.etree.ElementTree as ET
 
 def get_object_pixel_coords(sim, obj_name, camera_name="track", offset=np.array([0, 0, 0])):
     obj_id = sim.model.geom_name2id(obj_name)
@@ -50,6 +51,7 @@ def get_object_pixel_coords(sim, obj_name, camera_name="track", offset=np.array(
     return (height - v, width - u)
 
 def get_joint_pixel_coords(sim, joint_name, body_name, camera_name="track"):
+    breakpoint()
     body_id = sim.model.body_name2id(body_name)
     body_pos = sim.data.body_xpos[body_id]
 
@@ -200,14 +202,15 @@ else:
     for i, geom in enumerate(geoms):
         geom_id = env.sim.model.geom_name2id(geom)
         if geom == 'floor':
-            floor_mat_id = env.sim.model.geom_matid[geom_id]
-            print(env.sim.model.mat_texid[floor_mat_id])
-            # env.sim.model.geom_matid[geom_id] = -1
-            # env.sim.model.geom_rgba[geom_id] = [1, 1, 1, 1]
+            floor_geom_id = geom_id
+            floor_mat = env.sim.model.geom_matid[geom_id]
+            #floor_data = env.sim.model.geom_dataid[geom_id]
+            #floor_rgba = env.sim.model.geom_rgba[geom_id]
+            #env.sim.model.geom_matid[geom_id] = -1
+            #env.sim.model.geom_rgba[geom_id] = [1, 1, 1, 1]
         else:
-            env.sim.model.geom_matid[geom_id] = 0
-            env.sim.model.geom_rgba[geom_id] = distinct_colors[i]
-
+            env.sim.model.geom_matid[geom_id] = floor_mat
+            #env.sim.model.geom_rgba[geom_id] = distinct_colors[i]
 
 img_data = []
 for traj in range(len(data)):
@@ -223,6 +226,8 @@ for traj in range(len(data)):
             data[traj]['observations'][ob][-nv:])
         #frame = env.sim.render(height=520, width=520)
         frame = env.render(mode='rgb_array')
+        plt.imshow(frame)
+        plt.show()
         video.append(frame)
         frame = process_rgb_array(frame)
         if ob == 0:

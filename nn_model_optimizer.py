@@ -14,7 +14,7 @@ def objective(trial, env_config_path, policy_config_path):
         policy_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
         # Suggest parameter values for optimization
-    policy_cfg['epochs'] = trial.suggest_int('epochs', 1, 1000)
+    #policy_cfg['epochs'] = trial.suggest_int('epochs', 1, 1000)
     #policy_cfg['k_neighbors'] = trial.suggest_int('neighbors', 1, 999)
     policy_cfg['batch_size'] = trial.suggest_categorical('batch_size', [2**i for i in range(4, 9)])  # 16 to 1024
 

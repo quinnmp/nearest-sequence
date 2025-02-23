@@ -174,15 +174,42 @@ def init_tapir():
     online_model_init = jax.jit(online_model_init_func)
     online_model_predict = jax.jit(online_model_predict_func)
 
-def get_object_pixel_coords(sim, obj_name, camera_name="agentview"):
+def get_object_pixel_coords(sim, obj_name, camera_name="track", offset=np.array([0, 0, 0])):
     obj_id = sim.model.geom_name2id(obj_name)
-    obj_pos = sim.data.geom_xpos[obj_id]
+    obj_pos = sim.data.geom_xpos[obj_id] + offset
 
     cam_id = sim.model.camera_name2id(camera_name)
     cam_pos = sim.data.cam_xpos[cam_id]
     cam_mat = sim.data.cam_xmat[cam_id].reshape(3, 3)
 
     obj_pos_cam = cam_mat.T @ (obj_pos - cam_pos)
+
+    height, width = 256, 256
+    fovy = sim.model.cam_fovy[cam_id]
+    f = (height / 2) / np.tan(np.deg2rad(fovy) / 2)
+
+    x, y, z = obj_pos_cam
+
+    u = int(width / 2 + (f * x / z))
+    v = int(height / 2 - (f * y / z))
+
+    # y, x
+    return (height - v, width - u)
+
+def get_joint_pixel_coords(sim, joint_name, body_name, camera_name="track"):
+    body_id = sim.model.body_name2id(body_name)
+    body_pos = sim.data.body_xpos[body_id]
+
+    joint_id = sim.model.joint_name2id(joint_name)
+    joint_offset = sim.model.jnt_pos[joint_id]
+
+    joint_pos = body_pos + joint_offset
+
+    cam_id = sim.model.camera_name2id(camera_name)
+    cam_pos = sim.data.cam_xpos[cam_id]
+    cam_mat = sim.data.cam_xmat[cam_id].reshape(3, 3)
+
+    obj_pos_cam = cam_mat.T @ (joint_pos - cam_pos)
 
     height, width = 256, 256
     fovy = sim.model.cam_fovy[cam_id]
@@ -278,6 +305,7 @@ def get_proprio(config, obs):
     else:
         return obs
 
+@profile
 def get_action_from_obs(config, model, env, observation, frame, obs_history=None):
     is_robosuite = config.get('robosuite', False)
     stack_size = config.get('stack_size', 10)
@@ -326,7 +354,7 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
             case 'dino':
                 obs = frame_to_dino(frame)
             case 'keypoint':
-                obs = frame_to_keypoints(frame, is_robosuite=is_robosuite, is_first_ob=(len(obs_history) == 0))
+                obs = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=(len(obs_history) == 0), proprio_state=proprio_state)
 
         if stack:
             assert obs_history is not None
@@ -397,6 +425,7 @@ def frame_to_dino(rgb_array):
 
     return obs
 
+@profile
 def process_rgb_array_keypoints(rgb_array):
     # Handle 4-channel image (RGBA)
     if rgb_array.shape[2] == 4:
@@ -439,6 +468,7 @@ def crop_obs_for_env(obs, env, env_instance=None):
     else:
         return obs
 
+@profile
 def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=False, proprio_state=[]):
     global tapir, query_features, causal_state, online_model_init, online_model_predict, last_tracks, keypoint_viz
     if tapir is None:
@@ -449,9 +479,8 @@ def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=Fal
     ob = np.array(proprio_state)
 
     for camera in camera_names:
-        frame[camera] = process_rgb_array_keypoints(frame[camera])
+        #frame[camera] = process_rgb_array_keypoints(frame[camera])
         if is_first_ob:
-            print("FIRST OB")
             if camera == "sideview":
                 query_points = np.array(
                     [
@@ -473,16 +502,14 @@ def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=Fal
                         np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
                     ]
                 )
-            else:
-                query_points = np.array(
-                        [[0,140,71],
-                        [0,220,140],
-                        [0,220,120],
-                        [0,171,128],
-                        [0,124,128],
-                        [0,79,128]]
-                    )
-                query_points[:, 1] -= 3
+            elif camera == "track" and env_name == "hopper-expert-v2":
+                query_points = np.array([
+                        np.hstack(([0], get_joint_pixel_coords(env.sim, "thigh_joint", "thigh"))),
+                        np.hstack(([0], get_joint_pixel_coords(env.sim, "leg_joint", "leg"))),
+                        np.hstack(([0], get_joint_pixel_coords(env.sim, "foot_joint", "foot"))),
+                        np.hstack(([0], get_object_pixel_coords(env.sim, "foot_geom", offset=np.array([0, 0, 0])))),
+                ])
+                query_points[:, 1] -= 2
                 query_points[:, 2] -= 4
 
             assert online_model_init is not None
@@ -494,7 +521,6 @@ def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=Fal
             keypoint_viz[camera] = []
 
         assert online_model_predict is not None
-        print("online model predict")
         tracks, visibles, causal_state[camera] = online_model_predict(
             frames=np.array(frame[camera]),
             query_features=query_features[camera],

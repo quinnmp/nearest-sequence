@@ -1,11 +1,11 @@
 method: bc
 
-epochs: 10000
+epochs: 100
 batch_size: 16
 hidden_dims:
    - 256
    - 256
    - 256
 model_name: "bc_img"
-cond_force_retrain: True
+cond_force_retrain: False
 dropout_rate: 0.0

@@ -9,12 +9,16 @@ cams:
   - sideview
   - frontview
 mixed: True
+val_cfg: "config/env/stack_task_D0_kpt_val.yml"
 retrieval:
-  demo_pkl: "data/stack_task_D0/stack_task_D0_10_kpt.pkl"
+  demo_pkl: "data/stack_task_D0/stack_task_D0_100_kpt.pkl"
   type: 'keypoint'
+  stack?: True
 state:
-  demo_pkl: "data/stack_task_D0/stack_task_D0_10_kpt.pkl"
+  demo_pkl: "data/stack_task_D0/stack_task_D0_100_kpt.pkl"
   type: 'keypoint'
+  stack?: True
 delta_state:
-  demo_pkl: "data/stack_task_D0/stack_task_D0_10_kpt.pkl"
+  demo_pkl: "data/stack_task_D0/stack_task_D0_100_kpt.pkl"
   type: 'keypoint'
+  stack?: True

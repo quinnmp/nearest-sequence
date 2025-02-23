@@ -416,12 +416,12 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                     early_stopping_counter += 1
 
                 if early_stopping_counter >= early_stopping_patience:
-                    print(f'Recommend early stopping after {epoch+1 - early_stopping_patience} epochs')
+                    #print(f'Recommend early stopping after {epoch+1 - early_stopping_patience} epochs')
                     torch.save(best_check, model_path)
                     return best_check['model']
 
                 
-                print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+                #print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
             model.train()
         else:
             #print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")

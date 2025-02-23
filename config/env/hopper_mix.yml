@@ -2,15 +2,18 @@ seed: 42
 name: "hopper-expert-v2"
 cams:
   - track
-mixed: True
 retrieval:
         demo_pkl: "data/hopper-expert-v2_1_kpt.pkl"
         type: 'keypoint'
+        stack?: True
 state:
         demo_pkl: "data/hopper-expert-v2_1_kpt.pkl"
         type: 'keypoint'
+        stack?: True
 delta_state:
         demo_pkl: "data/hopper-expert-v2_1_kpt.pkl"
         type: 'keypoint'
+        stack?: True
 neighbor_lookup_pkl: "data/hopper-mix-neighbor-lookup.pkl"
 mixed: True
+stack_size: 1

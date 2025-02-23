@@ -28,6 +28,7 @@ import copy
 
 DEBUG = False
 
+@profile
 def single_trial_eval(config, agent, env, trial):
     img = config.get('img', False)
     env_name = config['name']
@@ -59,20 +60,20 @@ def single_trial_eval(config, agent, env, trial):
     steps = 0
 
     done = False
-    while not (steps > 0 and (done or eval_over(steps, config, env.env))):
+    while not (steps > 0 and (done or eval_over(steps, config, env))):
         steps += 1
 
         if len(cam_names) > 0:
             frame = {}
             for cam in cam_names:
-                curr_frame = env.render(mode='rgb_array', height=512, width=512, camera_name=cam)
+                curr_frame = env.render(mode='rgb_array', height=256, width=256, camera_name=cam)
                 frame[cam] = curr_frame
                 video_frames[cam].append(curr_frame)
         else:
             frame = env.render(mode='rgb_array')
             video_frames.append(frame)
 
-        action = get_action_from_obs(config, agent, env.env, observation, frame, obs_history=obs_history)
+        action = get_action_from_obs(config, agent, env, observation, frame, obs_history=obs_history)
 
         observation, reward, done, info = env.step(action)[:4]
 
@@ -89,7 +90,7 @@ def single_trial_eval(config, agent, env, trial):
         from tapnet.utils import transforms
         from tapnet.utils import viz_utils
 
-        #tracks, visibles = get_keypoint_viz(cam_names)
+        tracks, visibles = get_keypoint_viz(cam_names)
 
         if len(cam_names) > 0:
             for cam in cam_names:
@@ -101,7 +102,7 @@ def single_trial_eval(config, agent, env, trial):
                 video_viz = viz_utils.paint_point_track(video_frames[cam], tracks[cam], visibles[cam])
 
                 #pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
-                pickle.dump(video_viz, open(f"data/{trial}_{cam}", 'wb'))
+                rgb_arrays_to_mp4(video_viz, f"data/{trial}_{cam}.mp4")
         else:
             video_frames = np.array(video_frames)
             rgb_arrays_to_mp4(video_frames, f"data/{trial}.mp4")
@@ -526,7 +527,8 @@ def nn_eval_open_loop(config, nn_agent_dan, nn_agent_bc):
                 ax.legend(loc='lower left')
                 writer.grab_frame()
 
-if __name__ == "__main__":
+@profile
+def main():
     parser = ArgumentParser()
     parser.add_argument("env_config_path", help="Path to environment config file")
     parser.add_argument("policy_config_path", help="Path to policy config file")
@@ -541,14 +543,15 @@ if __name__ == "__main__":
     print(policy_cfg)
 
     env_cfg['seed'] = 42
-    agents = []
-    for i in range(10):
-        env_cfg['seed'] += 1
-        print(f"Training agent {i}")
-        agents.append(nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg))
+    #agents = []
+    #for i in range(100):
+        #env_cfg['seed'] += 1
+        #print(f"Training agent {i}")
+        #agents.append(nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg))
+    agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
     # env_cfg_copy = env_cfg.copy()
     #nn_eval(env_cfg, dan_agent, trials=100)
-    nn_eval_ensemble(env_cfg, agents, trials=100)
+    nn_eval(env_cfg, agent, trials=10)
     #pickle.dump(dan_agent.model.eval_distances, open("hopper_eval_distances.pkl", 'wb'))
     # nn_eval_closed_loop(env_cfg, dan_agent)
     # env_cfg_copy['demo_pkl'] = "data/hopper-expert-v2_1_img.pkl"
@@ -563,3 +566,6 @@ if __name__ == "__main__":
     # nn_eval_split(env_cfg, dan_agent, bc_agent, trials=1)
     # nn_eval(env_cfg, bc_agent)
     #
+
+if __name__ == "__main__":
+    main()
