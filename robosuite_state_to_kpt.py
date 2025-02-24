@@ -6,6 +6,7 @@ import time
 from push_t_env import PushTEnv
 from tqdm import tqdm
 import numpy as np
+import jax.numpy as jnp
 import gym
 gym.logger.set_level(40)
 import d4rl
@@ -17,6 +18,7 @@ import torchvision.transforms as transforms
 from PIL import Image
 import metaworld
 import metaworld.envs.mujoco.env_dict as _env_dict
+from functools import partial
 
 import robomimic
 import robomimic.utils.obs_utils as ObsUtils
@@ -109,6 +111,22 @@ def get_object_pixel_coords(sim, obj_name, camera_name="agentview"):
     # y, x
     return (height - v, width - u)
 
+@partial(jax.jit, static_argnums=())
+def fast_2d_angles_and_magnitudes_jax(tracks_r, last_tracks_r):
+    diff = tracks_r - last_tracks_r
+    dots = jnp.sum(tracks_r * last_tracks_r, axis=1)
+
+    norms_squared_a = jnp.sum(tracks_r**2, axis=1)
+    norms_squared_b = jnp.sum(last_tracks_r**2, axis=1)
+
+    cos_theta = dots / jnp.sqrt(norms_squared_a * norms_squared_b)
+    cos_theta = jnp.clip(cos_theta, -1.0, 1.0)
+
+    return jnp.stack([
+        jnp.arccos(cos_theta),
+        jnp.sqrt(jnp.sum(diff**2, axis=1))
+    ])
+
 checkpoint_path = './model_checkpoints/tapnet/checkpoints/causal_bootstapir_checkpoint.npy'
 ckpt_state = np.load(checkpoint_path, allow_pickle=True).item()
 params, state = ckpt_state['params'], ckpt_state['state']
@@ -162,103 +180,104 @@ env = EnvUtils.create_env_from_metadata(env_meta=env_meta, render=True, render_o
 camera_names = ['agentview', 'sideview', 'frontview']
 render_image_names = RobomimicUtils.get_default_env_cameras(env_meta=env_meta)
 
-img_data = []
-for traj in range(len(data)):
-    print(f"Processing traj {traj}...")
-    initial_state = dict(states=data[traj]['states'][0])
-    initial_state["model"] = data[traj]["model_file"]
-    traj_obs = []
-    predictions = {}
-    video = {}
-    for camera in camera_names:
-        video[camera] = []
-        predictions[camera] = []
-    last_tracks = {}
-    query_features = {}
-    causal_state = {}
+height, width = 256, 256
 
-    env.reset()
-    env.reset_to(initial_state)
-    for ob in range(len(data[traj]['observations'])):
-        print(ob)
-        env.step(data[traj]['actions'][ob])
-        env.reset_to({"states" : data[traj]['states'][ob]})
-        #frame = env.render(mode='rgb_array', height=512, width=512, camera_name=render_image_names[0])
-        traj_obs.append(np.array(proprio_data[traj]['observations'][ob]))
-        tracks = []
-        for camera in camera_names:
-            frame = env.render(mode='rgb_array', height=512, width=512, camera_name=camera)
-            video[camera].append(frame)
-            frame = process_rgb_array(frame)
+def main():
+    img_data = []
+    for traj in range(len(data)):
+        print(f"Processing traj {traj}...")
+        initial_state = dict(states=data[traj]['states'][0])
+        initial_state["model"] = data[traj]["model_file"]
+        traj_obs = []
+        predictions = []
+
+        env.reset()
+        env.reset_to(initial_state)
+        for ob in range(len(data[traj]['observations'])):
+            env.step(data[traj]['actions'][ob])
+            env.reset_to({"states" : data[traj]['states'][ob]})
+            #frame = env.render(mode='rgb_array', height=512, width=512, camera_name=render_image_names[0])
+            traj_obs.append(np.array(proprio_data[traj]['observations'][ob]))
+            tracks = []
+            full_frame = np.empty((height, 0, 3))
+            for camera in camera_names:
+                frame = env.render(mode='rgb_array', height=height, width=width, camera_name=camera)
+                full_frame = np.hstack((full_frame, frame))
+
             if ob == 0:
-                select_points = False
-                if select_points:
-                    fig, ax = plt.subplots()
-                    ax.imshow(frame)
-                    plt.show()
-                if camera == "sideview":
-                    query_points = np.array(
-                        [
-                            np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
-                            np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
-                        ]
-                    )
-                elif camera == "frontview":
-                    query_points = np.array(
-                        [
-                            np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
-                            np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
-                        ]
-                    )
-                elif camera == "agentview":
-                    query_points = np.array(
-                        [
-                            np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
-                            np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
-                        ]
-                    )
-                query_features[camera] = online_model_init(np.array(frame), query_points[None])
-                causal_state[camera] = tapir.construct_initial_causal_state(
-                    query_points.shape[0], len(query_features[camera].resolutions) - 1
+                all_query_points = np.empty((0, 3))
+                for i, camera in enumerate(camera_names):
+                    select_points = False
+                    if select_points:
+                        fig, ax = plt.subplots()
+                        ax.imshow(frame)
+                        plt.show()
+                    if camera == "sideview":
+                        query_points = np.array(
+                            [
+                                np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
+                                np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
+                            ]
+                        )
+                    elif camera == "frontview":
+                        query_points = np.array(
+                            [
+                                np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
+                                np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
+                            ]
+                        )
+                    elif camera == "agentview":
+                        query_points = np.array(
+                            [
+                                np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
+                                np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
+                            ]
+                        )
+
+                    query_points[:, 2] += i * width
+                    all_query_points = np.vstack((all_query_points, query_points))
+
+                query_features = online_model_init(full_frame, all_query_points[None])
+                causal_state = tapir.construct_initial_causal_state(
+                    all_query_points.shape[0], len(query_features.resolutions) - 1
                 )
-                last_tracks[camera] = []
+                last_tracks = []
 
-            tracks, visibles, causal_state[camera] = online_model_predict(
-                frames=np.array(frame),
-                query_features=query_features[camera],
-                causal_context=causal_state[camera],
+            tracks, visibles, causal_state = online_model_predict(
+                frames=np.array(full_frame),
+                query_features=query_features,
+                causal_context=causal_state,
             )
-            predictions[camera].append({'frame': frame, 'tracks': tracks, 'visibles': visibles})
-            tracks = tracks.flatten()
+            predictions.append({'frame': full_frame, 'tracks': tracks, 'visibles': visibles})
 
+            tracks_flat = tracks.reshape(-1)
             tracks_r = tracks.reshape(-1, 2)
-            angles = np.zeros(len(tracks_r))
-            magnitudes = np.zeros(len(tracks_r))
 
-            if len(last_tracks[camera]) > 0:
-                last_tracks_r = last_tracks[camera].reshape(-1, 2)
+            if len(last_tracks) > 0:
+                result = fast_2d_angles_and_magnitudes_jax(tracks_r, last_tracks.reshape(-1, 2))
 
-                for kpt in range(len(tracks_r)):
-                    dot_product = np.dot(tracks_r[kpt], last_tracks_r[kpt])
-                    norm_a = np.linalg.norm(tracks_r[kpt])
-                    norm_b = np.linalg.norm(last_tracks_r[kpt])
-                    angles[kpt] = np.arccos(np.clip(dot_product / (norm_a * norm_b), -1.0, 1.0))
-                    magnitudes[kpt] = np.linalg.norm(tracks_r[kpt] - last_tracks_r[kpt])
+                angles, magnitudes = np.asarray(result)
+            else:
+                angles = jnp.zeros(len(tracks_r))
+                magnitudes = jnp.zeros(len(tracks_r))
 
-            last_tracks[camera] = tracks
+            last_tracks = tracks_r
 
-            assert len(tracks) > 0
-            traj_obs[-1]=(np.hstack((traj_obs[-1], tracks, angles, magnitudes)))
+            traj_obs[-1]=(np.hstack((traj_obs[-1], np.asarray(tracks_flat), angles, magnitudes)))
 
-    img_data.append({'observations': np.array(traj_obs), 'actions': data[traj]['actions']})
-    for camera in camera_names:
-        tracks = np.concatenate([x['tracks'][0] for x in predictions[camera]], axis=1)
-        visibles = np.concatenate([x['visibles'][0] for x in predictions[camera]], axis=1)
+        img_data.append({'observations': np.array(traj_obs), 'actions': data[traj]['actions']})
+        tracks = np.concatenate([x['tracks'][0] for x in predictions], axis=1)
+        visibles = np.concatenate([x['visibles'][0] for x in predictions], axis=1)
+        video = np.array([x['frame'] for x in predictions])
         tracks = transforms.convert_grid_coordinates(
-            tracks, (256, 256), (512, 512)
+            tracks, (256, 256), (256, 256)
         )
-        video_viz = viz_utils.paint_point_track(np.array(video[camera]), tracks, visibles)
-        rgb_arrays_to_mp4(video_viz, f"data/robosuite_tapir_{traj}_{camera}.mp4")
+        print(np.array(video).shape)
+        video_viz = viz_utils.paint_point_track(np.array(video), tracks, visibles)
+        rgb_arrays_to_mp4(video_viz, f"data/robosuite_tapir_{traj}.mp4")
 
-print(f"Success! Dumping data to {env_cfg['demo_pkl'][:-4] + '_kpt.pkl'}")
-pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_kpt.pkl', 'wb'))
+    print(f"Success! Dumping data to {env_cfg['demo_pkl'][:-4] + '_kpt.pkl'}")
+    pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_kpt.pkl', 'wb'))
+
+if __name__ == "__main__":
+    main()

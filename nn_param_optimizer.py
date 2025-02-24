@@ -3,30 +3,26 @@ import yaml
 from argparse import ArgumentParser
 from nn_eval import nn_eval
 import nn_agent
+import numpy as np
+import pickle
 
 # Define the objective function for Optuna
 def objective(trial, env_config_path, policy_config_path):
-    # Load environment and policy configurations
     with open(env_config_path, 'r') as f:
         env_cfg = yaml.load(f, Loader=yaml.FullLoader)
     
     with open(policy_config_path, 'r') as f:
         policy_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
-    # Suggest parameter values for optimization
-    #policy_cfg['epochs'] = trial.suggest_int('epochs', 10, 1000)
     policy_cfg['k_neighbors'] = trial.suggest_int('k_neighbors', 10, 1000)
     policy_cfg['lookback'] = trial.suggest_int('lookback', 1, 50)
     policy_cfg['decay_rate'] = trial.suggest_float('decay_rate', -3.0, 0.0)
     policy_cfg['ratio'] = trial.suggest_float('ratio', max(0.05, 1 / policy_cfg['k_neighbors']), 1.0)
 
-    # Initialize the NNAgent with the updated config
     nn_agent_instance = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
 
-    # Call nn_eval_sanity and return its result
     result = nn_eval(env_cfg, nn_agent_instance, trials=10)
     
-    # Assuming nn_eval_sanity returns a score that we want to maximize
     return result
 
 # Create and run an Optuna study to optimize the objective function
@@ -37,9 +33,42 @@ def optimize(env_config_path, policy_config_path):
     study = optuna.create_study(sampler=sampler, direction='maximize')
     study.optimize(lambda trial: objective(trial, env_config_path, policy_config_path), n_trials=100)
     
-    # Print the best parameters found
-    print("Best parameters: ", study.best_params)
-    print("Best value: ", study.best_value)
+    trials = study.get_trials()
+    scores = []
+    for trial in trials:
+        scores.append(trial.values[0])
+
+    k = 10
+    best_k_trials = np.argpartition(scores, -k)[-k:]
+
+    best_k_params = []
+    for trial_idx in best_k_trials:
+        best_k_params.append(trials[trial_idx].params)
+
+    with open(env_config_path, 'r') as f:
+        env_cfg = yaml.load(f, Loader=yaml.FullLoader)
+    with open(policy_config_path, 'r') as f:
+        policy_cfg = yaml.load(f, Loader=yaml.FullLoader)
+
+    final_scores = []
+    results = []
+    result_file_name = "hopper_ns_dan_bc"
+    for params in best_k_params:
+        policy_cfg['k_neighbors'] = params['k_neighbors']
+        policy_cfg['lookback'] = params['lookback']
+        policy_cfg['decay_rate'] = params['decay_rate']
+        policy_cfg['ratio'] = params['ratio']
+        agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
+        final_scores.append(nn_eval(env_cfg, agent, trials=20, results=result_file_name))
+        with open(f"results/{result_file_name}.pkl", 'rb') as f:
+            results.append(pickle.load(f))
+
+    best_score = np.argmax(final_scores)
+    print(f"Best score: {final_scores[best_score]} with params {best_k_params[best_score]}")
+    print(f"Dumping best results to {result_file_name}...")
+    with open(f"results/{result_file_name}.pkl", 'wb') as f:
+        pickle.dump(results[best_score], f)
+    
 
 # Parse the command-line arguments
 def parse_args():

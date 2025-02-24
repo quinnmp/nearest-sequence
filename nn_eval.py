@@ -28,20 +28,13 @@ import copy
 
 DEBUG = False
 
-@profile
 def single_trial_eval(config, agent, env, trial):
     img = config.get('img', False)
     env_name = config['name']
     is_robosuite = config.get('robosuite', False)
     cam_names = config.get("cams", [])
     
-    if len(cam_names) > 0:
-        video_frames = {}
-    else:
-        video_frames = []
-
-    for cam in cam_names:
-        video_frames[cam] = []
+    video_frames = []
 
     if not is_robosuite:
         env.seed(trial)
@@ -62,16 +55,16 @@ def single_trial_eval(config, agent, env, trial):
     done = False
     while not (steps > 0 and (done or eval_over(steps, config, env))):
         steps += 1
-
+        
+        height, width = 256, 256
+        frame = np.empty((height, 0, 3))
         if len(cam_names) > 0:
-            frame = {}
             for cam in cam_names:
-                curr_frame = env.render(mode='rgb_array', height=256, width=256, camera_name=cam)
-                frame[cam] = curr_frame
-                video_frames[cam].append(curr_frame)
+                curr_frame = env.render(mode='rgb_array', height=height, width=width, camera_name=cam)
+                frame = np.hstack((frame, curr_frame))
         else:
             frame = env.render(mode='rgb_array')
-            video_frames.append(frame)
+        video_frames.append(frame)
 
         action = get_action_from_obs(config, agent, env, observation, frame, obs_history=obs_history)
 
@@ -92,20 +85,15 @@ def single_trial_eval(config, agent, env, trial):
 
         tracks, visibles = get_keypoint_viz(cam_names)
 
-        if len(cam_names) > 0:
-            for cam in cam_names:
-                video_frames[cam] = np.array(video_frames[cam])
-                height, width = video_frames[cam].shape[1:3]
-                tracks[cam] = transforms.convert_grid_coordinates(
-                    tracks[cam], (256, 256), (width, height)
-                )
-                video_viz = viz_utils.paint_point_track(video_frames[cam], tracks[cam], visibles[cam])
+        video_frames = np.array(video_frames)
+        height, width = video_frames.shape[1:3]
+        tracks = transforms.convert_grid_coordinates(
+            tracks, (256, 256), (width, height)
+        )
+        video_viz = viz_utils.paint_point_track(video_frames, tracks, visibles)
 
-                #pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
-                rgb_arrays_to_mp4(video_viz, f"data/{trial}_{cam}.mp4")
-        else:
-            video_frames = np.array(video_frames)
-            rgb_arrays_to_mp4(video_frames, f"data/{trial}.mp4")
+        #pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
+        rgb_arrays_to_mp4(video_viz, f"data/{trial}_{cam}.mp4")
 
     success = 1 if 'success' in info else 0
 
@@ -217,7 +205,7 @@ def nn_eval_split(config, dan_agent, bc_agent, trials=10):
     )
     return np.mean(episode_rewards)
 
-def nn_eval(config, nn_agent, trials=10):
+def nn_eval(config, nn_agent, trials=10, results=None):
     env = construct_env(config)
     episode_rewards = []
     successes = 0
@@ -227,9 +215,10 @@ def nn_eval(config, nn_agent, trials=10):
         episode_rewards.append(episode_reward)
         successes += success
 
-    # os.makedirs('results', exist_ok=True)
-    # with open("results/" + str(env_name) + "_" + str(nn_agent.candidates) + "_" + str(nn_agent.lookback) + "_" + str(nn_agent.decay) + "_" + str(nn_agent.final_neighbors_ratio) + "_result.pkl", 'wb') as f:
-    #     pickle.dump(episode_rewards, f)
+    if results is not None:
+        os.makedirs('results', exist_ok=True)
+        with open(f"results/{results}.pkl", 'wb') as f:
+            pickle.dump(episode_rewards, f)
     print(
         f"Candidates {nn_agent.candidates}, lookback {nn_agent.lookback}, decay {nn_agent.decay}, ratio {nn_agent.final_neighbors_ratio}: "
         f"mean {round(np.mean(episode_rewards), 2)}, std {round(np.std(episode_rewards), 2)}"
@@ -527,7 +516,6 @@ def nn_eval_open_loop(config, nn_agent_dan, nn_agent_bc):
                 ax.legend(loc='lower left')
                 writer.grab_frame()
 
-@profile
 def main():
     parser = ArgumentParser()
     parser.add_argument("env_config_path", help="Path to environment config file")
@@ -551,7 +539,7 @@ def main():
     agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
     # env_cfg_copy = env_cfg.copy()
     #nn_eval(env_cfg, dan_agent, trials=100)
-    nn_eval(env_cfg, agent, trials=10)
+    nn_eval(env_cfg, agent, trials=100)
     #pickle.dump(dan_agent.model.eval_distances, open("hopper_eval_distances.pkl", 'wb'))
     # nn_eval_closed_loop(env_cfg, dan_agent)
     # env_cfg_copy['demo_pkl'] = "data/hopper-expert-v2_1_img.pkl"

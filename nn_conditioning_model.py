@@ -349,11 +349,11 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
         optimizer,
         mode='min',
         factor=0.5,
-        patience=6,
+        patience=5,
     )
 
     best_val_loss = float('inf')
-    early_stopping_patience = 18
+    early_stopping_patience = 20
     early_stopping_counter = 0
     
     for epoch in range(num_epochs):

@@ -1,15 +1,20 @@
 method: cond
-k_neighbors: 639
-lookback: 11
-decay_rate: -2.3286122
-ratio: 0.0777
-#Best parameters:  {'k_neighbors': 639, 'lookback': 11, 'decay_rate': -2.3286122577463573, 'ratio': 0.07770605738873454}
+k_neighbors: 363
+lookback: 28
+decay_rate: -0.9433
+ratio: 0.51038537
+#[I 2025-02-23 23:01:32,968] Trial 23 finished with value: 0.76 and parameters: {'k_neighbors': 280, 'lookback': 33, 'decay_rate': -1.2431540628139626, 'ratio': 0.5122513775678468}. Best is trial 0 with value: 0.76.
+
+#[I 2025-02-23 21:54:28,998] Trial 0 finished with value: 0.76 and parameters: {'k_neighbors': 399, 'lookback': 33, 'decay_rate': -0.686419204399304, 'ratio': 0.31638027032892274}. Best is trial 0 with value: 0.76.
+
+#Candidates 363, lookback 28, decay -0.9433067121850974, ratio 0.5103853706754273: mean 0.76, std 0.43
 
 epochs: 1000
 batch_size: 64
 hidden_dims:
-   - 128
-   - 128
-   - 128
+   - 256
+   - 256
+   - 256
 cond_force_retrain: True
+model_name: "ns_dan_bc"
 dropout: 0

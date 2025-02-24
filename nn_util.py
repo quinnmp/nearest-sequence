@@ -1,5 +1,6 @@
 import pickle
 import numpy as np
+import jax.numpy as jnp
 from scipy.spatial.distance import cdist
 from dataclasses import dataclass
 import nn_plot
@@ -23,6 +24,7 @@ import torchvision.transforms as transforms
 import gym
 import matplotlib.pyplot as plt
 import warnings
+from functools import partial
 
 import robomimic
 import robomimic.utils.obs_utils as ObsUtils
@@ -62,10 +64,10 @@ tapir = None
 online_model_init = None
 online_model_predict = None
 
-query_features = {}
-causal_state = {}
-last_tracks = {}
-keypoint_viz = {}
+query_features = []
+causal_state = []
+last_tracks = []
+keypoint_viz = []
 
 @dataclass
 class Dataset:
@@ -305,11 +307,11 @@ def get_proprio(config, obs):
     else:
         return obs
 
-@profile
 def get_action_from_obs(config, model, env, observation, frame, obs_history=None):
     is_robosuite = config.get('robosuite', False)
     stack_size = config.get('stack_size', 10)
     env_name = config.get('name', 10)
+    cam_names = config.get("cams", [])
 
     if config.get('add_proprio', False):
         proprio_state = get_proprio(config, observation)
@@ -332,7 +334,7 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
                     case 'dino':
                         obs[dataset] = frame_to_dino(frame)
                     case 'keypoint':
-                        obs[dataset] = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=(len(obs_history[dataset]) == 0), proprio_state=proprio_state)
+                        obs[dataset] = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=(len(obs_history[dataset]) == 0), proprio_state=proprio_state, cam_names=cam_names)
 
                 processed_obs_types[obs_type] = dataset
                 if stack:
@@ -425,15 +427,6 @@ def frame_to_dino(rgb_array):
 
     return obs
 
-@profile
-def process_rgb_array_keypoints(rgb_array):
-    # Handle 4-channel image (RGBA)
-    if rgb_array.shape[2] == 4:
-        # Convert RGBA to RGB by dropping the alpha channel
-        rgb_array = rgb_array[:, :, :3]
-
-    return media.resize_image(rgb_array, (256, 256))
-
 def eval_over(steps, config, env_instance):
     env_name = config['name']
     is_metaworld = config.get('metaworld', False)
@@ -468,19 +461,35 @@ def crop_obs_for_env(obs, env, env_instance=None):
     else:
         return obs
 
-@profile
-def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=False, proprio_state=[]):
+@partial(jax.jit, static_argnums=())
+def fast_2d_angles_and_magnitudes_jax(tracks_r, last_tracks_r):
+    diff = tracks_r - last_tracks_r
+    dots = jnp.sum(tracks_r * last_tracks_r, axis=1)
+
+    norms_squared_a = jnp.sum(tracks_r**2, axis=1)
+    norms_squared_b = jnp.sum(last_tracks_r**2, axis=1)
+
+    cos_theta = dots / jnp.sqrt(norms_squared_a * norms_squared_b)
+    cos_theta = jnp.clip(cos_theta, -1.0, 1.0)
+
+    return jnp.stack([
+        jnp.arccos(cos_theta),
+        jnp.sqrt(jnp.sum(diff**2, axis=1))
+    ])
+
+def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=False, proprio_state=[], cam_names=[]):
     global tapir, query_features, causal_state, online_model_init, online_model_predict, last_tracks, keypoint_viz
     if tapir is None:
         init_tapir()
 
-    camera_names = frame.keys()
+    ob = np.asarray(proprio_state)
 
-    ob = np.array(proprio_state)
+    height, width = 256, 256
 
-    for camera in camera_names:
-        #frame[camera] = process_rgb_array_keypoints(frame[camera])
-        if is_first_ob:
+    #frame[camera] = process_rgb_array_keypoints(frame[camera])
+    if is_first_ob:
+        all_query_points = np.empty((0, 3))
+        for i, camera in enumerate(cam_names):
             if camera == "sideview":
                 query_points = np.array(
                     [
@@ -511,45 +520,35 @@ def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=Fal
                 ])
                 query_points[:, 1] -= 2
                 query_points[:, 2] -= 4
+            query_points[:, 2] += i * width
+            all_query_points = np.vstack((all_query_points, query_points))
 
-            assert online_model_init is not None
-            query_features[camera] = online_model_init(np.array(frame[camera]), query_points[None])
-            causal_state[camera] = tapir.construct_initial_causal_state(
-                query_points.shape[0], len(query_features[camera].resolutions) - 1
+            query_features = online_model_init(np.array(frame), all_query_points[None])
+            causal_state = tapir.construct_initial_causal_state(
+                all_query_points.shape[0], len(query_features.resolutions) - 1
             )
-            last_tracks[camera] = []
-            keypoint_viz[camera] = []
+            last_tracks = []
 
-        assert online_model_predict is not None
-        tracks, visibles, causal_state[camera] = online_model_predict(
-            frames=np.array(frame[camera]),
-            query_features=query_features[camera],
-            causal_context=causal_state[camera],
-        )
-        keypoint_viz[camera].append({'tracks': tracks, 'visibles': visibles})
+    tracks, visibles, causal_state = online_model_predict(
+        frames=np.array(frame),
+        query_features=query_features,
+        causal_context=causal_state,
+    )
+    keypoint_viz.append({'frame': frame, 'tracks': tracks, 'visibles': visibles})
 
-        tracks = tracks.flatten()
-        tracks_r = tracks.reshape(-1, 2)
+    tracks_flat = tracks.reshape(-1)
+    tracks_r = tracks.reshape(-1, 2)
 
-        angles = np.zeros(len(tracks_r))
-        magnitudes = np.zeros(len(tracks_r))
+    if len(last_tracks) > 0:
+        results = fast_2d_angles_and_magnitudes_jax(tracks_r, last_tracks.reshape(-1, 2))
+        angles, magnitudes = np.asarray(results)
+    else:
+        angles = jnp.zeros(len(tracks_r))
+        magnitudes = jnp.zeros(len(tracks_r))
 
-        if len(last_tracks[camera]) > 0:
-            last_tracks_r = last_tracks[camera].reshape(-1, 2)
+    last_tracks = tracks_r
 
-            for kpt in range(len(tracks_r)):
-                dot_product = np.dot(tracks_r[kpt], last_tracks_r[kpt])
-                norm_a = np.linalg.norm(tracks_r[kpt])
-                norm_b = np.linalg.norm(last_tracks_r[kpt])
-                angles[kpt] = np.arccos(np.clip(dot_product / (norm_a * norm_b), -1.0, 1.0))
-                magnitudes[kpt] = np.linalg.norm(tracks_r[kpt] - last_tracks_r[kpt])
-
-        last_tracks[camera] = tracks
-
-        keypoint_obs = np.hstack((tracks, angles, magnitudes))
-        ob = np.hstack((ob, keypoint_obs))
-
-    return ob
+    return np.hstack((ob, np.asarray(tracks_flat), angles, magnitudes))
 
 def set_seed(seed):
     torch.manual_seed(seed)

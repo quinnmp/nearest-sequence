@@ -29,7 +29,7 @@ def objective(trial, env_config_path, policy_config_path):
     nn_agent_instance = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
 
     # Call nn_eval_sanity and return its result
-    result = nn_eval(env_cfg, nn_agent_instance, trials=10)
+    result = nn_eval(env_cfg, nn_agent_instance, trials=25)
     
     # Assuming nn_eval_sanity returns a score that we want to maximize
     return result
