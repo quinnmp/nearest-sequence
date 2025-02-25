@@ -3,9 +3,9 @@ method: bc
 epochs: 1000
 batch_size: 64
 hidden_dims:
-   - 1024
-   - 1024
-   - 1024
+   - 2048
+   - 2048
+   - 2048
 cond_force_retrain: True
 model_name: "bc"
 dropout: 0
