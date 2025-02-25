@@ -30,6 +30,7 @@ import mimicgen.utils.robomimic_utils as RobomimicUtils
 from mimicgen.utils.misc_utils import add_red_border_to_frame
 from mimicgen.configs import MG_TaskSpec
 import traceback
+import cv2
 
 
 # Load the pre-trained DinoV2 model
@@ -41,7 +42,7 @@ model.eval()
 transform = transforms.Compose([
     #transforms.Resize(224),  # DinoV2 expects 224x224 input
     #transforms.CenterCrop(224),
-    transforms.Resize(14 * 36),  # DinoV2 expects 224x224 input
+    transforms.Resize((14 * 36, 14 * 36)),  # DinoV2 expects 224x224 input
     transforms.CenterCrop(14 * 36),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -60,6 +61,7 @@ def process_rgb_array(rgb_array):
     # Apply transformations
     input_tensor = transform(image).unsqueeze(0).to(device)  # Add batch dimension
 
+    #plt.imsave("block_test.png", image)
     # Extract features
     with torch.no_grad():
         features = model(input_tensor)
@@ -96,14 +98,22 @@ def get_object_pixel_coords(sim, obj_name, camera_name="agentview"):
 
     return (u, v)
 
+def crop_and_resize(img, crop_corners):
+    width, height = img.shape[:2]
+    cropped_img = img[crop_corners[0][1]:crop_corners[1][1], crop_corners[0][0]:crop_corners[1][0], :]
+    resized_img = cv2.resize(cropped_img, (width, height))
+    return resized_img
+
 parser = ArgumentParser()
 parser.add_argument("env_config_path", help="Path to environment config file")
+parser.add_argument("proprio_path")
 args, _ = parser.parse_known_args()
 
 with open(args.env_config_path, 'r') as f:
     env_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
 data = pickle.load(open(env_cfg['demo_pkl'], 'rb'))
+proprio_data = pickle.load(open(args.proprio_path, 'rb'))
 
 obs_matrix = []
 
@@ -124,7 +134,10 @@ ObsUtils.initialize_obs_utils_with_obs_specs(obs_modality_specs=dummy_spec)
 
 env_meta = get_env_metadata_from_dataset(dataset_path=env_cfg['demo_hdf5'])
 env = EnvUtils.create_env_from_metadata(env_meta=env_meta, render=True, render_offscreen=True)
+camera_names = ['agentview', 'sideview', 'frontview']
 render_image_names = RobomimicUtils.get_default_env_cameras(env_meta=env_meta)
+
+height, width = 256, 256
 
 img_data = []
 frames = []
@@ -133,19 +146,27 @@ for traj in range(len(data)):
     initial_state = dict(states=data[traj]['states'][0])
     initial_state["model"] = data[traj]["model_file"]
     traj_obs = []
+
     env.reset()
     env.reset_to(initial_state)
     for ob in range(len(data[traj]['observations'])):
         env.step(data[traj]['actions'][ob])
         env.reset_to({"states" : data[traj]['states'][ob]})
-        frame = env.render(mode='rgb_array', height=512, width=512, camera_name=render_image_names[0])
-        traj_obs.append(process_rgb_array(frame))
-        frames.append(frame)
-        plt.imsave('block_frame.png', frame)
-        #print(get_object_pixel_coords(env.env.sim, "cubeA_g0"))
+        traj_obs.append(np.array(proprio_data[traj]['observations'][ob]))
+        full_frame = np.empty((height, 0, 3))
+        for camera in camera_names:
+            frame = env.render(mode='rgb_array', height=height, width=width, camera_name=camera)
+            if camera == "agentview":
+                frame = crop_and_resize(frame, [[0, 50], [256, 256]])
+            elif camera == "sideview":
+                frame = crop_and_resize(frame, [[0, 150], [220, 256]])
+            elif camera == "frontview":
+                frame = crop_and_resize(frame, [[38, 143], [220, 200]])
+            full_frame = np.hstack((full_frame, frame))
+
+        traj_obs[-1]=np.hstack((traj_obs[-1], process_rgb_array(full_frame)))
     stacked_traj_obs = stack_with_previous(traj_obs, stack_size=stack_size)
     img_data.append({'observations': stacked_traj_obs, 'actions': data[traj]['actions']})
-
 
 print(f"Success! Dumping data to {env_cfg['demo_pkl'][:-4] + '_img.pkl'}")
 pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_img.pkl', 'wb'))

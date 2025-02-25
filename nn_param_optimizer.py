@@ -59,7 +59,7 @@ def optimize(env_config_path, policy_config_path):
         policy_cfg['decay_rate'] = params['decay_rate']
         policy_cfg['ratio'] = params['ratio']
         agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
-        final_scores.append(nn_eval(env_cfg, agent, trials=20, results=result_file_name))
+        final_scores.append(nn_eval(env_cfg, agent, trials=100, results=result_file_name))
         with open(f"results/{result_file_name}.pkl", 'rb') as f:
             results.append(pickle.load(f))
 

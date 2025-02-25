@@ -25,8 +25,15 @@ import mujoco
 from typing import Dict, Any
 from nn_util import crop_obs_for_env, construct_env, get_action_from_obs, eval_over, get_keypoint_viz
 import copy
+import cv2
 
 DEBUG = False
+
+def crop_and_resize(img, crop_corners):
+    width, height = img.shape[:2]
+    cropped_img = img[crop_corners[0][1]:crop_corners[1][1], crop_corners[0][0]:crop_corners[1][0], :]
+    resized_img = cv2.resize(cropped_img, (width, height))
+    return resized_img
 
 def single_trial_eval(config, agent, env, trial):
     img = config.get('img', False)
@@ -61,6 +68,13 @@ def single_trial_eval(config, agent, env, trial):
         if len(cam_names) > 0:
             for cam in cam_names:
                 curr_frame = env.render(mode='rgb_array', height=height, width=width, camera_name=cam)
+                if cam == "agentview":
+                    curr_frame = crop_and_resize(curr_frame, [[0, 50], [256, 256]])
+                elif cam == "sideview":
+                    curr_frame = crop_and_resize(curr_frame, [[0, 150], [220, 256]])
+                elif cam == "frontview":
+                    curr_frame = crop_and_resize(curr_frame, [[38, 143], [220, 200]])
+                
                 frame = np.hstack((frame, curr_frame))
         else:
             frame = env.render(mode='rgb_array')
@@ -83,17 +97,17 @@ def single_trial_eval(config, agent, env, trial):
         from tapnet.utils import transforms
         from tapnet.utils import viz_utils
 
-        tracks, visibles = get_keypoint_viz(cam_names)
+        # tracks, visibles = get_keypoint_viz(cam_names)
+        #
+        # video_frames = np.array(video_frames)
+        # height, width = video_frames.shape[1:3]
+        # tracks = transforms.convert_grid_coordinates(
+        #     tracks, (256, 256), (width, height)
+        # )
+        # video_viz = viz_utils.paint_point_track(video_frames, tracks, visibles)
 
-        video_frames = np.array(video_frames)
-        height, width = video_frames.shape[1:3]
-        tracks = transforms.convert_grid_coordinates(
-            tracks, (256, 256), (width, height)
-        )
-        video_viz = viz_utils.paint_point_track(video_frames, tracks, visibles)
-
-        #pickle.dump(video_frames, open(f"data/trial_{trial}_video", 'wb'))
-        rgb_arrays_to_mp4(video_viz, f"data/{trial}_{cam}.mp4")
+        rgb_arrays_to_mp4(video_frames, f"data/{trial}.mp4")
+        #rgb_arrays_to_mp4(video_viz, f"data/{trial}_{cam}.mp4")
 
     success = 1 if 'success' in info else 0
 

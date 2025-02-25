@@ -42,11 +42,12 @@ import mediapy as media
 import numpy as np
 from tapnet.models import tapir_model
 from tapnet.utils import model_utils
-from tapnet.utils import transforms
+#from tapnet.utils import transforms
 from tapnet.utils import viz_utils
 from fast_scaler import FastScaler
 from PIL import Image
 from typing import List, Dict
+import cv2
 DEBUG = False
 
 TWO_PI = 2 * np.pi
@@ -332,7 +333,7 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
                     case 'state':
                         obs[dataset] = crop_obs_for_env(observation, env_name, env_instance=env)
                     case 'dino':
-                        obs[dataset] = frame_to_dino(frame)
+                        obs[dataset] = frame_to_dino(frame, proprio_state=proprio_state)
                     case 'keypoint':
                         obs[dataset] = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=(len(obs_history[dataset]) == 0), proprio_state=proprio_state, cam_names=cam_names)
 
@@ -352,11 +353,11 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
         
         match obs_type:
             case 'state':
-                obs = observation
+                obs = crop_obs_for_env(observation, env_name, env_instance=env)
             case 'dino':
-                obs = frame_to_dino(frame)
+                obs = frame_to_dino(frame, proprio_state=proprio_state)
             case 'keypoint':
-                obs = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=(len(obs_history) == 0), proprio_state=proprio_state)
+                obs = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=(len(obs_history) == 0), proprio_state=proprio_state, cam_names=cam_names)
 
         if stack:
             assert obs_history is not None
@@ -386,7 +387,7 @@ def stack_with_previous(obs_list, stack_size):
         return np.concatenate([obs_list[0]] * (stack_size - len(obs_list)) + obs_list, axis=0)
     return np.concatenate(obs_list[-stack_size:], axis=0)
 
-def frame_to_dino(rgb_array):
+def frame_to_dino(rgb_array, proprio_state=[]):
     global dino_model, device, img_transform, pca
 
     if dino_model is None:
@@ -400,7 +401,7 @@ def frame_to_dino(rgb_array):
         dino_model.eval()
 
         img_transform = transforms.Compose([
-            transforms.Resize(14 * 36),  # DinoV2 expects 224x224 input
+            transforms.Resize((14 * 36, 14 * 36)),  # DinoV2 expects 224x224 input
             transforms.CenterCrop(14 * 36),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -421,11 +422,11 @@ def frame_to_dino(rgb_array):
     with torch.no_grad():
         features = dino_model(input_tensor)
 
-    obs = features.cpu().numpy()[0]
+    features = features.detach().cpu().numpy()[0]
     if pca is not None:
-        obs = pca.transform(obs)
+        features = pca.transform(features)
 
-    return obs
+    return np.hstack((proprio_state, features))
 
 def eval_over(steps, config, env_instance):
     env_name = config['name']

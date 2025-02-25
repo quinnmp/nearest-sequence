@@ -1,4 +1,4 @@
-demo_pkl: "data/stack_task_D0/stack_task_D0_100_img_train.pkl"
+demo_pkl: "data/stack_task_D0/stack_task_D0_100_img_val.pkl"
 type: 'dino'
 demo_hdf5: "data/stack_task_D0/demo.hdf5"
 stack_size: 1
@@ -9,4 +9,3 @@ cams:
   - agentview
   - sideview
   - frontview
-val_cfg: "config/env/stack_task_D0_img_val.yml"
