@@ -18,20 +18,20 @@ class FastScaler:
 
         if isinstance(X, torch.Tensor):
             X = X.to(torch.float64)
-            self.mean_torch = torch.mean(X, dim=0, dtype=X.dtype, device=X.get_device())
-            self.scale_torch = torch.std(X, dim=0, dtype=X.dtype, device=X.get_device())
+            self.mean_torch = torch.mean(X, dim=0, dtype=torch.float64, device=X.get_device())
+            self.scale_torch = torch.std(X, dim=0, dtype=torch.float64, device=X.get_device())
 
             if self.scale_torch.dim() == 0:
                 self.scale_torch = self.scale_torch.unsqueeze(0)
 
             # Avoid division by zero
-            self.scale_torch = torch.where(self.scale_torch == 0, torch.tensor(1.0, dtype=X.dtype), self.scale_torch)
+            self.scale_torch = torch.where(self.scale_torch == 0, torch.tensor(1.0, dtype=torch.float64), self.scale_torch)
 
             self.mean_np = np.asarray(self.mean_torch)
             self.scale_np = np.asarray(self.scale_torch)
         else:
-            self.mean_np = np.mean(X, axis=0, dtype=X.dtype)
-            self.scale_np = np.std(X, axis=0, dtype=X.dtype)
+            self.mean_np = np.mean(X, axis=0, dtype=np.float64)
+            self.scale_np = np.std(X, axis=0, dtype=np.float64)
 
             if np.ndim(self.scale_np) == 0:
                 self.scale_np = np.array([self.scale_np])
@@ -92,4 +92,4 @@ class FastScaler:
                 self.scale_torch = self.scale_torch.to(X.get_device())
             return self._inverse_transform_torch(X, self.mean_torch, self.scale_torch)
         else:
-            return self._inverse_transform_numpy(X, self.mean_torch, self.scale_torch)
+            return self._inverse_transform_numpy(X, self.mean_np, self.scale_np)
