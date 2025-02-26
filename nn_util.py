@@ -19,7 +19,6 @@ import sys
 import gmm_regressor
 import torch
 import random
-import torch
 import torchvision.transforms as transforms
 import gym
 import matplotlib.pyplot as plt
@@ -70,54 +69,81 @@ causal_state = []
 last_tracks = []
 keypoint_viz = []
 
+proprio_tensor_cpu = [] # Pinned memory on CPU
+ret_tensor = []
+
 @dataclass
 class Dataset:
     name: str
     scaler: FastScaler
-    rot_indices: np.ndarray
-    weights: np.ndarray
-    non_rot_indices: np.ndarray
+    rot_indices: np.ndarray | torch.Tensor
+    weights: np.ndarray | torch.Tensor
+    non_rot_indices: np.ndarray | torch.Tensor
     obs_matrix: List
     act_matrix: List
-    traj_starts: np.ndarray
-    flattened_obs_matrix: np.ndarray
-    flattened_act_matrix: np.ndarray
-    processed_obs_matrix: np.ndarray
+    traj_starts: np.ndarray | torch.Tensor
+    flattened_obs_matrix: np.ndarray | torch.Tensor
+    flattened_act_matrix: np.ndarray | torch.Tensor
+    processed_obs_matrix: np.ndarray | torch.Tensor
 
-def load_and_scale_data(path, rot_indices, weights, ob_type='state'):
+def load_and_scale_data(path, rot_indices, weights, ob_type='state', use_torch=False):
     expert_data = load_expert_data(path)
-    observations = np.concatenate([traj['observations'] for traj in expert_data])
-
-    rot_indices = np.array(rot_indices, dtype=np.int64) 
-
-    # Separate non-rotational dimensions
-    non_rot_indices = np.array([i for i in range(observations.shape[-1]) if i not in rot_indices], dtype=np.int64)
-    non_rot_observations = observations[:, non_rot_indices]
-
+    
+    if use_torch:
+        observations = torch.cat([torch.tensor(traj['observations']) for traj in expert_data])
+        rot_indices = torch.tensor(rot_indices, dtype=torch.int64)
+        # Separate non-rotational dimensions
+        non_rot_indices = torch.tensor([i for i in range(observations.shape[-1]) if i not in rot_indices], dtype=torch.int64)
+        non_rot_observations = observations[:, non_rot_indices]
+    else:
+        observations = np.concatenate([traj['observations'] for traj in expert_data])
+        rot_indices = np.array(rot_indices, dtype=np.int64) 
+        # Separate non-rotational dimensions
+        non_rot_indices = np.array([i for i in range(observations.shape[-1]) if i not in rot_indices], dtype=np.int64)
+        non_rot_observations = observations[:, non_rot_indices]
+    
     scaler = FastScaler()
     if ob_type == 'keypoint' and False:
-        scaler.fit(np.concatenate(non_rot_observations))
+        if torch:
+            scaler.fit(torch.cat(non_rot_observations))
+        else:
+            scaler.fit(np.concatenate(non_rot_observations))
     else:
         scaler.fit(non_rot_observations)
-
+            
     for traj in expert_data:
         observations = traj['observations']
-        traj['observations'][:, non_rot_indices] = scaler.transform(observations[:, non_rot_indices])
-
+        if use_torch:
+            observations_tensor = torch.tensor(observations)
+            transformed_data = scaler.transform(observations_tensor[:, non_rot_indices])
+            observations_tensor[:, non_rot_indices] = transformed_data
+            traj['observations'] = observations_tensor
+        else:
+            traj['observations'][:, non_rot_indices] = scaler.transform(observations[:, non_rot_indices])
+            
     new_path = path[:-4] + '_standardized.pkl'
     save_expert_data(expert_data, new_path)
     
-    obs_matrix, act_matrix, traj_starts = create_matrices(expert_data)
-    flattened_obs_matrix = np.concatenate(obs_matrix, dtype=np.float64)
-    flattened_act_matrix = np.concatenate(act_matrix)
-
-    if len(weights) > 0:
-        weights = np.array(weights, dtype=np.float64)
+    obs_matrix, act_matrix, traj_starts = create_matrices(expert_data, use_torch=use_torch)
+    
+    if use_torch:
+        flattened_obs_matrix = torch.cat([torch.as_tensor(obs) for obs in obs_matrix], dim=0).to(torch.float64)
+        flattened_act_matrix = torch.cat([torch.as_tensor(act) for act in act_matrix], dim=0)
+        if len(weights) > 0:
+            weights = torch.as_tensor(weights, dtype=torch.float64)
+        else:
+            weights = torch.ones(obs_matrix[0][0].shape[0], dtype=torch.float64)
+        processed_obs_matrix = flattened_obs_matrix[:, non_rot_indices] * weights[non_rot_indices]
+        traj_starts = torch.as_tensor(traj_starts)
     else:
-        weights = np.ones(obs_matrix[0][0].shape[0], dtype=np.float64)
-
-    processed_obs_matrix = flattened_obs_matrix[:, non_rot_indices] * weights[non_rot_indices]
-
+        flattened_obs_matrix = np.concatenate(obs_matrix, dtype=np.float64)
+        flattened_act_matrix = np.concatenate(act_matrix)
+        if len(weights) > 0:
+            weights = np.array(weights, dtype=np.float64)
+        else:
+            weights = np.ones(obs_matrix[0][0].shape[0], dtype=np.float64)
+        processed_obs_matrix = flattened_obs_matrix[:, non_rot_indices] * weights[non_rot_indices]
+        
     return Dataset(new_path, scaler, rot_indices, weights, non_rot_indices, obs_matrix, act_matrix, traj_starts, flattened_obs_matrix, flattened_act_matrix, processed_obs_matrix)
 
 def online_model_init_func(frames, query_points):
@@ -308,7 +334,7 @@ def get_proprio(config, obs):
     else:
         return obs
 
-def get_action_from_obs(config, model, env, observation, frame, obs_history=None):
+def get_action_from_obs(config, model, env, observation, frame, obs_history=None, numpy_action=True):
     is_robosuite = config.get('robosuite', False)
     stack_size = config.get('stack_size', 10)
     env_name = config.get('name', 10)
@@ -333,7 +359,7 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
                     case 'state':
                         obs[dataset] = crop_obs_for_env(observation, env_name, env_instance=env)
                     case 'dino':
-                        obs[dataset] = frame_to_dino(frame, proprio_state=proprio_state)
+                        obs[dataset] = frame_to_dino(frame, proprio_state=proprio_state, numpy_action=numpy_action)
                     case 'keypoint':
                         obs[dataset] = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=(len(obs_history[dataset]) == 0), proprio_state=proprio_state, cam_names=cam_names)
 
@@ -355,7 +381,7 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
             case 'state':
                 obs = crop_obs_for_env(observation, env_name, env_instance=env)
             case 'dino':
-                obs = frame_to_dino(frame, proprio_state=proprio_state)
+                obs = frame_to_dino(frame, proprio_state=proprio_state, numpy_action=numpy_action)
             case 'keypoint':
                 obs = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=(len(obs_history) == 0), proprio_state=proprio_state, cam_names=cam_names)
 
@@ -387,8 +413,8 @@ def stack_with_previous(obs_list, stack_size):
         return np.concatenate([obs_list[0]] * (stack_size - len(obs_list)) + obs_list, axis=0)
     return np.concatenate(obs_list[-stack_size:], axis=0)
 
-def frame_to_dino(rgb_array, proprio_state=[]):
-    global dino_model, device, img_transform, pca
+def frame_to_dino(rgb_array, proprio_state=[], numpy_action=True):
+    global dino_model, device, img_transform, pca, proprio_tensor_cpu, ret_tensor
 
     if dino_model is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -422,11 +448,22 @@ def frame_to_dino(rgb_array, proprio_state=[]):
     with torch.no_grad():
         features = dino_model(input_tensor)
 
-    features = features.detach().cpu().numpy()[0]
     if pca is not None:
         features = pca.transform(features)
 
-    return np.hstack((proprio_state, features))
+    if numpy_action:
+        features = features.detach().cpu().numpy()[0]
+        return np.hstack((proprio_state, features))
+    else:
+        if len(proprio_tensor_cpu) == 0:
+            proprio_tensor_cpu = torch.empty(len(proprio_state), dtype=torch.float64, pin_memory=True)
+            ret_tensor = torch.empty(len(proprio_state) + len(features[0]), device=features.get_device(), dtype=torch.float64)
+
+        proprio_tensor_cpu.copy_(torch.from_numpy(proprio_state))
+
+        ret_tensor[:len(proprio_state)] = proprio_tensor_cpu.to(features.get_device(), non_blocking=True)
+        ret_tensor[len(proprio_state):] = features[0]
+        return ret_tensor
 
 def eval_over(steps, config, env_instance):
     env_name = config['name']
@@ -571,7 +608,7 @@ def save_expert_data(data, path):
     with open(path, 'wb') as output_file:
         return pickle.dump(data, output_file)
 
-def create_matrices(expert_data):
+def create_matrices(expert_data, use_torch=False):
     obs_matrix = []
     act_matrix = []
     traj_starts = []
@@ -585,10 +622,17 @@ def create_matrices(expert_data):
 
         # Create matrices for all observations and actions where each row is a trajectory
         # and each column is an single state or action within that trajectory
-        obs_matrix.append(traj['observations'])
-        act_matrix.append(traj['actions'])
+        if use_torch:
+            obs_matrix.append(torch.as_tensor(traj['observations']))
+            act_matrix.append(torch.as_tensor(traj['actions']))
+        else:
+            obs_matrix.append(traj['observations'])
+            act_matrix.append(traj['actions'])
 
-    traj_starts = np.asarray(traj_starts)
+    if use_torch:
+        traj_starts = torch.as_tensor(traj_starts)
+    else:
+        traj_starts = np.asarray(traj_starts)
     return obs_matrix, act_matrix, traj_starts
 
 @njit([float64[:](int64[:], int64[:], float64[:, :], float64[:,:], float64[:], int64[:], int64[:], float64[:])], parallel=True)
@@ -647,6 +691,81 @@ def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_histor
 
     return neighbor_distances
 
+def compute_accum_distance_with_rot_torch(nearest_neighbors: torch.Tensor, 
+                                         max_lookbacks: torch.Tensor, 
+                                         obs_history: torch.Tensor, 
+                                         flattened_obs_matrix: torch.Tensor, 
+                                         decay_factors: torch.Tensor, 
+                                         rot_indices: torch.Tensor, 
+                                         non_rot_indices: torch.Tensor, 
+                                         rot_weights: torch.Tensor):
+    device = nearest_neighbors.device
+    m = len(nearest_neighbors)
+    total_obs = len(flattened_obs_matrix)
+    
+    flattened_obs_matrix = torch.flip(flattened_obs_matrix, [0])
+    neighbor_distances = torch.empty(m, dtype=torch.float64, device=device)
+    decay_len = len(decay_factors)
+    
+    # Process each neighbor (could be parallelized with torch.nn.parallel but keeping sequential for clarity)
+    for neighbor in range(m):
+        nb = nearest_neighbors[neighbor].item()
+        max_lb = max_lookbacks[neighbor].item()
+        
+        # Get relevant slices
+        obs_history_slice = obs_history[:max_lb]
+        start = total_obs - nb - 1
+        obs_matrix_slice = flattened_obs_matrix[start:start + max_lb]
+        
+        # Interpolate decay factors if needed
+        if max_lb == 1:
+            interpolated_decay = decay_factors[0].unsqueeze(0)
+        else:
+            # Create interpolation points
+            new_points = torch.linspace(0, decay_len - 1, max_lb, device=device, dtype=torch.float64)
+            
+            # Perform interpolation (simple linear interpolation)
+            interpolated_decay = torch.zeros(max_lb, device=device, dtype=torch.float64)
+            for i in range(max_lb):
+                x = new_points[i].item()
+                if x <= 0:
+                    interpolated_decay[i] = decay_factors[0]
+                elif x >= decay_len - 1:
+                    interpolated_decay[i] = decay_factors[-1]
+                else:
+                    idx_low = int(x)
+                    idx_high = idx_low + 1
+                    weight_high = x - idx_low
+                    weight_low = 1.0 - weight_high
+                    interpolated_decay[i] = weight_low * decay_factors[idx_low] + weight_high * decay_factors[idx_high]
+        
+        # Initialize accumulated distance
+        acc_distance = torch.zeros(1, dtype=torch.float64, device=device)
+        
+        # Calculate distances for each lookback step
+        for i in range(max_lb):
+            # Non-rotational dimensions
+            non_rot_diffs = obs_history_slice[i, non_rot_indices] - obs_matrix_slice[i, non_rot_indices]
+            non_rot_dist = torch.sum(non_rot_diffs ** 2)
+            
+            # Rotational dimensions
+            rot_dist = torch.zeros(1, dtype=torch.float64, device=device)
+            for k, j in enumerate(rot_indices):
+                delta = torch.abs(obs_history_slice[i, j] - obs_matrix_slice[i, j])
+                wrapped_delta = torch.min(delta, 2 * torch.pi - delta) / (2 * torch.pi)
+                rot_dist += (wrapped_delta ** 2) * rot_weights[k]
+            
+            # Total distance for this step
+            step_dist = torch.sqrt(non_rot_dist + rot_dist)
+            
+            # Apply decay factor and accumulate
+            acc_distance += step_dist * interpolated_decay[i]
+        
+        # Store the accumulated distance for this neighbor
+        neighbor_distances[neighbor] = acc_distance
+    
+    return neighbor_distances
+
 @njit([(float64[:], float64[:, :], int64[:], int64[:], float64[:])], parallel=True)
 def compute_distance_with_rot(curr_ob: np.ndarray, flattened_obs_matrix: np.ndarray, 
                               rot_indices: np.ndarray, non_rot_indices: np.ndarray, 
@@ -677,6 +796,25 @@ def compute_distance_with_rot(curr_ob: np.ndarray, flattened_obs_matrix: np.ndar
 
     return neighbor_distances, neighbor_vec_distances
 
+def compute_distance_with_rot_torch(curr_ob: torch.Tensor, flattened_obs_matrix: torch.Tensor, 
+                                   rot_indices: torch.Tensor, non_rot_indices: torch.Tensor, 
+                                   rot_weights: torch.Tensor):
+    neighbor_vec_distances = torch.empty_like(flattened_obs_matrix)
+    
+    non_rot_diffs = flattened_obs_matrix[:, non_rot_indices] - curr_ob[non_rot_indices].unsqueeze(0)
+    neighbor_vec_distances[:, non_rot_indices] = non_rot_diffs
+    
+    for k, j in enumerate(rot_indices):
+        delta = torch.abs(curr_ob[j] - flattened_obs_matrix[:, j])
+        wrapped_delta = torch.min(delta, 2 * torch.pi - delta) / (2 * torch.pi)
+        neighbor_vec_distances[:, j] = wrapped_delta * rot_weights[k]
+    
+    squared_dists = torch.sum(neighbor_vec_distances ** 2, dim=1)
+    
+    neighbor_distances = torch.sqrt(squared_dists)
+    
+    return neighbor_distances, neighbor_vec_distances
+
 @njit([(float64[:], float64[:, :])], parallel=True)
 def compute_distance(curr_ob: np.ndarray, flattened_obs_matrix: np.ndarray):
     m = len(flattened_obs_matrix)
@@ -699,6 +837,13 @@ def compute_distance(curr_ob: np.ndarray, flattened_obs_matrix: np.ndarray):
 
     return neighbor_distances, neighbor_vec_distances
 
+def compute_distance_torch(curr_ob: torch.Tensor, flattened_obs_matrix: torch.Tensor):
+    neighbor_vec_distances = flattened_obs_matrix - curr_ob.unsqueeze(0)
+    
+    squared_dists = torch.sum(neighbor_vec_distances ** 2, dim=1)
+    neighbor_distances = torch.sqrt(squared_dists)
+    
+    return neighbor_distances, neighbor_vec_distances
 
 @njit([(float64[:], float64[:, :], int64[:], int64[:], float64[:])], parallel=True)
 def compute_cosine_distance(curr_ob: np.ndarray, flattened_obs_matrix: np.ndarray, 

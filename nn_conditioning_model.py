@@ -13,7 +13,7 @@ import pickle
 from numba import jit, njit, prange, float32, int64
 from sklearn.model_selection import KFold
 from sklearn.neighbors import KDTree
-import nn_agent, nn_util
+import nn_agent as nn_agent
 import math
 import faiss
 import random
@@ -81,7 +81,7 @@ class DeepSetsActionCombiner(nn.Module):
         return output
 
 class KNNConditioningModel(nn.Module):
-    def __init__(self, state_dim, delta_state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False, bc_baseline=False, mlp_combine=False, add_action=False, reduce_delta_s=False):
+    def __init__(self, state_dim, delta_state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False, bc_baseline=False, mlp_combine=False, add_action=False, reduce_delta_s=False, numpy_action=True):
         super(KNNConditioningModel, self).__init__()
         self.state_dim = state_dim
         self.delta_state_dim = delta_state_dim
@@ -95,6 +95,7 @@ class KNNConditioningModel(nn.Module):
         self.mlp_combine = mlp_combine
         self.add_action = add_action
         self.reduce_delta_s = reduce_delta_s
+        self.numpy_action = numpy_action
         
         self.distance_size = delta_state_dim if not euclidean else 1
         if add_action:
@@ -147,21 +148,21 @@ class KNNConditioningModel(nn.Module):
 
         self.eval_distances = []
     
-    def forward(self, states, actions, distances, weights):
+    def forward(self, states, actions, distances, weights, inference=False):
         # Will be batchless numpy arrays at inference time
-        if isinstance(states, np.ndarray):
-            states = torch.tensor(states, dtype=torch.float32, device=device).unsqueeze(0)
+        if inference:
+            states = torch.as_tensor(states, dtype=torch.float32, device=device).unsqueeze(0)
 
             if not self.bc_baseline:
                 actions = self.action_scaler.transform(actions)
-                actions = torch.tensor(actions, dtype=torch.float32, device=device).unsqueeze(0)
+                actions = torch.as_tensor(actions, dtype=torch.float32, device=device).unsqueeze(0)
 
+                distances = torch.as_tensor(distances, dtype=torch.float32, device=device).unsqueeze(0)
                 if self.euclidean:
-                    distances = np.sqrt(np.sum(distances**2, axis=-1, keepdims=True))
-                distances = torch.tensor(distances, dtype=torch.float32, device=device).unsqueeze(0)
+                    distances = torch.sqrt(torch.sum(distances**2, dim=-1, keepdim=True))
                 distances = self.distance_scaler.transform(distances)
                 self.eval_distances.append(distances.cpu())
-                weights = torch.tensor(weights, dtype=torch.float32, device=device).unsqueeze(0)
+                weights = torch.as_tensor(weights, dtype=torch.float32, device=device).unsqueeze(0)
 
         if self.bc_baseline:
             batch_size = states.size(0)
@@ -174,7 +175,10 @@ class KNNConditioningModel(nn.Module):
             if self.training_mode:
                 return output
 
-            return self.action_scaler.inverse_transform(output[0]).cpu().detach().numpy()
+            if self.numpy_action:
+                return self.action_scaler.inverse_transform(output[0]).cpu().detach().numpy()
+            else:
+                return self.action_scaler.inverse_transform(output[0])
 
         states = states.to(dtype=torch.float32)
         actions = actions.to(dtype=torch.float32)
@@ -221,7 +225,10 @@ class KNNConditioningModel(nn.Module):
         if self.training_mode:
             return output
 
-        return self.action_scaler.inverse_transform(output[0]).cpu().detach().numpy()
+        if self.numpy_action:
+            return self.action_scaler.inverse_transform(output[0]).cpu().detach().numpy()
+        else:
+            return self.action_scaler.inverse_transform(output[0])
 
     def train(self, mode=True):
         """Override train method to set training_mode flag"""
@@ -241,9 +248,13 @@ class KNNExpertDataset(Dataset):
 
         self.agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg_copy)
         self.datasets = self.agent.datasets
+        self.is_torch = type(self.datasets['retrieval'].traj_starts) == torch.Tensor
 
         self.action_scaler = FastScaler()
-        self.action_scaler.fit(np.concatenate(self.datasets['retrieval'].act_matrix))
+        if self.is_torch:
+            self.action_scaler.fit(torch.cat(self.datasets['retrieval'].act_matrix, dim=0))
+        else:
+            self.action_scaler.fit(np.concatenate(self.datasets['retrieval'].act_matrix))
 
         self.neighbor_lookup: List[NeighborData | None] = [None] * len(self.datasets['retrieval'].flattened_obs_matrix)
 
@@ -264,12 +275,16 @@ class KNNExpertDataset(Dataset):
         if not neighbor_lookup_pkl or save_neighbor_lookup:
             all_distances = []
             for i in range(len(self)):
+                print(f"{i}/{len(self)}")
                 _, _, distances, _, _ = self[i]
                 if self.bc_baseline:
                     # Distances will be -1, just append to make interpreter happy
                     all_distances.append(distances)
                 else:
-                    all_distances.extend(distances.cpu().numpy())
+                    if self.is_torch:
+                        all_distances.extend(distances)
+                    else:
+                        all_distances.extend(distances.cpu().numpy())
 
             self.distance_scaler = FastScaler()
             self.distance_scaler.fit(all_distances)
@@ -293,7 +308,11 @@ class KNNExpertDataset(Dataset):
     def __getitem__(self, idx):
         if self.neighbor_lookup[idx] is None:
             # Figure out which trajectory this index in our flattened state array belongs to
-            state_traj = np.searchsorted(self.datasets['retrieval'].traj_starts, idx, side='right') - 1
+            if self.is_torch:
+                state_traj = torch.searchsorted(self.datasets['retrieval'].traj_starts, idx, right=True) - 1
+            else:
+                state_traj = np.searchsorted(self.datasets['retrieval'].traj_starts, idx, side='right') - 1
+
             state_num = idx - self.datasets['retrieval'].traj_starts[state_traj]
             actual_state = self.datasets['retrieval'].obs_matrix[state_traj][state_num]
             delta_state = self.datasets['delta_state'].obs_matrix[state_traj][state_num]
@@ -303,14 +322,17 @@ class KNNExpertDataset(Dataset):
 
             if self.bc_baseline:
                 self.neighbor_lookup[idx] = NeighborData(
-                        states=torch.tensor(actual_state, dtype=torch.float32, device=device).unsqueeze(0),
-                        actions=-1,
-                        distances=-1,
-                        target_action=torch.tensor(action, dtype=torch.float32, device=device),
-                        weights=-1
+                        states=torch.as_tensor(actual_state, dtype=torch.float32, device=device).unsqueeze(0),
+                        actions=torch.as_tensor(-1),
+                        distances=torch.as_tensor(-1),
+                        target_action=torch.as_tensor(action, dtype=torch.float32, device=device),
+                        weights=torch.as_tensor(-1)
                 )
             else:
-                self.agent.obs_history = self.datasets['retrieval'].obs_matrix[state_traj][:state_num][::-1]
+                if self.is_torch:
+                    self.agent.obs_history = torch.flip(self.datasets['retrieval'].obs_matrix[state_traj][:state_num], dims=[0])
+                else:
+                    self.agent.obs_history = self.datasets['retrieval'].obs_matrix[state_traj][:state_num][::-1]
                 
 
                 observation = {
@@ -320,7 +342,10 @@ class KNNExpertDataset(Dataset):
                 neighbor_states, neighbor_actions, neighbor_distances, weights = self.agent.get_action(observation, normalize=False)
 
                 if self.euclidean:
-                    neighbor_distances = np.sqrt(np.sum(neighbor_distances**2, axis=1, keepdims=True))
+                    if self.is_torch:
+                        neighbor_distances = torch.sqrt(torch.sum(neighbor_distances**2, dim=1, keepdim=True))
+                    else:
+                        neighbor_distances = np.sqrt(np.sum(neighbor_distances**2, axis=1, keepdims=True))
 
                 neighbor_actions = self.action_scaler.transform(neighbor_actions)
 
@@ -416,12 +441,12 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                     early_stopping_counter += 1
 
                 if early_stopping_counter >= early_stopping_patience:
-                    #print(f'Recommend early stopping after {epoch+1 - early_stopping_patience} epochs')
+                    print(f'Recommend early stopping after {epoch+1 - early_stopping_patience} epochs')
                     torch.save(best_check, model_path)
                     return best_check['model']
 
                 
-                #print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+                print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
             model.train()
         else:
             #print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")

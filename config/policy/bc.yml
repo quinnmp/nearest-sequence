@@ -6,7 +6,7 @@ hidden_dims:
    - 2048
    - 2048
    - 2048
-cond_force_retrain: True
+cond_force_retrain: False
 model_name: "bc"
 dropout: 0
 

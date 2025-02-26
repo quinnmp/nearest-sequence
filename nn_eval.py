@@ -6,7 +6,8 @@ from rgb_arrays_to_mp4 import rgb_arrays_to_mp4
 os.environ["D4RL_SUPPRESS_IMPORT_ERROR"] = "1"
 import gym
 gym.logger.set_level(40)
-import nn_util, nn_agent
+import nn_util
+import nn_agent as nn_agent
 import numpy as np
 import metaworld
 import metaworld.envs.mujoco.env_dict as _env_dict
@@ -80,7 +81,7 @@ def single_trial_eval(config, agent, env, trial):
             frame = env.render(mode='rgb_array')
         video_frames.append(frame)
 
-        action = get_action_from_obs(config, agent, env, observation, frame, obs_history=obs_history)
+        action = get_action_from_obs(config, agent, env, observation, frame, obs_history=obs_history, numpy_action=agent.model.numpy_action)
 
         observation, reward, done, info = env.step(action)[:4]
 
@@ -553,7 +554,7 @@ def main():
     agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
     # env_cfg_copy = env_cfg.copy()
     #nn_eval(env_cfg, dan_agent, trials=100)
-    nn_eval(env_cfg, agent, trials=100)
+    nn_eval(env_cfg, agent, trials=1)
     #pickle.dump(dan_agent.model.eval_distances, open("hopper_eval_distances.pkl", 'wb'))
     # nn_eval_closed_loop(env_cfg, dan_agent)
     # env_cfg_copy['demo_pkl'] = "data/hopper-expert-v2_1_img.pkl"

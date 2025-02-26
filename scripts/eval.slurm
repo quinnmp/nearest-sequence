@@ -7,8 +7,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
-#SBATCH --gpus-per-task=8
-#SBATCH --mem=800G
+#SBATCH --gpus-per-task=1
+#SBATCH --mem=64G
 #SBATCH --time=24:00:00
 #SBATCH -o log/%j.out
 #SBATCH --mail-type=END,FAIL
@@ -55,7 +55,7 @@ rm data/*lookup*
 #python -u nn_model_optimizer.py config/env/maze.yml config/policy/bc.yml
 #python -u nn_eval.py config/env/stack_task_D0_kpt.yml config/policy/bc.yml
 #kernprof -l -v nn_eval.py config/env/stack_task_D0_img.yml config/policy/bc.yml
-python -u nn_param_optimizer.py config/env/stack_task_D0_img.yml config/policy/ns_dan_bc.yml
+kernprof -l -v nn_eval.py config/env/hopper.yml config/policy/ns_dan_bc.yml
 #python -u state_to_tapir.py config/env/hopper.yml; python -u rgb_arrays_to_mp4.py data/hopper_tapir_test.pkl data/hopper_tapir_test.mp4
 #python -u nn_eval.py config/env/hopper.yml config/policy/hopper/bc.yml
 #python -u tsne_distances.py

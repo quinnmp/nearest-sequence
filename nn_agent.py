@@ -1,29 +1,21 @@
-import pickle
+import math
+import os
+
 import numpy as np
-from scipy.spatial.distance import cdist
-from dataclasses import dataclass
-import nn_plot
-import copy
-from scipy.spatial import distance
-from scipy.spatial import KDTree
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from nn_conditioning_model import KNNExpertDataset, KNNConditioningModel, train_model
-from torch.utils.data import Dataset, DataLoader, random_split
 import torch
 import torch.nn as nn
-import time
-from numba import jit, njit, prange, float64, int64
-from scipy.linalg import lstsq
-from fast_scaler import FastScaler
-import math
-import faiss
-import os
-import gmm_regressor
-from nn_util import NN_METHOD, load_and_scale_data, load_expert_data, save_expert_data, create_matrices, compute_accum_distance_with_rot, compute_distance, compute_distance_with_rot, set_seed, compute_cosine_distance
-from sklearn.random_projection import GaussianRandomProjection
-from sklearn.decomposition import PCA
-import random
 import yaml
+from sklearn.decomposition import PCA
+from torch.utils.data import DataLoader
+
+import gmm_regressor
+import nn_plot
+from fast_scaler import FastScaler
+from nn_conditioning_model import (KNNConditioningModel, KNNExpertDataset,
+                                   train_model)
+from nn_util import (NN_METHOD, compute_accum_distance_with_rot,
+                     compute_distance, compute_distance_with_rot,
+                     load_and_scale_data, set_seed)
 
 DEBUG = False
 
@@ -161,7 +153,7 @@ class NNAgent:
 class NNAgentEuclidean(NNAgent):
     def get_action(self, current_ob):
         if self.method == NN_METHOD.BC:
-            return self.model(current_ob['retrieval'], -1, -1, -1)
+            return self.model(current_ob['retrieval'], -1, -1, -1, inference=True)
 
         self.update_obs_history(current_ob['retrieval'])
 
@@ -232,7 +224,7 @@ class NNAgentEuclidean(NNAgent):
                 else:
                     model = self.model
 
-                return model(neighbor_states, neighbor_actions, neighbor_distances, neighbor_weights)
+                return model(neighbor_states, neighbor_actions, neighbor_distances, neighbor_weights, inference=True)
 
         if self.method == NN_METHOD.LWR:
             obs_features = self.datasets['retrieval'].flattened_obs_matrix[final_neighbors]
