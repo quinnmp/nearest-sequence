@@ -14,13 +14,13 @@ from fast_scaler import FastScaler
 from nn_conditioning_model import (KNNConditioningModel, KNNExpertDataset,
                                    train_model)
 from nn_util import (NN_METHOD,
-                     compute_distance_torch, compute_distance_with_rot_torch, compute_accum_distance_with_rot_torch,
+                     compute_distance_torch, compute_distance_with_rot_torch, compute_accum_distance_torch,
                      load_and_scale_data, set_seed)
 
 DEBUG = False
 
 class NNAgent:
-    @profile
+    #@profile
     def __init__(self, env_cfg, policy_cfg):
         #print(f"Seeding with {env_cfg.get('seed', 42)}")
         set_seed(env_cfg.get("seed", 42))
@@ -156,6 +156,7 @@ class NNAgent:
         self.obs_history = torch.tensor([], dtype=torch.float64)
 
 class NNAgentEuclidean(NNAgent):
+    @profile
     def get_action(self, current_ob):
         if self.method == NN_METHOD.BC:
             return self.model(current_ob['retrieval'], -1, -1, -1, inference=True).detach().cpu().numpy()
@@ -163,13 +164,31 @@ class NNAgentEuclidean(NNAgent):
         self.update_obs_history(current_ob['retrieval'])
 
         # If we have elements in our observation space that wraparound (rotations), we can't just do direct Euclidean distance
-        current_ob_retrieval = current_ob['retrieval'].clone()
-        current_ob_retrieval[self.datasets['retrieval'].non_rot_indices] *= self.datasets['retrieval'].weights[self.datasets['retrieval'].non_rot_indices]
-        # all_distances, dist_vecs = compute_cosine_distance(current_ob.astype(np.float64), self.processed_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
-        all_distances, dist_vecs = compute_distance_with_rot_torch(current_ob_retrieval.to(torch.float64), self.datasets['retrieval'].processed_obs_matrix, self.datasets['retrieval'].rot_indices, self.datasets['retrieval'].non_rot_indices, self.datasets['retrieval'].weights[self.datasets['retrieval'].rot_indices])
+        if not hasattr(self, '_weighted_ob_buffer'):
+            self._weighted_ob_buffer = torch.empty_like(current_ob['retrieval'])
 
-        if torch.min(all_distances) == 0:
-            all_distances[torch.argmin(all_distances)] = torch.max(all_distances) + 1
+        # Copy and apply weights in one operation
+        torch.mul(
+            current_ob['retrieval'],
+            self.datasets['retrieval'].weights,
+            out=self._weighted_ob_buffer
+        )
+        # all_distances, dist_vecs = compute_cosine_distance(current_ob.astype(np.float64), self.processed_obs_matrix, self.rot_indices, self.non_rot_indices, self.weights[self.rot_indices])
+        if len(self.datasets['retrieval'].rot_indices) == 0:
+            all_distances, dist_vecs = compute_distance_torch(self._weighted_ob_buffer, self.datasets['retrieval'].processed_obs_matrix)
+        else:
+            all_distances, dist_vecs = compute_distance_with_rot_torch(self._weighted_ob_buffer, self.datasets['retrieval'].processed_obs_matrix, self.datasets['retrieval'].rot_indices, self.datasets['retrieval'].non_rot_indices, self.datasets['retrieval'].weights[self.datasets['retrieval'].rot_indices])
+
+
+        min_val = torch.min(all_distances)
+        max_val = torch.max(all_distances)
+        is_min_mask = (all_distances == min_val)
+        replacement = max_val + 1
+        all_distances = torch.where(
+            is_min_mask & (min_val == 0),
+            replacement,
+            all_distances
+        )
 
         # Using torch.topk instead of np.argpartition
         _, nearest_neighbor_indices = torch.topk(all_distances, k=self.candidates, largest=False)
@@ -198,7 +217,11 @@ class NNAgentEuclidean(NNAgent):
                 )
             )
             
-            accum_distances = compute_accum_distance_with_rot_torch(nearest_neighbors, max_lookbacks, self.obs_history, self.datasets['retrieval'].flattened_obs_matrix, self.decay_factors, self.datasets['retrieval'].rot_indices, self.datasets['retrieval'].non_rot_indices, self.datasets['retrieval'].weights[self.datasets['retrieval'].rot_indices])
+            if len(self.datasets['retrieval'].rot_indices) == 0:
+                accum_distances = compute_accum_distance_torch(nearest_neighbors, max_lookbacks, self.obs_history, self.datasets['retrieval'].flattened_obs_matrix, self.decay_factors)
+            else:
+                #accum_distances = compute_accum_distance_with_rot_torch(nearest_neighbors, max_lookbacks, self.obs_history, self.datasets['retrieval'].flattened_obs_matrix, self.decay_factors, self.datasets['retrieval'].rot_indices, self.datasets['retrieval'].non_rot_indices, self.datasets['retrieval'].weights[self.datasets['retrieval'].rot_indices])
+                pass
 
             if self.method == NN_METHOD.NS:
                 # If we're doing direct nearest sequence, return that action
@@ -287,7 +310,7 @@ class NNAgentEuclidean(NNAgent):
     
 # Standard Euclidean distance, but normalize each dimension of the observation space
 class NNAgentEuclideanStandardized(NNAgentEuclidean):
-    @profile
+    #@profile
     def __init__(self, env_cfg, policy_cfg):
         self.datasets = {}
         # We may use different datasets for retrieval, neighbor state, and state delta
@@ -322,6 +345,7 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
 
         super().__init__(env_cfg, policy_cfg)
 
+    #@profile
     def get_action(self, current_ob, normalize=True):
         if not isinstance(current_ob, dict):
             current_ob = {

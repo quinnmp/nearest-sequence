@@ -24,14 +24,13 @@ import time
 from torch.amp import autocast, GradScaler
 from typing import List
 
-REPRODUCE_RESULTS = False
-
-if REPRODUCE_RESULTS:
-    device = torch.device("cpu")
+if torch.cuda.is_available():
+    torch.set_default_device('cuda')
 else:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.set_default_device('cpu')
 
 torch.set_default_dtype(torch.float32)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 @dataclass
 class NeighborData:
@@ -160,9 +159,7 @@ class KNNConditioningModel(nn.Module):
                 distances = torch.as_tensor(distances, dtype=torch.float32, device=device)
                 if self.euclidean:
                     distances = torch.sqrt(torch.sum(distances**2, dim=-1, keepdim=True))
-                print(distances)
                 distances = self.distance_scaler.transform(distances)
-                print(distances)
                 self.eval_distances.append(distances.cpu())
                 weights = torch.as_tensor(weights, dtype=torch.float32, device=device).unsqueeze(0)
 
@@ -244,6 +241,7 @@ class KNNConditioningModel(nn.Module):
         return self
 
 class KNNExpertDataset(Dataset):
+    @profile
     def __init__(self, env_cfg, policy_cfg, euclidean=False, bc_baseline=False):
         policy_cfg_copy = policy_cfg.copy()
         policy_cfg_copy['method'] = 'knn_and_dist'
@@ -275,15 +273,22 @@ class KNNExpertDataset(Dataset):
                 save_neighbor_lookup = True
 
         if not neighbor_lookup_pkl or save_neighbor_lookup:
-            all_distances = []
+            if self.is_torch:
+                total_samples = len(self)
+                all_distances = torch.zeros((total_samples, 363, 785), device='cuda:0')
+            else:
+                all_distances = []
+
             for i in range(len(self)):
+                print(i)
+                print(f"GPU memory: {torch.cuda.memory_allocated() / 1e9:.2f} GB allocated, {torch.cuda.memory_reserved() / 1e9:.2f} GB reserved")
                 _, _, distances, _, _ = self[i]
                 if self.bc_baseline:
                     # Distances will be -1, just append to make interpreter happy
                     all_distances.append(distances)
                 else:
                     if self.is_torch:
-                        all_distances.extend(distances)
+                        all_distances[i] = distances
                     else:
                         all_distances.extend(distances.cpu().numpy())
 
@@ -308,6 +313,7 @@ class KNNExpertDataset(Dataset):
 
         data.distances = new_dist
     
+    @profile
     def __getitem__(self, idx):
         if self.neighbor_lookup[idx] is None:
             # Figure out which trajectory this index in our flattened state array belongs to
@@ -363,7 +369,7 @@ class KNNExpertDataset(Dataset):
         data = self.neighbor_lookup[idx]
         return data.states, data.actions, data.distances, data.target_action, data.weights
 
-@profile
+#@profile
 def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth", loaded_optimizer_dict=None):
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
 
