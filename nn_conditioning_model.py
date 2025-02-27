@@ -13,7 +13,7 @@ import pickle
 from numba import jit, njit, prange, float32, int64
 from sklearn.model_selection import KFold
 from sklearn.neighbors import KDTree
-import nn_agent as nn_agent
+import nn_agent_torch as nn_agent
 import math
 import faiss
 import random
@@ -157,10 +157,12 @@ class KNNConditioningModel(nn.Module):
                 actions = self.action_scaler.transform(actions)
                 actions = torch.as_tensor(actions, dtype=torch.float32, device=device).unsqueeze(0)
 
-                distances = torch.as_tensor(distances, dtype=torch.float32, device=device).unsqueeze(0)
+                distances = torch.as_tensor(distances, dtype=torch.float32, device=device)
                 if self.euclidean:
                     distances = torch.sqrt(torch.sum(distances**2, dim=-1, keepdim=True))
+                print(distances)
                 distances = self.distance_scaler.transform(distances)
+                print(distances)
                 self.eval_distances.append(distances.cpu())
                 weights = torch.as_tensor(weights, dtype=torch.float32, device=device).unsqueeze(0)
 
@@ -275,7 +277,6 @@ class KNNExpertDataset(Dataset):
         if not neighbor_lookup_pkl or save_neighbor_lookup:
             all_distances = []
             for i in range(len(self)):
-                print(f"{i}/{len(self)}")
                 _, _, distances, _, _ = self[i]
                 if self.bc_baseline:
                     # Distances will be -1, just append to make interpreter happy
@@ -286,6 +287,8 @@ class KNNExpertDataset(Dataset):
                     else:
                         all_distances.extend(distances.cpu().numpy())
 
+            if self.is_torch:
+                all_distances = torch.stack(all_distances)
             self.distance_scaler = FastScaler()
             self.distance_scaler.fit(all_distances)
 
@@ -360,6 +363,7 @@ class KNNExpertDataset(Dataset):
         data = self.neighbor_lookup[idx]
         return data.states, data.actions, data.distances, data.target_action, data.weights
 
+@profile
 def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth", loaded_optimizer_dict=None):
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
 
@@ -399,7 +403,7 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
 
             loss.backward()
             optimizer.step()
-            train_loss += loss.item()
+            train_loss += loss.detach()
             num_train_batches += 1
         #print(f"Time for epoch {epoch}: {time.time() - start}")
         avg_train_loss = train_loss / num_train_batches
@@ -424,7 +428,7 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                     
                     predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
                     loss = criterion(predicted_actions, actions)
-                    val_loss += loss.item()
+                    val_loss += loss.detach()
                     num_val_batches += 1
                 
                 avg_val_loss = val_loss / num_val_batches

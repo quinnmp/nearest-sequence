@@ -20,6 +20,7 @@ from nn_util import (NN_METHOD,
 DEBUG = False
 
 class NNAgent:
+    @profile
     def __init__(self, env_cfg, policy_cfg):
         #print(f"Seeding with {env_cfg.get('seed', 42)}")
         set_seed(env_cfg.get("seed", 42))
@@ -286,6 +287,7 @@ class NNAgentEuclidean(NNAgent):
     
 # Standard Euclidean distance, but normalize each dimension of the observation space
 class NNAgentEuclideanStandardized(NNAgentEuclidean):
+    @profile
     def __init__(self, env_cfg, policy_cfg):
         self.datasets = {}
         # We may use different datasets for retrieval, neighbor state, and state delta

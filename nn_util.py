@@ -86,6 +86,7 @@ class Dataset:
     flattened_act_matrix: np.ndarray | torch.Tensor
     processed_obs_matrix: np.ndarray | torch.Tensor
 
+@profile
 def load_and_scale_data(path, rot_indices, weights, ob_type='state', use_torch=False):
     expert_data = load_expert_data(path)
     
@@ -114,7 +115,7 @@ def load_and_scale_data(path, rot_indices, weights, ob_type='state', use_torch=F
     for traj in expert_data:
         observations = traj['observations']
         if use_torch:
-            observations_tensor = torch.tensor(observations)
+            observations_tensor = torch.tensor(observations, dtype=torch.float64)
             transformed_data = scaler.transform(observations_tensor[:, non_rot_indices])
             observations_tensor[:, non_rot_indices] = transformed_data
             traj['observations'] = observations_tensor
@@ -691,6 +692,77 @@ def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_histor
 
     return neighbor_distances
 
+# Helper function to compute interpolated decay factors
+def precompute_decay_factors(decay_factors: torch.Tensor, max_lb_val: int, device):
+    """Precompute all interpolated decay factors for efficiency."""
+    decay_len = len(decay_factors)
+    all_decays = {}
+    
+    for lb in range(1, max_lb_val + 1):
+        if lb == 1:
+            all_decays[lb] = decay_factors[0].unsqueeze(0)
+        else:
+            # Vectorized interpolation
+            points = torch.linspace(0, decay_len - 1, lb, device=device, dtype=torch.float64)
+            idx_low = points.floor().long().clamp(max=decay_len-2)
+            idx_high = (idx_low + 1).clamp(max=decay_len-1)
+            weight_high = points - idx_low.float()
+            weight_low = 1.0 - weight_high
+            all_decays[lb] = weight_low * decay_factors[idx_low] + weight_high * decay_factors[idx_high]
+    
+    return all_decays
+
+# Optimized TorchScript function for computing distances for a group
+@torch.jit.script
+def compute_distances_for_group(
+    obs_history: torch.Tensor,
+    flipped_obs_matrix: torch.Tensor,
+    group_starts: torch.Tensor,
+    lookback: int,
+    decay: torch.Tensor
+) -> torch.Tensor:
+    """
+    Compute distances for all neighbors in a group with the same lookback value.
+    
+    Args:
+        obs_history: History of observations
+        flipped_obs_matrix: Flipped observation matrix
+        group_starts: Start indices for this group
+        lookback: Lookback steps for this group
+        decay: Precomputed decay factors for this lookback
+        
+    Returns:
+        Distances for all neighbors in this group
+    """
+    group_size = group_starts.size(0)
+    distances = torch.zeros(group_size, dtype=torch.float64, device=obs_history.device)
+    
+    # Process each lookback step
+    for step in range(lookback):
+        # Get observation for this step
+        obs = obs_history[step]
+        
+        # Compute indices for the matrices
+        indices = group_starts + step
+        
+        # Efficient indexed selection (avoids stacking)
+        matrices = torch.index_select(flipped_obs_matrix, 0, indices)
+        
+        # Compute differences efficiently
+        diffs = obs.unsqueeze(0) - matrices
+        
+        # Square differences and sum across dimensions
+        squared_dists = torch.sum(diffs * diffs, dim=1)
+        
+        # Apply square root
+        step_dists = torch.sqrt(squared_dists)
+        
+        # Apply decay and accumulate
+        distances += step_dists * decay[step]
+    
+    return distances
+
+# Main function - JIT script the inner loop for performance
 def compute_accum_distance_with_rot_torch(nearest_neighbors: torch.Tensor, 
                                          max_lookbacks: torch.Tensor, 
                                          obs_history: torch.Tensor, 
@@ -699,71 +771,227 @@ def compute_accum_distance_with_rot_torch(nearest_neighbors: torch.Tensor,
                                          rot_indices: torch.Tensor, 
                                          non_rot_indices: torch.Tensor, 
                                          rot_weights: torch.Tensor):
+    """
+    TorchScript-optimized implementation of the distance computation.
+    Assumes no rotational indices (all indices are non-rotational) and all weights are 1.
+    """
     device = nearest_neighbors.device
-    m = len(nearest_neighbors)
-    total_obs = len(flattened_obs_matrix)
     
-    flattened_obs_matrix = torch.flip(flattened_obs_matrix, [0])
+    # Ensure all inputs are in contiguous memory for best performance
+    nearest_neighbors = nearest_neighbors.long().contiguous()
+    max_lookbacks = max_lookbacks.long().contiguous()
+    obs_history = obs_history.contiguous()
+    flipped_obs_matrix = torch.flip(flattened_obs_matrix, [0]).contiguous()
+    
+    # Get dimensions
+    m = nearest_neighbors.size(0)
+    total_obs = flipped_obs_matrix.size(0)
+    
+    # Precompute start indices
+    start_indices = (total_obs - nearest_neighbors - 1).clamp(min=0)
+    
+    # Precompute all interpolated decay factors
+    max_lb_val = max_lookbacks.max().item()
+    all_decays = precompute_decay_factors(decay_factors, max_lb_val, device)
+    
+    # Group neighbors by lookback value
+    lookback_groups = {}
+    for i in range(m):
+        lb = max_lookbacks[i].item()
+        if lb not in lookback_groups:
+            lookback_groups[lb] = []
+        lookback_groups[lb].append(i)
+    
+    # Prepare output tensor
     neighbor_distances = torch.empty(m, dtype=torch.float64, device=device)
-    decay_len = len(decay_factors)
     
-    # Process each neighbor (could be parallelized with torch.nn.parallel but keeping sequential for clarity)
-    for neighbor in range(m):
-        nb = nearest_neighbors[neighbor].item()
-        max_lb = max_lookbacks[neighbor].item()
+    # Process each group of neighbors
+    for lb, indices in lookback_groups.items():
+        # Convert indices to tensor
+        indices_tensor = torch.tensor(indices, device=device, dtype=torch.long)
         
-        # Get relevant slices
-        obs_history_slice = obs_history[:max_lb]
-        start = total_obs - nb - 1
-        obs_matrix_slice = flattened_obs_matrix[start:start + max_lb]
+        # Get start indices for this group
+        group_starts = start_indices[indices_tensor]
         
-        # Interpolate decay factors if needed
-        if max_lb == 1:
-            interpolated_decay = decay_factors[0].unsqueeze(0)
+        # Get observation slice for this lookback
+        obs_slice = obs_history[:lb]
+        
+        # Get decay factors for this lookback
+        decay = all_decays[lb]
+        
+        # Compute distances for this group using the JIT-compiled function
+        group_distances = compute_distances_for_group(
+            obs_slice, 
+            flipped_obs_matrix, 
+            group_starts, 
+            lb, 
+            decay
+        )
+        
+        # Store results
+        neighbor_distances[indices_tensor] = group_distances
+    
+    return neighbor_distances
+
+def compute_accum_distance_with_rot_torch_slow(nearest_neighbors: torch.Tensor,
+                                        max_lookbacks: torch.Tensor,
+                                        obs_history: torch.Tensor,
+                                        flattened_obs_matrix: torch.Tensor,
+                                        decay_factors: torch.Tensor,
+                                        rot_indices: torch.Tensor,
+                                        non_rot_indices: torch.Tensor,
+                                        rot_weights: torch.Tensor):
+    """
+    Highly optimized version using maximal vectorization techniques.
+    """
+    device = nearest_neighbors.device
+
+    # Convert all inputs to most efficient format and ensure contiguous memory
+    nearest_neighbors = nearest_neighbors.long().contiguous()
+    max_lookbacks = max_lookbacks.long().contiguous()
+    obs_history = obs_history.contiguous()
+    flipped_obs_matrix = torch.flip(flattened_obs_matrix, [0]).contiguous()
+    rot_indices = rot_indices.long().contiguous()
+    non_rot_indices = non_rot_indices.long().contiguous()
+    rot_weights = rot_weights.contiguous()
+    decay_factors = decay_factors.contiguous()
+
+    # Constants and dimensions
+    pi2 = 2 * torch.pi
+    m = nearest_neighbors.size(0)
+    total_obs = flipped_obs_matrix.size(0)
+    max_lb_val = max_lookbacks.max().item()
+
+    # -----------------------------------------------------------------
+    # PHASE 1: PRECOMPUTE ALL START INDICES AND OBSERVATION SLICES
+    # -----------------------------------------------------------------
+
+    # Calculate start indices for all neighbors at once (vectorized)
+    start_indices = (total_obs - nearest_neighbors - 1).clamp(min=0)
+
+    # -----------------------------------------------------------------
+    # PHASE 2: PRECOMPUTE ALL DECAY INTERPOLATIONS
+    # -----------------------------------------------------------------
+
+    # Initialize interpolation matrix for all possible lookback lengths
+    decay_len = decay_factors.size(0)
+
+    # Build all possible interpolated decay factors once
+    all_decays = torch.zeros((max_lb_val + 1, max_lb_val),
+                           dtype=torch.float64, device=device)
+
+    # Fill interpolation matrix - vectorized approach
+    for lb in range(1, max_lb_val + 1):
+        if lb == 1:
+            all_decays[lb, 0] = decay_factors[0]
         else:
-            # Create interpolation points
-            new_points = torch.linspace(0, decay_len - 1, max_lb, device=device, dtype=torch.float64)
-            
-            # Perform interpolation (simple linear interpolation)
-            interpolated_decay = torch.zeros(max_lb, device=device, dtype=torch.float64)
-            for i in range(max_lb):
-                x = new_points[i].item()
-                if x <= 0:
-                    interpolated_decay[i] = decay_factors[0]
-                elif x >= decay_len - 1:
-                    interpolated_decay[i] = decay_factors[-1]
-                else:
-                    idx_low = int(x)
-                    idx_high = idx_low + 1
-                    weight_high = x - idx_low
-                    weight_low = 1.0 - weight_high
-                    interpolated_decay[i] = weight_low * decay_factors[idx_low] + weight_high * decay_factors[idx_high]
-        
-        # Initialize accumulated distance
-        acc_distance = torch.zeros(1, dtype=torch.float64, device=device)
-        
-        # Calculate distances for each lookback step
-        for i in range(max_lb):
-            # Non-rotational dimensions
-            non_rot_diffs = obs_history_slice[i, non_rot_indices] - obs_matrix_slice[i, non_rot_indices]
-            non_rot_dist = torch.sum(non_rot_diffs ** 2)
-            
-            # Rotational dimensions
-            rot_dist = torch.zeros(1, dtype=torch.float64, device=device)
-            for k, j in enumerate(rot_indices):
-                delta = torch.abs(obs_history_slice[i, j] - obs_matrix_slice[i, j])
-                wrapped_delta = torch.min(delta, 2 * torch.pi - delta) / (2 * torch.pi)
-                rot_dist += (wrapped_delta ** 2) * rot_weights[k]
-            
-            # Total distance for this step
-            step_dist = torch.sqrt(non_rot_dist + rot_dist)
-            
-            # Apply decay factor and accumulate
-            acc_distance += step_dist * interpolated_decay[i]
-        
-        # Store the accumulated distance for this neighbor
-        neighbor_distances[neighbor] = acc_distance
-    
+            # Handle multi-point interpolation vectorized
+            points = torch.linspace(0, decay_len - 1, lb, device=device, dtype=torch.float64)
+            idx_low = points.floor().long().clamp(max=decay_len-2)
+            idx_high = (idx_low + 1).clamp(max=decay_len-1)
+            weight_high = points - idx_low.float()
+            weight_low = 1.0 - weight_high
+
+            # One vectorized operation
+            all_decays[lb, :lb] = weight_low * decay_factors[idx_low] + weight_high * decay_factors[idx_high]
+
+    # -----------------------------------------------------------------------
+    # PHASE 3: GATHER ALL SLICES NEEDED FOR COMPUTATION IN ADVANCE
+    # -----------------------------------------------------------------------
+
+    # Group neighbors by lookback value for batch processing
+    lookback_groups = {}
+    for i in range(m):
+        lb = max_lookbacks[i].item()
+        if lb not in lookback_groups:
+            lookback_groups[lb] = []
+        lookback_groups[lb].append(i)
+
+    # Convert to tensors for vectorized access
+    lookback_indices = {}
+    for lb, indices in lookback_groups.items():
+        lookback_indices[lb] = torch.tensor(indices, device=device, dtype=torch.long)
+
+    # Preallocate result tensor
+    neighbor_distances = torch.empty(m, dtype=torch.float64, device=device)
+
+    # -----------------------------------------------------------------------
+    # PHASE 4: COMPUTE DISTANCES BY LOOKBACK GROUP (MASSIVE VECTORIZATION)
+    # -----------------------------------------------------------------------
+
+    # Process each group of similar lookbacks together
+    for lb, indices in lookback_indices.items():
+        # Get relevant data for this group
+        group_size = indices.size(0)
+        group_start_indices = start_indices[indices]
+
+        # Use advanced indexing to gather all needed obs_matrix slices at once
+        # This creates a tensor of shape [group_size, lb, feature_dim]
+        batch_indices = torch.arange(lb, device=device).unsqueeze(0).expand(group_size, lb)
+        obs_batch = obs_history[:lb]  # Shape [lb, feature_dim]
+
+        # Build index tensor for gathering from flipped_obs_matrix
+        matrix_indices = []
+        for i in range(group_size):
+            start = group_start_indices[i].item()
+            matrix_indices.append(torch.arange(start, start + lb, device=device))
+        matrix_indices = torch.stack(matrix_indices)  # Shape [group_size, lb]
+
+        # Use gathered indices to collect all slices at once
+        # Shape: [group_size, lb, feature_dim]
+        matrix_batch = torch.stack([flipped_obs_matrix[matrix_indices[i]] for i in range(group_size)])
+
+        # Compute non-rotational differences (vectorized across the entire batch)
+        # Shape: [group_size, lb, non_rot_dim_count]
+        non_rot_obs = obs_batch[:, non_rot_indices].unsqueeze(0).expand(group_size, lb, -1)
+        non_rot_matrix = matrix_batch[:, :, non_rot_indices]
+        non_rot_diffs = non_rot_obs - non_rot_matrix
+
+        # Square and sum in one operation (vectorized across lookback and dimensions)
+        # Shape: [group_size, lb]
+        non_rot_squared_sum = torch.sum(non_rot_diffs * non_rot_diffs, dim=2)
+
+        # Handle rotational dimensions if any exist
+        if len(rot_indices) > 0:
+            # Extract rotational dimensions
+            # Shape: [group_size, lb, rot_dim_count]
+            rot_obs = obs_batch[:, rot_indices].unsqueeze(0).expand(group_size, lb, -1)
+            rot_matrix = matrix_batch[:, :, rot_indices]
+
+            # Compute deltas, wrap, and apply weights all vectorized
+            # Shape: [group_size, lb, rot_dim_count]
+            rot_deltas = torch.abs(rot_obs - rot_matrix)
+            rot_wrapped = torch.min(rot_deltas, pi2 - rot_deltas) / pi2
+            rot_squared = rot_wrapped * rot_wrapped
+
+            # Apply weights vectorized across all dimensions and samples
+            # Shape: [group_size, lb, rot_dim_count]
+            rot_weights_vec = rot_weights.view(1, 1, -1).expand(group_size, lb, -1)
+            weighted_rot = rot_squared * rot_weights_vec
+
+            # Sum across rotational dimensions in one operation
+            # Shape: [group_size, lb]
+            rot_squared_sum = torch.sum(weighted_rot, dim=2)
+        else:
+            # No rotational dimensions
+            rot_squared_sum = torch.zeros_like(non_rot_squared_sum)
+
+        # Compute total distances with square root in one vectorized operation
+        # Shape: [group_size, lb]
+        combined_dists = torch.sqrt(non_rot_squared_sum + rot_squared_sum)
+
+        # Apply decay factors and sum across lookback steps
+        # Shape: [group_size, lb]
+        decays = all_decays[lb, :lb].view(1, lb).expand(group_size, lb)
+        weighted_dists = combined_dists * decays
+
+        # Final reduction to get accumulated distance
+        # Shape: [group_size]
+        group_distances = torch.sum(weighted_dists, dim=1)
+
+        # Store results back into the output tensor
+        neighbor_distances[indices] = group_distances
+
     return neighbor_distances
 
 @njit([(float64[:], float64[:, :], int64[:], int64[:], float64[:])], parallel=True)
