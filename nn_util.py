@@ -70,12 +70,14 @@ last_tracks = []
 keypoint_viz = []
 
 proprio_tensor_cpu = [] # Pinned memory on CPU
+frame_tensor_cpu = [] # Pinned memory on CPU
 ret_tensor = []
 
 @dataclass
 class Dataset:
     name: str
-    scaler: FastScaler
+    obs_scaler: FastScaler
+    act_scaler: FastScaler
     rot_indices: np.ndarray | torch.Tensor
     weights: np.ndarray | torch.Tensor
     non_rot_indices: np.ndarray | torch.Tensor
@@ -86,38 +88,29 @@ class Dataset:
     flattened_act_matrix: np.ndarray | torch.Tensor
     processed_obs_matrix: np.ndarray | torch.Tensor
 
-#@profile
 def load_and_scale_data(path, rot_indices, weights, ob_type='state', use_torch=False):
     expert_data = load_expert_data(path)
     
-    if use_torch:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        observations = torch.cat([torch.tensor(traj['observations']).to(device=device) for traj in expert_data])
-        rot_indices = torch.tensor(rot_indices, dtype=torch.int64)
-        # Separate non-rotational dimensions
-        non_rot_indices = torch.tensor([i for i in range(observations.shape[-1]) if i not in rot_indices], device=device, dtype=torch.int64)
-        non_rot_observations = observations[:, non_rot_indices]
-    else:
-        observations = np.concatenate([traj['observations'] for traj in expert_data])
-        rot_indices = np.array(rot_indices, dtype=np.int64) 
-        # Separate non-rotational dimensions
-        non_rot_indices = np.array([i for i in range(observations.shape[-1]) if i not in rot_indices], dtype=np.int64)
-        non_rot_observations = observations[:, non_rot_indices]
-    
-    scaler = FastScaler()
+    observations = np.concatenate([traj['observations'] for traj in expert_data])
+    rot_indices = np.array(rot_indices, dtype=np.int64) 
+    # Separate non-rotational dimensions
+    non_rot_indices = np.array([i for i in range(observations.shape[-1]) if i not in rot_indices], dtype=np.int64)
+    non_rot_observations = observations[:, non_rot_indices]
+
+    obs_scaler = FastScaler()
     if ob_type == 'keypoint' and False:
-        if torch:
-            scaler.fit(torch.cat(non_rot_observations))
-        else:
-            scaler.fit(np.concatenate(non_rot_observations))
+        obs_scaler.fit(np.concatenate(non_rot_observations))
     else:
-        scaler.fit(non_rot_observations)
-            
+        obs_scaler.fit(non_rot_observations)
+
+    act_scaler = FastScaler()
+    act_scaler.fit(np.concatenate([traj['actions'] for traj in expert_data]))
+
     for traj in expert_data:
         observations = traj['observations']
         if use_torch:
-            observations_tensor = torch.tensor(observations, dtype=torch.float64, device=device)
-            transformed_data = scaler.transform(observations_tensor[:, non_rot_indices])
+            observations_tensor = torch.tensor(observations, dtype=torch.float32, device=device)
+            transformed_data = obs_scaler.transform(observations_tensor[:, non_rot_indices])
             observations_tensor[:, non_rot_indices] = transformed_data
             traj['observations'] = observations_tensor
         else:
@@ -134,19 +127,19 @@ def load_and_scale_data(path, rot_indices, weights, ob_type='state', use_torch=F
         if len(weights) > 0:
             weights = torch.as_tensor(weights, dtype=torch.float64)
         else:
-            weights = torch.ones(obs_matrix[0][0].shape[0], dtype=torch.float64)
+            weights = torch.ones(obs_matrix[0][0].shape[0], dtype=torch.float32)
         processed_obs_matrix = flattened_obs_matrix[:, non_rot_indices] * weights[non_rot_indices]
         traj_starts = torch.as_tensor(traj_starts)
     else:
-        flattened_obs_matrix = np.concatenate(obs_matrix, dtype=np.float64)
+        flattened_obs_matrix = np.concatenate(obs_matrix, dtype=np.float32)
         flattened_act_matrix = np.concatenate(act_matrix)
         if len(weights) > 0:
             weights = np.array(weights, dtype=np.float64)
         else:
-            weights = np.ones(obs_matrix[0][0].shape[0], dtype=np.float64)
+            weights = np.ones(obs_matrix[0][0].shape[0], dtype=np.float32)
         processed_obs_matrix = flattened_obs_matrix[:, non_rot_indices] * weights[non_rot_indices]
         
-    return Dataset(new_path, scaler, rot_indices, weights, non_rot_indices, obs_matrix, act_matrix, traj_starts, flattened_obs_matrix, flattened_act_matrix, processed_obs_matrix)
+    return Dataset(new_path, obs_scaler, act_scaler, rot_indices, weights, non_rot_indices, obs_matrix, act_matrix, traj_starts, flattened_obs_matrix, flattened_act_matrix, processed_obs_matrix)
 
 def online_model_init_func(frames, query_points):
     """Initialize query features for the query points."""
@@ -416,11 +409,10 @@ def stack_with_previous(obs_list, stack_size):
     return np.concatenate(obs_list[-stack_size:], axis=0)
 
 def frame_to_dino(rgb_array, proprio_state=[], numpy_action=True):
-    global dino_model, device, img_transform, pca, proprio_tensor_cpu, ret_tensor
+    global dino_model, device, img_transform, pca, proprio_tensor_cpu, frame_tensor_cpu, ret_tensor
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if dino_model is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
         # Load the pre-trained DinoV2 model
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="xFormers is not available*") 
@@ -431,8 +423,6 @@ def frame_to_dino(rgb_array, proprio_state=[], numpy_action=True):
         img_transform = transforms.Compose([
             transforms.Resize((14 * 36, 14 * 36)),  # DinoV2 expects 224x224 input
             transforms.CenterCrop(14 * 36),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
 
     # Handle 4-channel image (RGBA)
@@ -442,13 +432,19 @@ def frame_to_dino(rgb_array, proprio_state=[], numpy_action=True):
 
     # Convert numpy array to PIL Image
     image = Image.fromarray((rgb_array * 255).astype(np.uint8))
-    
+    image = img_transform(image)
+    image = np.array(image.getdata()).reshape(14 * 36, 14 * 36, 3).transpose((2, 0, 1))
+    if len(frame_tensor_cpu) == 0:
+        frame_tensor_cpu = torch.empty(image.shape, device='cpu', pin_memory=True)
+    frame_tensor_cpu.copy_(torch.from_numpy(image).float() / 255.0)
     # Apply transformations
-    input_tensor = img_transform(image).unsqueeze(0).to(device)  # Add batch dimension
+    mean = torch.tensor([0.485, 0.456, 0.406], device='cpu').view(3, 1, 1)
+    std = torch.tensor([0.229, 0.224, 0.225], device='cpu').view(3, 1, 1)
+    frame_tensor_cpu.sub(mean).div(std)
     
     # Extract features
     with torch.no_grad():
-        features = dino_model(input_tensor)
+        features = dino_model(frame_tensor_cpu.to(device).unsqueeze(0))
 
     if pca is not None:
         features = pca.transform(features)
@@ -458,9 +454,8 @@ def frame_to_dino(rgb_array, proprio_state=[], numpy_action=True):
         return np.hstack((proprio_state, features))
     else:
         if len(proprio_tensor_cpu) == 0:
-            proprio_tensor_cpu = torch.empty(len(proprio_state), dtype=torch.float64, pin_memory=True)
+            proprio_tensor_cpu = torch.empty(len(proprio_state), dtype=torch.float64, device='cpu', pin_memory=True)
             ret_tensor = torch.empty(len(proprio_state) + len(features[0]), device=features.get_device(), dtype=torch.float64)
-
         proprio_tensor_cpu.copy_(torch.from_numpy(proprio_state))
 
         ret_tensor[:len(proprio_state)] = proprio_tensor_cpu.to(features.get_device(), non_blocking=True)
@@ -743,108 +738,75 @@ def compute_accum_distance(nearest_neighbors, max_lookbacks, obs_history, flatte
 
     return neighbor_distances
 
-def compute_accum_distance_torch(
-    nearest_neighbors: torch.Tensor,
-    max_lookbacks: torch.Tensor,
-    obs_history: torch.Tensor,
-    flattened_obs_matrix: torch.Tensor,
-    decay_factors: torch.Tensor
-):
+def compute_accum_distance_torch(nearest_neighbors, max_lookbacks, obs_history, flattened_obs_matrix, decay_factors):
+    dtype = torch.float64
     device = nearest_neighbors.device
 
-    # Get dimensions
+    nearest_neighbors = nearest_neighbors.long()
+    max_lookbacks = max_lookbacks.long()
+
+    obs_history = obs_history.to(dtype=dtype)
+    flattened_obs_matrix = flattened_obs_matrix.to(dtype=dtype)
+    decay_factors = decay_factors.to(dtype=dtype)
+
     m = nearest_neighbors.size(0)
-    n = flattened_obs_matrix.size(1)
     total_obs = flattened_obs_matrix.size(0)
 
-    # Create output tensor
-    neighbor_distances = torch.empty(m, dtype=torch.float64, device=device)
+    flattened_obs_matrix = torch.flip(flattened_obs_matrix, dims=[0])
+    neighbor_distances = torch.zeros(m, dtype=dtype, device=device)
+    max_lb_value = max_lookbacks.max()
+    all_interpolated_decays = torch.zeros(max_lb_value, dtype=dtype, device=device)
 
-    # Flip the matrix (we calculate from the back)
-    flipped_obs_matrix = torch.flip(flattened_obs_matrix, [0])
+    if max_lb_value == 1:
+        all_interpolated_decays[0] = decay_factors[0]
+    else:
+        x_original = torch.arange(len(decay_factors), device=device, dtype=dtype)
+        x_interp = torch.linspace(0, len(decay_factors) - 1, max_lb_value, device=device, dtype=dtype)
 
-    # Process in batches for better GPU utilization
-    batch_size = 1024  # Adjust based on GPU memory
+        idx_low = x_interp.floor().long()
+        idx_high = torch.min(idx_low + 1, torch.tensor(len(decay_factors) - 1, device=device))
+        weights = x_interp - idx_low.float()
 
-    for batch_start in range(0, m, batch_size):
-        batch_end = min(batch_start + batch_size, m)
-        batch_size_actual = batch_end - batch_start
+        all_interpolated_decays = (decay_factors[idx_low] * (1 - weights) +
+                                   decay_factors[idx_high] * weights)
 
-        # Get batch data
-        batch_nn = nearest_neighbors[batch_start:batch_end]
-        batch_lb = max_lookbacks[batch_start:batch_end]
+    start_indices = total_obs - nearest_neighbors - 1
 
-        # Precompute start indices for the entire batch
-        start_indices = (total_obs - batch_nn - 1).clamp(min=0)
+    batch_size = 256
+    num_batches = (m + batch_size - 1) // batch_size
 
-        # Unique lookback values in this batch
-        unique_lbs = torch.unique(batch_lb)
+    for i in range(num_batches):
+        batch_start = i * batch_size
+        batch_end = min((i + 1) * batch_size, m)
+        current_batch_size = batch_end - batch_start
 
-        # Process each unique lookback value
-        for lb in unique_lbs:
-            # Find neighbors with this lookback
-            mask = batch_lb == lb
-            if not mask.any():
-                continue
+        batch_max_lookbacks = max_lookbacks[batch_start:batch_end]
+        batch_start_indices = start_indices[batch_start:batch_end]
 
-            indices = torch.nonzero(mask).squeeze()
-            lb_value = lb.item()
+        max_lb_in_batch = batch_max_lookbacks.max().item()
+        if max_lb_in_batch == 0:
+            continue
 
-            # Get relevant start indices
-            lb_start_indices = start_indices[indices]
+        indices_offset = torch.arange(max_lb_in_batch, device=device).unsqueeze(0).expand(current_batch_size, -1)
+        valid_indices_mask = indices_offset < batch_max_lookbacks.unsqueeze(1)
+        batch_idx, lookback_idx = torch.where(valid_indices_mask)
 
-            # Get history slice for this lookback
-            history_slice = obs_history[:lb_value]
+        flat_obs_idx = batch_start_indices[batch_idx] + lookback_idx
 
-            # Interpolate decay factors
-            if lb_value == 1:
-                interpolated_decay = decay_factors[0].unsqueeze(0)
-            else:
-                # Vectorized interpolation
-                points = torch.linspace(0, len(decay_factors) - 1, lb_value, device=device)
-                interpolated_decay = torch.zeros(lb_value, device=device, dtype=decay_factors.dtype)
+        flat_obs_values = flattened_obs_matrix[flat_obs_idx]
+        history_values = obs_history[lookback_idx]
 
-                # Find points for interpolation
-                idx_low = points.floor().long().clamp(max=len(decay_factors)-2)
-                idx_high = (idx_low + 1).clamp(max=len(decay_factors)-1)
-                weight_high = points - idx_low.float()
-                weight_low = 1.0 - weight_high
+        squared_diffs = (history_values - flat_obs_values)**2
 
-                # Perform interpolation
-                interpolated_decay = weight_low * decay_factors[idx_low] + weight_high * decay_factors[idx_high]
+        distances = torch.sqrt(torch.sum(squared_diffs, dim=-1))
 
-            # Calculate distances efficiently
-            batch_distances = torch.zeros(indices.size(0), device=device, dtype=torch.float64)
+        decay_values = all_interpolated_decays[lookback_idx]
+        weighted_distances = distances * decay_values
 
-            # Get matrix slices for all neighbors with this lookback at once
-            matrix_indices = []
-            for i, start_idx in enumerate(lb_start_indices):
-                matrix_indices.append(torch.arange(start_idx, start_idx + lb_value, device=device))
+        result = torch.zeros(current_batch_size, dtype=dtype, device=device)
+        result.scatter_add_(0, batch_idx, weighted_distances)
 
-            if len(matrix_indices) > 0:
-                matrix_indices = torch.stack(matrix_indices)
-
-                # Now compute distances step by step
-                for step in range(lb_value):
-                    # Get current observation
-                    curr_obs = history_slice[step]
-
-                    # Get matrix rows for this step
-                    step_indices = matrix_indices[:, step]
-                    matrix_rows = flipped_obs_matrix[step_indices]
-
-                    # Compute squared distances
-                    diffs = curr_obs.unsqueeze(0) - matrix_rows
-                    squared_dists = torch.sum(diffs * diffs, dim=1)
-
-                    # Apply square root and decay factor
-                    step_dists = torch.sqrt(squared_dists) * interpolated_decay[step]
-
-                    # Accumulate
-                    batch_distances += step_dists
-
-            # Store distances
-            neighbor_distances[batch_start + indices] = batch_distances
+        neighbor_distances[batch_start:batch_end] = result
 
     return neighbor_distances
 
@@ -919,9 +881,8 @@ def compute_distance(curr_ob: np.ndarray, flattened_obs_matrix: np.ndarray):
 
     return neighbor_distances, neighbor_vec_distances
 
-@profile
 def compute_distance_torch(curr_ob: torch.Tensor, flattened_obs_matrix: torch.Tensor):
-    neighbor_vec_distances = flattened_obs_matrix - curr_ob.unsqueeze(0)
+    neighbor_vec_distances = (flattened_obs_matrix - curr_ob.unsqueeze(0))
     
     squared_dists = torch.sum(neighbor_vec_distances ** 2, dim=1)
     neighbor_distances = torch.sqrt(squared_dists)

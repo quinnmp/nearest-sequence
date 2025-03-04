@@ -1,5 +1,5 @@
 from nn_eval import nn_eval
-import nn_agent, nn_util
+import nn_agent_torch as nn_agent
 import yaml
 from argparse import ArgumentParser
 import numpy as np
@@ -22,6 +22,6 @@ if __name__ == "__main__":
     for k in range(10, 1000, 10):
         print(k)
         policy_cfg['k_neighbors'] = k
-        agent = nn_agent.NNAgentEuclidean(env_cfg, policy_cfg)
+        agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
 
         nn_eval(env_cfg, agent)

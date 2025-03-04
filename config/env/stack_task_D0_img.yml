@@ -10,3 +10,4 @@ cams:
   - sideview
   - frontview
 val_cfg: "config/env/stack_task_D0_img_val.yml"
+#neighbor_lookup_pkl: "data/neighbor-lookup.pkl"

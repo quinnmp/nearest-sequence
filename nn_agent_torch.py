@@ -3,6 +3,12 @@ import os
 
 import numpy as np
 import torch
+if torch.cuda.is_available():
+    torch.set_default_device('cuda')
+else:
+    torch.set_default_device('cpu')
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 import torch.nn as nn
 import yaml
 from sklearn.decomposition import PCA
@@ -20,7 +26,6 @@ from nn_util import (NN_METHOD,
 DEBUG = False
 
 class NNAgent:
-    #@profile
     def __init__(self, env_cfg, policy_cfg):
         #print(f"Seeding with {env_cfg.get('seed', 42)}")
         set_seed(env_cfg.get("seed", 42))
@@ -72,7 +77,7 @@ class NNAgent:
                 def worker_init_fn(worker_id):
                     np.random.seed(42 + worker_id)
 
-                generator = torch.Generator()
+                generator = torch.Generator(device=device)
                 generator.manual_seed(42)
 
                 # Train the model if it doesn't exist
@@ -116,7 +121,7 @@ class NNAgent:
                         delta_state_dim=delta_state_dim,
                         action_dim=action_dim,
                         k=self.candidates,
-                        action_scaler=train_dataset.action_scaler,
+                        action_scaler=self.datasets['retrieval'].act_scaler,
                         distance_scaler=train_dataset.distance_scaler,
                         final_neighbors_ratio=self.final_neighbors_ratio,
                         hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
@@ -139,8 +144,6 @@ class NNAgent:
                     loaded_optimizer_dict=optimizer_state_dict if optimizer_state_dict else None
                 )
 
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            self.model.to(device)
             self.model.eval()
         elif self.method == NN_METHOD.GMM:
             self.action_scaler = FastScaler()
@@ -156,7 +159,6 @@ class NNAgent:
         self.obs_history = torch.tensor([], dtype=torch.float64)
 
 class NNAgentEuclidean(NNAgent):
-    @profile
     def get_action(self, current_ob):
         if self.method == NN_METHOD.BC:
             return self.model(current_ob['retrieval'], -1, -1, -1, inference=True).detach().cpu().numpy()
@@ -310,7 +312,6 @@ class NNAgentEuclidean(NNAgent):
     
 # Standard Euclidean distance, but normalize each dimension of the observation space
 class NNAgentEuclideanStandardized(NNAgentEuclidean):
-    #@profile
     def __init__(self, env_cfg, policy_cfg):
         self.datasets = {}
         # We may use different datasets for retrieval, neighbor state, and state delta
@@ -345,7 +346,6 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
 
         super().__init__(env_cfg, policy_cfg)
 
-    #@profile
     def get_action(self, current_ob, normalize=True):
         if not isinstance(current_ob, dict):
             current_ob = {
@@ -361,10 +361,10 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
                 dataset = self.datasets[ob_type]
                 ob = current_ob[ob_type]
                 if len(dataset.rot_indices) == 0:
-                    current_ob[ob_type] = dataset.scaler.transform(ob).flatten()
+                    current_ob[ob_type] = dataset.obs_scaler.transform(ob).flatten()
                 else:
                     ob = ob[dataset.non_rot_indices]
-                    transformed_ob = dataset.scaler.transform(ob).flatten()
+                    transformed_ob = dataset.obs_scaler.transform(ob).flatten()
                     current_ob[ob_type][dataset.non_rot_indices] = transformed_ob
 
         return super().get_action(current_ob)
