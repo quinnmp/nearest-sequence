@@ -99,7 +99,7 @@ class NNAgent:
                     val_loader = DataLoader(
                         val_dataset, 
                         batch_size=policy_cfg.get('batch_size', 64), 
-                        shuffle=True, 
+                        shuffle=not DEBUG, 
                         num_workers=0, 
                         generator=generator
                     )
@@ -195,6 +195,9 @@ class NNAgentEuclidean(NNAgent):
         # Using torch.topk instead of np.argpartition
         _, nearest_neighbor_indices = torch.topk(all_distances, k=self.candidates, largest=False)
         nearest_neighbors = nearest_neighbor_indices.to(torch.int64)
+        if DEBUG:
+            nearest_neighbors, _ = torch.sort(nearest_neighbors)
+            print(nearest_neighbors)
 
         # Find corresponding trajectories for each neighbor
         traj_nums = torch.searchsorted(self.datasets['retrieval'].traj_starts, nearest_neighbors, right=True) - 1
@@ -233,6 +236,11 @@ class NNAgentEuclidean(NNAgent):
         # Do a final pass and pick only the top (self.final_neighbors_ratio * 100)% of neighbors based on this new accumulated distance
         final_neighbor_num = math.floor(len(accum_distances) * self.final_neighbors_ratio)
         _, final_neighbor_indices = torch.topk(accum_distances, k=final_neighbor_num, largest=False)
+
+        if DEBUG:
+            final_neighbor_indices, _ = torch.sort(final_neighbor_indices)
+            print(final_neighbor_indices)
+
         final_neighbors = nearest_neighbors[final_neighbor_indices]
 
         if self.plot:

@@ -277,18 +277,7 @@ class KNNExpertDataset(Dataset):
                     # Distances will be -1, just append to make interpreter happy
                     all_distances.append(distances)
                 else:
-                    if self.is_torch:
-                        if len(all_distances) == 0:
-                            neighbors, obs_dim = distances.shape
-                            total_samples = len(self)
-                            all_distances = torch.zeros((neighbors * total_samples, obs_dim)).to(torch.float32)
-
-                        neighbors, _ = distances.shape
-                        start_idx = i * neighbors
-                        end_idx = (i + 1) * neighbors
-                        all_distances[start_idx:end_idx] = distances.to(torch.float32)
-                    else:
-                        all_distances.extend(distances.cpu().numpy())
+                    all_distances.extend(distances.cpu().numpy())
 
             self.distance_scaler = FastScaler()
             self.distance_scaler.fit(all_distances)
