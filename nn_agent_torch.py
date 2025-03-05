@@ -330,7 +330,8 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
                     self.datasets[dataset] = load_and_scale_data(
                         path,
                         env_cfg[dataset].get('rot_indices', []),
-                        env_cfg[dataset].get('weights', [])
+                        env_cfg[dataset].get('weights', []),
+                        use_torch=True
                     )
         else:
             expert_data_path = env_cfg['demo_pkl']

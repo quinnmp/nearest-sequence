@@ -198,9 +198,13 @@ def init_tapir():
     online_model_init = jax.jit(online_model_init_func)
     online_model_predict = jax.jit(online_model_predict_func)
 
-def get_object_pixel_coords(sim, obj_name, camera_name="track", offset=np.array([0, 0, 0])):
+def get_object_pixel_coords(sim, obj_name, camera_name="agentview", offset=np.array([0, 0, 0]), obj_size_ratio=False):
     obj_id = sim.model.geom_name2id(obj_name)
-    obj_pos = sim.data.geom_xpos[obj_id] + offset
+    obj_size = sim.model.geom_size[obj_id]
+    if obj_size_ratio:
+        obj_pos = sim.data.geom_xpos[obj_id] + obj_size * offset
+    else:
+        obj_pos = sim.data.geom_xpos[obj_id] + offset
 
     cam_id = sim.model.camera_name2id(camera_name)
     cam_pos = sim.data.cam_xpos[cam_id]
@@ -329,7 +333,7 @@ def get_proprio(config, obs):
     else:
         return obs
 
-def get_action_from_obs(config, model, env, observation, frame, obs_history=None, numpy_action=True):
+def get_action_from_obs(config, model, env, observation, frame, obs_history=None, numpy_action=True, is_first_ob=False):
     is_robosuite = config.get('robosuite', False)
     stack_size = config.get('stack_size', 10)
     env_name = config.get('name', 10)
@@ -356,7 +360,7 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
                     case 'dino':
                         obs[dataset] = frame_to_dino(frame, proprio_state=proprio_state, numpy_action=numpy_action)
                     case 'keypoint':
-                        obs[dataset] = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=(len(obs_history[dataset]) == 0), proprio_state=proprio_state, cam_names=cam_names)
+                        obs[dataset] = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=is_first_ob, proprio_state=proprio_state, cam_names=cam_names)
 
                 processed_obs_types[obs_type] = dataset
                 if stack:
@@ -367,7 +371,7 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
                 
                     obs[dataset] = stack_with_previous(obs_history[dataset], stack_size=stack_size)
             else:
-                obs[dataset] = np.copy(obs[processed_obs_types[obs_type]])
+                obs[dataset] = (obs[processed_obs_types[obs_type]]).detach().clone()
     else:
         obs_type = config['type']
         stack = config.get("stack?", False)
@@ -512,12 +516,55 @@ def fast_2d_angles_and_magnitudes_jax(tracks_r, last_tracks_r):
         jnp.sqrt(jnp.sum(diff**2, axis=1))
     ])
 
+def get_query_points(camera, env_name, env):
+    query_points = []
+    if env_name == 'Stack_D0':
+        if camera == "sideview":
+            query_points = np.array(
+                [
+                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
+                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
+                ]
+            )
+        elif camera == "frontview":
+            query_points = np.array(
+                [
+                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
+                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
+                ]
+            )
+        elif camera == "agentview":
+            query_points = np.array(
+                [
+                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
+                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
+                ]
+            )
+    if env_name == 'Square_D0':
+        if camera == "agentview":
+            query_points = np.array(
+                [
+                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g0", camera_name=camera, offset=np.array([0, 0, 0.5]), obj_size_ratio=True))),
+                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g1", camera_name=camera, offset=np.array([0, 0, 0.5]), obj_size_ratio=True))),
+                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g2", camera_name=camera, offset=np.array([0, 0, 0.5]), obj_size_ratio=True))),
+                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g3", camera_name=camera, offset=np.array([0, 0, 0.5]), obj_size_ratio=True))),
+                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g4", camera_name=camera, offset=np.array([0, 0, 0.5]), obj_size_ratio=True))),
+                ]
+            )
+
+
+    if len(query_points) == 0:
+        print("No query points found!")
+    else:
+        #print(query_points)
+        pass
+    return query_points
+
 def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=False, proprio_state=[], cam_names=[]):
-    global tapir, query_features, causal_state, online_model_init, online_model_predict, last_tracks, keypoint_viz
+    global tapir, query_features, causal_state, online_model_init, online_model_predict, last_tracks, keypoint_viz, frame_tensor_cpu, ret_tensor, proprio_tensor_cpu
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if tapir is None:
         init_tapir()
-
-    ob = np.asarray(proprio_state)
 
     height, width = 256, 256
 
@@ -525,47 +572,21 @@ def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=Fal
     if is_first_ob:
         all_query_points = np.empty((0, 3))
         for i, camera in enumerate(cam_names):
-            if camera == "sideview":
-                query_points = np.array(
-                    [
-                        np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
-                        np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
-                    ]
-                )
-            elif camera == "frontview":
-                query_points = np.array(
-                    [
-                        np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
-                        np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
-                    ]
-                )
-            elif camera == "agentview":
-                query_points = np.array(
-                    [
-                        np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
-                        np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
-                    ]
-                )
-            elif camera == "track" and env_name == "hopper-expert-v2":
-                query_points = np.array([
-                        np.hstack(([0], get_joint_pixel_coords(env.sim, "thigh_joint", "thigh"))),
-                        np.hstack(([0], get_joint_pixel_coords(env.sim, "leg_joint", "leg"))),
-                        np.hstack(([0], get_joint_pixel_coords(env.sim, "foot_joint", "foot"))),
-                        np.hstack(([0], get_object_pixel_coords(env.sim, "foot_geom", offset=np.array([0, 0, 0])))),
-                ])
-                query_points[:, 1] -= 2
-                query_points[:, 2] -= 4
+            query_points = get_query_points(camera, env_name, env)
             query_points[:, 2] += i * width
             all_query_points = np.vstack((all_query_points, query_points))
 
-            query_features = online_model_init(np.array(frame), all_query_points[None])
+            query_features = online_model_init(frame, all_query_points[None])
             causal_state = tapir.construct_initial_causal_state(
                 all_query_points.shape[0], len(query_features.resolutions) - 1
             )
             last_tracks = []
 
+        proprio_tensor_cpu = torch.empty(len(proprio_state), dtype=torch.float64, device='cpu', pin_memory=True)
+        ret_tensor = torch.empty(len(proprio_state) + len(query_points) * 4, device=device, dtype=torch.float64)
+
     tracks, visibles, causal_state = online_model_predict(
-        frames=np.array(frame),
+        frames=frame,
         query_features=query_features,
         causal_context=causal_state,
     )
@@ -576,14 +597,18 @@ def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=Fal
 
     if len(last_tracks) > 0:
         results = fast_2d_angles_and_magnitudes_jax(tracks_r, last_tracks.reshape(-1, 2))
-        angles, magnitudes = np.asarray(results)
+        np_results = np.array(results)
+        angles, magnitudes = torch.from_numpy(np_results)
     else:
-        angles = jnp.zeros(len(tracks_r))
-        magnitudes = jnp.zeros(len(tracks_r))
+        angles = torch.zeros(len(tracks_r))
+        magnitudes = torch.zeros(len(tracks_r))
 
     last_tracks = tracks_r
 
-    return np.hstack((ob, np.asarray(tracks_flat), angles, magnitudes))
+    ret_tensor[len(proprio_state):len(proprio_state) + len(tracks_r) * 2] = torch.from_numpy(np.array(tracks_flat))
+    ret_tensor[len(proprio_state) + len(tracks_r) * 2:len(proprio_state) + len(tracks_r) * 3] = angles
+    ret_tensor[len(proprio_state) + len(tracks_r) * 3:len(proprio_state) + len(tracks_r) * 4] = magnitudes
+    return ret_tensor
 
 def set_seed(seed):
     torch.manual_seed(seed)

@@ -2,7 +2,7 @@
 
 #SBATCH --job-name=knn
 #SBATCH --account=weirdlab
-#SBATCH --partition=gpu-l40
+#SBATCH --partition=gpu-a40
 
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -48,13 +48,13 @@ rm data/*lookup*
 #python -u state_to_img.py config/env/hopper.yml
 #python -u opengl_test.py
 #python -u state_to_tapir.py config/env/hopper.yml
-#python -u nn_eval.py config/env/stack_task_D0_kpt.yml config/policy/bc.yml
+#python -u nn_eval.py config/env/square_task_D0_kpt.yml config/policy/bc.yml
 #python -u robosuite_state_to_img.py config/env/stack_task_D0.yml data/stack_task_D0/stack_task_D0_100_proprio.pkl
-python -u nn_param_optimizer.py config/env/stack_task_D0_img.yml config/policy/dan_img.yml
+#python -u nn_param_optimizer.py config/env/square_task_D0_img.yml config/policy/bc.yml
 #python -u nn_sweep_k.py config/env/stack_task_D0_img.yml config/policy/dan_img.yml
 #python -u nn_model_optimizer.py config/env/maze.yml config/policy/bc.yml
-#python -u nn_eval.py config/env/hopper.yml config/policy/hopper/ns_dan_bc.yml
-#kernprof -l -v nn_eval.py config/env/stack_task_D0_img.yml config/policy/bc.yml
+python -u nn_eval.py config/env/hopper.yml config/policy/hopper/ns_dan_bc.yml
+#python -u nn_eval.py config/env/square_task_D0_kpt.yml config/policy/bc.yml
 #python -u nn_eval.py config/env/stack_task_D0_img.yml config/policy/bc.yml
 #python -u state_to_tapir.py config/env/hopper.yml; python -u rgb_arrays_to_mp4.py data/hopper_tapir_test.pkl data/hopper_tapir_test.mp4
 #conda install -c pytorch cudatoolkit

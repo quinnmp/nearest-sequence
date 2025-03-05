@@ -32,6 +32,8 @@ else:
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+NULL_TENSOR = torch.as_tensor(-1, dtype=torch.float32)
+
 torch.set_default_dtype(torch.float32)
 
 @dataclass
@@ -316,11 +318,11 @@ class KNNExpertDataset(Dataset):
 
             if self.bc_baseline:
                 self.neighbor_lookup[idx] = NeighborData(
-                        states=torch.as_tensor(actual_state, dtype=torch.float32).unsqueeze(0),
-                        actions=torch.as_tensor(-1),
-                        distances=torch.as_tensor(-1),
+                        states=torch.as_tensor(actual_state, dtype=torch.float32),
+                        actions=NULL_TENSOR,
                         target_action=torch.as_tensor(action, dtype=torch.float32),
-                        weights=torch.as_tensor(-1)
+                        weights=NULL_TENSOR,
+                        actual_state=NULL_TENSOR
                 )
             else:
                 if self.is_torch:
@@ -352,9 +354,13 @@ class KNNExpertDataset(Dataset):
                 )
 
         data = self.neighbor_lookup[idx]
-        neighbor_distances = data.states - data.actual_state
-        if self.distance_scaler is not None:
-            self.distance_scaler.transform(neighbor_distances)
+        if self.bc_baseline:
+            neighbor_distances = NULL_TENSOR
+        else:
+            neighbor_distances = data.states - data.actual_state
+            if self.distance_scaler is not None:
+                self.distance_scaler.transform(neighbor_distances)
+
 
         return data.states, data.actions, neighbor_distances, data.target_action, data.weights
 
@@ -391,7 +397,6 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
 
             predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
             loss = criterion(predicted_actions, actions)
-
             loss.backward()
             optimizer.step()
             train_loss += loss.detach()
@@ -435,7 +440,7 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                     return best_check['model']
 
                 
-                #print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+                print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
             model.train()
         else:
             #print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")

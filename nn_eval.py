@@ -19,6 +19,8 @@ import pickle
 from itertools import product
 from push_t_env import PushTEnv
 import torch
+import torch.multiprocessing as mp
+import torch.distributed as dist
 import torchvision.transforms as transforms
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -27,6 +29,8 @@ from typing import Dict, Any
 from nn_util import crop_obs_for_env, construct_env, get_action_from_obs, eval_over, get_keypoint_viz
 import copy
 import cv2
+import sys
+from functools import partial
 
 DEBUG = False
 
@@ -82,7 +86,7 @@ def single_trial_eval(config, agent, env, trial):
             #frame = env.render(mode='rgb_array')
         video_frames.append(frame)
 
-        action = get_action_from_obs(config, agent, env, observation, frame, obs_history=obs_history, numpy_action=agent.model.numpy_action)
+        action = get_action_from_obs(config, agent, env, observation, frame, obs_history=obs_history, numpy_action=agent.model.numpy_action, is_first_ob=(steps == 1))
         observation, reward, done, info = env.step(action)[:4]
 
         if env_name == "push_t":
@@ -98,17 +102,16 @@ def single_trial_eval(config, agent, env, trial):
         from tapnet.utils import transforms
         from tapnet.utils import viz_utils
 
-        # tracks, visibles = get_keypoint_viz(cam_names)
-        #
-        # video_frames = np.array(video_frames)
-        # height, width = video_frames.shape[1:3]
-        # tracks = transforms.convert_grid_coordinates(
-        #     tracks, (256, 256), (width, height)
-        # )
-        # video_viz = viz_utils.paint_point_track(video_frames, tracks, visibles)
+        tracks, visibles = get_keypoint_viz(cam_names)
+       
+        video_frames = np.array(video_frames)
+        height, width = video_frames.shape[1:3]
+        tracks = transforms.convert_grid_coordinates(
+            tracks, (256, 256), (width, height)
+        )
+        video_viz = viz_utils.paint_point_track(video_frames, tracks, visibles)
 
         rgb_arrays_to_mp4(video_frames, f"data/{trial}.mp4")
-        #rgb_arrays_to_mp4(video_viz, f"data/{trial}_{cam}.mp4")
 
     success = 1 if 'success' in info else 0
 
@@ -237,6 +240,75 @@ def nn_eval(config, nn_agent, trials=10, results=None):
     print(
         f"Candidates {nn_agent.candidates}, lookback {nn_agent.lookback}, decay {nn_agent.decay}, ratio {nn_agent.final_neighbors_ratio}: "
         f"mean {round(np.mean(episode_rewards), 2)}, std {round(np.std(episode_rewards), 2)}"
+    )
+    return np.mean(episode_rewards)
+
+
+def worker_task(trial_idx, config, agent, env, gpu_id, results_queue):
+    try:
+        device = torch.device(f'cuda:{gpu_id}')
+        #torch.cuda.set_device(gpu_id)
+        
+        episode_reward, success = single_trial_eval(config, agent, env, trial_idx)
+        
+        results_queue.put((trial_idx, episode_reward, success))
+        
+        del agent
+        torch.cuda.empty_cache()
+        
+        return True
+    except Exception as e:
+        results_queue.put((f"error_{trial_idx}", str(e), 0))
+        return False
+
+def parallel_nn_eval(config, agent, trials=10, results=None):
+    num_gpus = torch.cuda.device_count()
+    env = construct_env(config)
+
+    manager = mp.Manager()
+    results_queue = manager.Queue()
+
+    pool = mp.Pool(processes=num_gpus)
+    async_results = []
+
+    for i in range(trials):
+        gpu_id = i % num_gpus
+        
+        async_result = pool.apply_async(
+            worker_task, 
+            args=(i, config, agent, env, gpu_id, results_queue)
+        )
+        async_results.append(async_result)
+
+    pool.close()
+    pool.join()
+    
+    all_results = []
+    error_results = []
+    queue_size = results_queue.qsize() if hasattr(results_queue, 'qsize') else "unknown"
+
+    while not results_queue.empty():
+        result = results_queue.get()
+        if isinstance(result[0], str) and result[0].startswith("error_"):
+            error_results.append(result)
+        else:
+            all_results.append(result)
+
+    for error in error_results:
+        print(f"Error in trial {error[0]}: {error[1]}")
+
+    episode_rewards = [r[1] for r in all_results]
+    successes = sum(r[2] for r in all_results)
+
+    if results is not None and episode_rewards:
+        os.makedirs('results', exist_ok=True)
+        with open(f"results/{results}.pkl", 'wb') as f:
+            pickle.dump(episode_rewards, f)
+
+    print(
+        f"mean {round(np.mean(episode_rewards), 2)}, "
+        f"std {round(np.std(episode_rewards), 2)}, "
+        f"success rate {successes/len(all_results):.2f}"
     )
     return np.mean(episode_rewards)
 
@@ -551,10 +623,16 @@ def main():
         #env_cfg['seed'] += 1
         #print(f"Training agent {i}")
         #agents.append(nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg))
+    mp.set_start_method('spawn', force=True)
     agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
     # env_cfg_copy = env_cfg.copy()
-    #nn_eval(env_cfg, dan_agent, trials=100)
-    nn_eval(env_cfg, agent, trials=1)
+    nn_eval(env_cfg, agent, trials=10)
+    #parallel_nn_eval(
+    #    env_cfg,
+    #    agent,
+    #    trials=20,
+    #    results="parallel_eval_results",
+    #)
     #pickle.dump(dan_agent.model.eval_distances, open("hopper_eval_distances.pkl", 'wb'))
     # nn_eval_closed_loop(env_cfg, dan_agent)
     # env_cfg_copy['demo_pkl'] = "data/hopper-expert-v2_1_img.pkl"
