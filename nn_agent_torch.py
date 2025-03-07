@@ -323,7 +323,7 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
     def __init__(self, env_cfg, policy_cfg):
         self.datasets = {}
         # We may use different datasets for retrieval, neighbor state, and state delta
-        if env_cfg.get('mixed'):
+        if env_cfg.get('mixed', False):
             # Lookup dict for duplicate datasets
             paths = {}
             for dataset in ['retrieval', 'state', 'delta_state']:

@@ -1,0 +1,11 @@
+demo_hdf5: "data/coffee_task_D0/demo.hdf5"
+#neighbor_lookup_pkl: "data/stack-bc-neighbor-lookup.pkl"
+stack_size: 1
+robosuite: True
+name: Coffee_D0
+add_proprio: True
+cams:
+  - agentview
+val_cfg: "config/env/coffee_task_D0_kpt_val.yml"
+demo_pkl: "data/coffee_task_D0/100_kpt_train.pkl"
+type: 'keypoint'

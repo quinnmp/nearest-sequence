@@ -31,6 +31,7 @@ import copy
 import cv2
 import sys
 from functools import partial
+from worker_utils import worker_task
 
 DEBUG = False
 
@@ -40,6 +41,7 @@ def crop_and_resize(img, crop_corners):
     resized_img = cv2.resize(cropped_img, (width, height))
     return resized_img
 
+#@profile
 def single_trial_eval(config, agent, env, trial):
     img = config.get('img', False)
     env_name = config['name']
@@ -67,18 +69,19 @@ def single_trial_eval(config, agent, env, trial):
     done = False
     while not (steps > 0 and (done or eval_over(steps, config, env))):
         steps += 1
+        print(steps)
         
         height, width = 256, 256
         frame = np.empty((height, 0, 3))
         if len(cam_names) > 0:
             for cam in cam_names:
                 curr_frame = env.render(mode='rgb_array', height=height, width=width, camera_name=cam)
-                if cam == "agentview":
-                    curr_frame = crop_and_resize(curr_frame, [[0, 50], [256, 256]])
-                elif cam == "sideview":
-                    curr_frame = crop_and_resize(curr_frame, [[0, 150], [220, 256]])
-                elif cam == "frontview":
-                    curr_frame = crop_and_resize(curr_frame, [[38, 143], [220, 200]])
+                #if cam == "agentview":
+                #    curr_frame = crop_and_resize(curr_frame, [[0, 50], [256, 256]])
+                #elif cam == "sideview":
+                #    curr_frame = crop_and_resize(curr_frame, [[0, 150], [220, 256]])
+                #elif cam == "frontview":
+                #    curr_frame = crop_and_resize(curr_frame, [[38, 143], [220, 200]])
                 
                 frame = np.hstack((frame, curr_frame))
         else:
@@ -87,6 +90,7 @@ def single_trial_eval(config, agent, env, trial):
         video_frames.append(frame)
 
         action = get_action_from_obs(config, agent, env, observation, frame, obs_history=obs_history, numpy_action=agent.model.numpy_action, is_first_ob=(steps == 1))
+        print(action)
         observation, reward, done, info = env.step(action)[:4]
 
         if env_name == "push_t":
@@ -107,11 +111,11 @@ def single_trial_eval(config, agent, env, trial):
         video_frames = np.array(video_frames)
         height, width = video_frames.shape[1:3]
         tracks = transforms.convert_grid_coordinates(
-            tracks, (256, 256), (width, height)
+            tracks, (256, 256), (256, 256)
         )
         video_viz = viz_utils.paint_point_track(video_frames, tracks, visibles)
 
-        rgb_arrays_to_mp4(video_frames, f"data/{trial}.mp4")
+        rgb_arrays_to_mp4(video_viz, f"data/{trial}.mp4")
 
     success = 1 if 'success' in info else 0
 
@@ -241,59 +245,50 @@ def nn_eval(config, nn_agent, trials=10, results=None):
         f"Candidates {nn_agent.candidates}, lookback {nn_agent.lookback}, decay {nn_agent.decay}, ratio {nn_agent.final_neighbors_ratio}: "
         f"mean {round(np.mean(episode_rewards), 2)}, std {round(np.std(episode_rewards), 2)}"
     )
+
     return np.mean(episode_rewards)
 
-
-def worker_task(trial_idx, config, agent, env, gpu_id, results_queue):
-    try:
-        device = torch.device(f'cuda:{gpu_id}')
-        #torch.cuda.set_device(gpu_id)
-        
-        episode_reward, success = single_trial_eval(config, agent, env, trial_idx)
-        
-        results_queue.put((trial_idx, episode_reward, success))
-        
-        del agent
-        torch.cuda.empty_cache()
-        
-        return True
-    except Exception as e:
-        results_queue.put((f"error_{trial_idx}", str(e), 0))
-        return False
-
-def parallel_nn_eval(config, agent, trials=10, results=None):
+def parallel_nn_eval(env_cfg, policy_cfg, trials=10, results=None):
     num_gpus = torch.cuda.device_count()
-    env = construct_env(config)
+    print(f"Doing parallel evaluation with {num_gpus} GPUs")
 
-    manager = mp.Manager()
+    # Get spawn context but don't use it with 'with'
+    ctx = mp.get_context('spawn')
+    manager = ctx.Manager()
     results_queue = manager.Queue()
 
-    pool = mp.Pool(processes=num_gpus)
-    async_results = []
-
-    for i in range(trials):
-        gpu_id = i % num_gpus
-        
-        async_result = pool.apply_async(
-            worker_task, 
-            args=(i, config, agent, env, gpu_id, results_queue)
+    # Launch a separate process for each GPU
+    processes = []
+    for gpu_id in range(num_gpus):
+        # Create process that will handle multiple trials
+        p = ctx.Process(
+            target=worker_task,
+            args=(gpu_id, env_cfg, policy_cfg, trials, num_gpus, results_queue)
         )
-        async_results.append(async_result)
+        processes.append(p)
+        p.start()
 
-    pool.close()
-    pool.join()
-    
+    # Wait for all processes to complete
+    for p in processes:
+        p.join()
+
+    # Collect all results from the queue
     all_results = []
     error_results = []
-    queue_size = results_queue.qsize() if hasattr(results_queue, 'qsize') else "unknown"
 
-    while not results_queue.empty():
+    # Collect exactly the number of expected results
+    expected_results = trials
+    collected = 0
+    while collected < expected_results and not results_queue.empty():
         result = results_queue.get()
+        collected += 1
+
         if isinstance(result[0], str) and result[0].startswith("error_"):
             error_results.append(result)
         else:
             all_results.append(result)
 
+    # Process results
     for error in error_results:
         print(f"Error in trial {error[0]}: {error[1]}")
 
@@ -310,6 +305,7 @@ def parallel_nn_eval(config, agent, trials=10, results=None):
         f"std {round(np.std(episode_rewards), 2)}, "
         f"success rate {successes/len(all_results):.2f}"
     )
+
     return np.mean(episode_rewards)
 
 def single_trial_eval_ensemble(config, agents, env, trial):
@@ -603,6 +599,7 @@ def nn_eval_open_loop(config, nn_agent_dan, nn_agent_bc):
                 ax.legend(loc='lower left')
                 writer.grab_frame()
 
+#@profile
 def main():
     parser = ArgumentParser()
     parser.add_argument("env_config_path", help="Path to environment config file")
@@ -625,8 +622,8 @@ def main():
         #agents.append(nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg))
     mp.set_start_method('spawn', force=True)
     agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
-    # env_cfg_copy = env_cfg.copy()
-    nn_eval(env_cfg, agent, trials=10)
+    #policy_cfg['cond_force_retrain'] = False
+    nn_eval(env_cfg, agent, trials=1, results="Square_D0/ns_dan_bc_kpt")
     #parallel_nn_eval(
     #    env_cfg,
     #    agent,

@@ -1,0 +1,10 @@
+demo_hdf5: "data/square_task_D0/demo.hdf5"
+#neighbor_lookup_pkl: "data/stack-bc-neighbor-lookup-val.pkl"
+stack_size: 1
+robosuite: True
+name: Coffee_D0
+add_proprio: True
+cams:
+  - agentview
+demo_pkl: "data/coffee_task_D0/100_kpt_val.pkl"
+type: 'keypoint'

@@ -23,7 +23,7 @@ def objective(trial, env_config_path, policy_config_path):
 
     nn_agent_instance = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
 
-    result = nn_eval(env_cfg, nn_agent_instance, trials=10)
+    result = nn_eval(env_cfg, nn_agent_instance, trials=20)
     
     return result
 
@@ -56,11 +56,11 @@ def optimize(env_config_path, policy_config_path):
     results = []
     result_file_name = "hopper_ns_dan_bc"
     for params in best_k_params:
-        policy_cfg['epochs'] = params['epochs']
-        #policy_cfg['k_neighbors'] = params['k_neighbors']
-        #policy_cfg['lookback'] = params['lookback']
-        #policy_cfg['decay_rate'] = params['decay_rate']
-        #policy_cfg['ratio'] = params['ratio']
+        #policy_cfg['epochs'] = params['epochs']
+        policy_cfg['k_neighbors'] = params['k_neighbors']
+        policy_cfg['lookback'] = params['lookback']
+        policy_cfg['decay_rate'] = params['decay_rate']
+        policy_cfg['ratio'] = params['ratio']
         agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
         final_scores.append(nn_eval(env_cfg, agent, trials=100, results=result_file_name))
         with open(f"results/{result_file_name}.pkl", 'rb') as f:

@@ -1,0 +1,19 @@
+demo_hdf5: "data/square_task_D0/demo.hdf5"
+#neighbor_lookup_pkl: "data/stack-bc-neighbor-lookup-val.pkl"
+stack_size: 1
+robosuite: True
+name: Square_D0
+add_proprio: True
+cams:
+  - agentview
+  - sideview
+mixed: True
+retrieval:
+  demo_pkl: "data/square_task_D0/square_task_D0_100_kpt_val.pkl"
+  type: 'keypoint'
+state:
+  demo_pkl: "data/square_task_D0/square_task_D0_100_kpt_val.pkl"
+  type: 'keypoint'
+delta_state:
+  demo_pkl: "data/square_task_D0/square_task_D0_100_kpt_val.pkl"
+  type: 'keypoint'

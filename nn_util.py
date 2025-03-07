@@ -333,6 +333,7 @@ def get_proprio(config, obs):
     else:
         return obs
 
+#@profile
 def get_action_from_obs(config, model, env, observation, frame, obs_history=None, numpy_action=True, is_first_ob=False):
     is_robosuite = config.get('robosuite', False)
     stack_size = config.get('stack_size', 10)
@@ -392,6 +393,7 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
         
                 obs = stack_with_previous(obs_history, stack_size=stack_size)
 
+    print(obs)
     action = model.get_action(obs)
 
     return action
@@ -399,11 +401,8 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
 def get_keypoint_viz(cam_names):
     global keypoint_viz
 
-    tracks = {}
-    visibles = {}
-    for cam in cam_names:
-        tracks[cam] = np.concatenate([x['tracks'][0] for x in keypoint_viz[cam]], axis=1)
-        visibles[cam] = np.concatenate([x['visibles'][0] for x in keypoint_viz[cam]], axis=1)
+    tracks = np.concatenate([x['tracks'][0] for x in keypoint_viz], axis=1)
+    visibles = np.concatenate([x['visibles'][0] for x in keypoint_viz], axis=1)
 
     return tracks, visibles
 
@@ -471,9 +470,9 @@ def eval_over(steps, config, env_instance):
     is_metaworld = config.get('metaworld', False)
     is_robosuite = config.get('robosuite', False)
 
-    return is_metaworld and steps >= 500 \
+    return is_metaworld and steps >= 1000 \
         or env_name == "push_t" and steps >= 200 \
-        or is_robosuite and steps >= 200 \
+        or is_robosuite and steps >= 300 \
         or env_name == "maze2d-umaze-v1" and np.linalg.norm(env_instance._get_obs()[0:2] - env_instance._target) <= 0.5 \
         or steps >= 1000
 
@@ -540,18 +539,24 @@ def get_query_points(camera, env_name, env):
                     np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
                 ]
             )
-    if env_name == 'Square_D0':
-        if camera == "agentview":
+    elif env_name == 'Square_D0':
+        if camera == "agentview" or camera == "sideview":
             query_points = np.array(
                 [
-                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g0", camera_name=camera, offset=np.array([0, 0, 0.5]), obj_size_ratio=True))),
-                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g1", camera_name=camera, offset=np.array([0, 0, 0.5]), obj_size_ratio=True))),
-                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g2", camera_name=camera, offset=np.array([0, 0, 0.5]), obj_size_ratio=True))),
-                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g3", camera_name=camera, offset=np.array([0, 0, 0.5]), obj_size_ratio=True))),
-                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g4", camera_name=camera, offset=np.array([0, 0, 0.5]), obj_size_ratio=True))),
+                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g0", camera_name=camera, offset=np.array([0, 0, 1.0]), obj_size_ratio=True))),
+                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g1", camera_name=camera, offset=np.array([0, 0, 1.0]), obj_size_ratio=True))),
+                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g2", camera_name=camera, offset=np.array([0, 0, 1.0]), obj_size_ratio=True))),
+                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g3", camera_name=camera, offset=np.array([0, 0, 1.0]), obj_size_ratio=True))),
+                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g4", camera_name=camera, offset=np.array([0, 0, 1.0]), obj_size_ratio=True))),
                 ]
             )
-
+    elif env_name == 'Coffee_D0':
+        #if camera == "agentview":
+        query_points = np.array(
+            [
+                np.hstack(([0], get_object_pixel_coords(env.env.sim, "coffee_pod_g0", camera_name=camera, offset=np.array([0, 0, 0.0]), obj_size_ratio=True))),
+            ]
+        )
 
     if len(query_points) == 0:
         print("No query points found!")
@@ -560,6 +565,7 @@ def get_query_points(camera, env_name, env):
         pass
     return query_points
 
+#@profile
 def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=False, proprio_state=[], cam_names=[]):
     global tapir, query_features, causal_state, online_model_init, online_model_predict, last_tracks, keypoint_viz, frame_tensor_cpu, ret_tensor, proprio_tensor_cpu
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -580,10 +586,11 @@ def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=Fal
             causal_state = tapir.construct_initial_causal_state(
                 all_query_points.shape[0], len(query_features.resolutions) - 1
             )
-            last_tracks = []
+        last_tracks = []
+        keypoint_viz = []
 
         proprio_tensor_cpu = torch.empty(len(proprio_state), dtype=torch.float64, device='cpu', pin_memory=True)
-        ret_tensor = torch.empty(len(proprio_state) + len(query_points) * 4, device=device, dtype=torch.float64)
+        ret_tensor = torch.empty(len(proprio_state) + len(all_query_points) * 4, device=device, dtype=torch.float64)
 
     tracks, visibles, causal_state = online_model_predict(
         frames=frame,
@@ -605,6 +612,8 @@ def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=Fal
 
     last_tracks = tracks_r
 
+    proprio_tensor_cpu.copy_(torch.from_numpy(proprio_state))
+    ret_tensor[:len(proprio_state)] = proprio_tensor_cpu.to(device, non_blocking=True)
     ret_tensor[len(proprio_state):len(proprio_state) + len(tracks_r) * 2] = torch.from_numpy(np.array(tracks_flat))
     ret_tensor[len(proprio_state) + len(tracks_r) * 2:len(proprio_state) + len(tracks_r) * 3] = angles
     ret_tensor[len(proprio_state) + len(tracks_r) * 3:len(proprio_state) + len(tracks_r) * 4] = magnitudes

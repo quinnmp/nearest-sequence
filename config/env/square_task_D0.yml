@@ -1,0 +1,6 @@
+demo_pkl: "data/square_task_D0/square_task_D0_100.pkl"
+demo_hdf5: "data/square_task_D0/demo.hdf5"
+neighbor_lookup_pkl: "data/square-bc-neighbor-lookup.pkl"
+stack_size: 1
+robosuite: True
+name: Square_D0

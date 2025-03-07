@@ -39,6 +39,7 @@ from tapnet.utils import transforms
 from tapnet.utils import viz_utils
 import jax
 from rgb_arrays_to_mp4 import rgb_arrays_to_mp4
+from nn_util import get_object_pixel_coords, get_query_points, fast_2d_angles_and_magnitudes_jax
 
 # Load the pre-trained DinoV2 model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -88,76 +89,6 @@ def process_rgb_array(rgb_array):
         rgb_array = rgb_array[:, :, :3]
 
     return media.resize_image(rgb_array, (256, 256))
-
-def get_object_pixel_coords(sim, obj_name, camera_name="agentview", offset=np.array([0, 0, 0]), obj_size_ratio=False):
-    obj_id = sim.model.geom_name2id(obj_name)
-    obj_size = sim.model.geom_size[obj_id]
-    if obj_size_ratio:
-        obj_pos = sim.data.geom_xpos[obj_id] + obj_size * offset
-    else:
-        obj_pos = sim.data.geom_xpos[obj_id] + offset
-
-    cam_id = sim.model.camera_name2id(camera_name)
-    cam_pos = sim.data.cam_xpos[cam_id]
-    cam_mat = sim.data.cam_xmat[cam_id].reshape(3, 3)
-
-    obj_pos_cam = cam_mat.T @ (obj_pos - cam_pos)
-
-    height, width = 256, 256
-    fovy = sim.model.cam_fovy[cam_id]
-    f = (height / 2) / np.tan(np.deg2rad(fovy) / 2)
-
-    x, y, z = obj_pos_cam
-
-    u = int(width / 2 + (f * x / z))
-    v = int(height / 2 - (f * y / z))
-
-    # y, x
-    return (height - v, width - u)
-
-def get_query_points(camera, env_name, env):
-    query_points = []
-    if env_name == 'Stack_D0':
-        if camera == "sideview":
-            query_points = np.array(
-                [
-                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
-                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
-                ]
-            )
-        elif camera == "frontview":
-            query_points = np.array(
-                [
-                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
-                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
-                ]
-            )
-        elif camera == "agentview":
-            query_points = np.array(
-                [
-                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeA_g0", camera_name=camera))),
-                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "cubeB_g0", camera_name=camera))),
-                ]
-            )
-    if env_name == 'Square_D0':
-        if camera == "agentview":
-            query_points = np.array(
-                [
-                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g0", camera_name=camera, offset=np.array([0, 0, 0.5]), obj_size_ratio=True))),
-                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g1", camera_name=camera, offset=np.array([0, 0, 0.5]), obj_size_ratio=True))),
-                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g2", camera_name=camera, offset=np.array([0, 0, 0.5]), obj_size_ratio=True))),
-                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g3", camera_name=camera, offset=np.array([0, 0, 0.5]), obj_size_ratio=True))),
-                    np.hstack(([0], get_object_pixel_coords(env.env.sim, "SquareNut_g4", camera_name=camera, offset=np.array([0, 0, 0.5]), obj_size_ratio=True))),
-                ]
-            )
-
-
-    if len(query_points) == 0:
-        print("No query points found!")
-    else:
-        #print(query_points)
-        pass
-    return query_points
 
 @partial(jax.jit, static_argnums=())
 def fast_2d_angles_and_magnitudes_jax(tracks_r, last_tracks_r):
@@ -224,8 +155,8 @@ ObsUtils.initialize_obs_utils_with_obs_specs(obs_modality_specs=dummy_spec)
 env_meta = get_env_metadata_from_dataset(dataset_path=env_cfg['demo_hdf5'])
 env = EnvUtils.create_env_from_metadata(env_meta=env_meta, render=True, render_offscreen=True)
 print([env.env.sim.model.geom_id2name(i) for i in range(env.env.sim.model.ngeom)])
+print([env.env.sim.model.camera_id2name(i) for i in range(env.env.sim.model.ncam)])
 #camera_names = [env.env.sim.model.camera_id2name(i) for i in range(env.env.sim.model.ncam)]
-#camera_names = ['agentview', 'sideview', 'frontview']
 camera_names = ['agentview']
 env_name = env_meta['env_name']
 render_image_names = RobomimicUtils.get_default_env_cameras(env_meta=env_meta)
