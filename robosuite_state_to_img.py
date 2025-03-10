@@ -134,7 +134,7 @@ ObsUtils.initialize_obs_utils_with_obs_specs(obs_modality_specs=dummy_spec)
 
 env_meta = get_env_metadata_from_dataset(dataset_path=env_cfg['demo_hdf5'])
 env = EnvUtils.create_env_from_metadata(env_meta=env_meta, render=True, render_offscreen=True)
-camera_names = ['agentview', 'sideview', 'frontview']
+camera_names = ['agentview']
 render_image_names = RobomimicUtils.get_default_env_cameras(env_meta=env_meta)
 
 height, width = 256, 256

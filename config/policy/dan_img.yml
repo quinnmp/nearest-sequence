@@ -1,5 +1,5 @@
 method: cond
-k_neighbors: 749
+k_neighbors: 250
 lookback: 1
 decay_rate: 0
 

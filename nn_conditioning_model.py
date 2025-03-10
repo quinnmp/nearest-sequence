@@ -281,9 +281,9 @@ class KNNExpertDataset(Dataset):
 
             self.distance_scaler = FastScaler()
             self.distance_scaler.fit(all_distances)
+            pickle.dump(self.distance_scaler.transform(all_distances), open("stack_train_distances_dino.pkl", 'wb'))
             del all_distances
 
-            #pickle.dump(self.distance_scaler.transform(all_distances), open("hopper_train_distances.pkl", 'wb'))
             if save_neighbor_lookup:
                 pickle.dump({"lookup": self.neighbor_lookup, "distance_scaler": self.distance_scaler}, open(neighbor_lookup_pkl, 'wb'))
 
@@ -429,10 +429,10 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                     return best_check['model']
 
                 
-                print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+                #print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
             model.train()
         else:
-            #print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}")
+            #print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss}")
             pass
 
     if isinstance(model, nn.DataParallel):

@@ -30,10 +30,14 @@ dependencies:
     - scikit-optimize==0.10.2
     - numpy==1.26.4
     - numba==0.60.0
+    - scikit-learn==1.6.0 
     # Just for Push T
     - pymunk==6.2.1
     - Shapely==1.8.4
     - opencv-python==4.10.0.84
+    # Just for keypoints
+    - jax==0.5.0
+    - jaxlib==0.5.0
     # GitHub dependencies
     - git+https://github.com/aravindr93/mjrl@3871d93763d3b49c4741e6daeaebbc605fe140dc
     - git+https://github.com/personalrobotics/d3rlpy.git@e89a7da6e4c1020f5cf999346c0ebd32e0bbc7c1#egg=d3rlpy

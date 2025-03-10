@@ -69,7 +69,6 @@ def single_trial_eval(config, agent, env, trial):
     done = False
     while not (steps > 0 and (done or eval_over(steps, config, env))):
         steps += 1
-        print(steps)
         
         height, width = 256, 256
         frame = np.empty((height, 0, 3))
@@ -90,7 +89,6 @@ def single_trial_eval(config, agent, env, trial):
         video_frames.append(frame)
 
         action = get_action_from_obs(config, agent, env, observation, frame, obs_history=obs_history, numpy_action=agent.model.numpy_action, is_first_ob=(steps == 1))
-        print(action)
         observation, reward, done, info = env.step(action)[:4]
 
         if env_name == "push_t":
@@ -233,6 +231,7 @@ def nn_eval(config, nn_agent, trials=10, results=None):
     successes = 0
 
     for trial in range(trials):
+        print(trial)
         episode_reward, success = single_trial_eval(config, nn_agent, env, trial)
         episode_rewards.append(episode_reward)
         successes += success
@@ -630,7 +629,7 @@ def main():
     #    trials=20,
     #    results="parallel_eval_results",
     #)
-    #pickle.dump(dan_agent.model.eval_distances, open("hopper_eval_distances.pkl", 'wb'))
+    pickle.dump(agent.model.eval_distances, open("stack_eval_distances_dino.pkl", 'wb'))
     # nn_eval_closed_loop(env_cfg, dan_agent)
     # env_cfg_copy['demo_pkl'] = "data/hopper-expert-v2_1_img.pkl"
     # img_agent = nn_agent.NNAgentEuclidean(env_cfg_copy, policy_cfg)

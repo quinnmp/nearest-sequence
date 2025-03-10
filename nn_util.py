@@ -37,6 +37,11 @@ import mimicgen.utils.robomimic_utils as RobomimicUtils
 from mimicgen.utils.misc_utils import add_red_border_to_frame
 from mimicgen.configs import MG_TaskSpec
 import jax
+jax.config.update("jax_disable_jit", True)
+jax.config.update('jax_default_prng_impl', 'threefry2x32')
+jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_disable_most_optimizations", True)
+jax.config.update("jax_default_matmul_precision", "highest")
 import mediapy as media
 import numpy as np
 from tapnet.models import tapir_model
@@ -143,6 +148,9 @@ def load_and_scale_data(path, rot_indices, weights, ob_type='state', use_torch=F
 
 def online_model_init_func(frames, query_points):
     """Initialize query features for the query points."""
+    #jax.config.update('jax_default_prng_impl', 'threefry2x32')  # Use a deterministic PRNG
+    #key = jax.random.PRNGKey(42)
+    #jax.config.update("jax_enable_x64", True)
     frames = model_utils.preprocess_frames(frames)[np.newaxis, np.newaxis, :, :, :]
     feature_grids = tapir.get_feature_grids(frames, is_training=False)
     query_features = tapir.get_query_features(
@@ -383,7 +391,7 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
             case 'dino':
                 obs = frame_to_dino(frame, proprio_state=proprio_state, numpy_action=numpy_action)
             case 'keypoint':
-                obs = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=(len(obs_history) == 0), proprio_state=proprio_state, cam_names=cam_names)
+                obs = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=is_first_ob, proprio_state=proprio_state, cam_names=cam_names)
 
         if stack:
             assert obs_history is not None
@@ -393,7 +401,6 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
         
                 obs = stack_with_previous(obs_history, stack_size=stack_size)
 
-    print(obs)
     action = model.get_action(obs)
 
     return action
@@ -474,7 +481,7 @@ def eval_over(steps, config, env_instance):
         or env_name == "push_t" and steps >= 200 \
         or is_robosuite and steps >= 300 \
         or env_name == "maze2d-umaze-v1" and np.linalg.norm(env_instance._get_obs()[0:2] - env_instance._target) <= 0.5 \
-        or steps >= 1000
+        or steps >= 1000 \
 
 def crop_obs_for_env(obs, env, env_instance=None):
     if env == "ant-expert-v2":
@@ -582,15 +589,19 @@ def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=Fal
             query_points[:, 2] += i * width
             all_query_points = np.vstack((all_query_points, query_points))
 
-            query_features = online_model_init(frame, all_query_points[None])
-            causal_state = tapir.construct_initial_causal_state(
-                all_query_points.shape[0], len(query_features.resolutions) - 1
-            )
+        pickle.dump((frame, all_query_points), open("jax_test.pkl", 'wb'))
+        query_features = online_model_init(frame, all_query_points[None])
+        causal_state = tapir.construct_initial_causal_state(
+            all_query_points.shape[0], len(query_features.resolutions) - 1
+        )
+        #for array in query_features.lowres:
+            #print(hashlib.sha256(array.tobytes()).hexdigest())
         last_tracks = []
         keypoint_viz = []
 
         proprio_tensor_cpu = torch.empty(len(proprio_state), dtype=torch.float64, device='cpu', pin_memory=True)
         ret_tensor = torch.empty(len(proprio_state) + len(all_query_points) * 4, device=device, dtype=torch.float64)
+
 
     tracks, visibles, causal_state = online_model_predict(
         frames=frame,

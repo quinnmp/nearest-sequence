@@ -72,6 +72,8 @@ class NNAgent:
             if os.path.exists(model_path) and not policy_cfg.get('cond_force_retrain', False):
                 # Load the model if it exists
                 checkpoint = torch.load(model_path, weights_only=False)
+                sd = checkpoint['model'].state_dict()
+
                 self.model = checkpoint['model']
             else:
                 def worker_init_fn(worker_id):
