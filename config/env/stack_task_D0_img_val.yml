@@ -3,7 +3,7 @@ type: 'dino'
 demo_hdf5: "data/stack_task_D0/demo.hdf5"
 stack_size: 1
 robosuite: True
-name: Square_D1
+name: Stack_D0
 add_proprio: True
 cams:
   - agentview

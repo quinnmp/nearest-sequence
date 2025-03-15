@@ -83,7 +83,7 @@ class DeepSetsActionCombiner(nn.Module):
         return output
 
 class KNNConditioningModel(nn.Module):
-    def __init__(self, state_dim, delta_state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False, bc_baseline=False, mlp_combine=False, add_action=False, reduce_delta_s=False, numpy_action=True):
+    def __init__(self, state_dim, delta_state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False, bc_baseline=False, mlp_combine=False, add_action=False, reduce_delta_s=False, numpy_action=True, gaussian_action=False):
         super(KNNConditioningModel, self).__init__()
         self.state_dim = state_dim
         self.delta_state_dim = delta_state_dim
@@ -98,6 +98,7 @@ class KNNConditioningModel(nn.Module):
         self.add_action = add_action
         self.reduce_delta_s = reduce_delta_s
         self.numpy_action = numpy_action
+        self.gaussian_action = gaussian_action
         
         self.distance_size = delta_state_dim if not euclidean else 1
         if add_action:
@@ -138,13 +139,13 @@ class KNNConditioningModel(nn.Module):
             ])
             in_dim = hidden_dim
 
-        layers.append(nn.Linear(hidden_dims[-1], action_dim).to(device))
+        layers.append(nn.Linear(hidden_dims[-1], action_dim if not gaussian_action else action_dim * 2).to(device))
         self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
         
         if mlp_combine:
             self.action_combiner = DeepSetsActionCombiner(
-                action_dim=action_dim,
-                hidden_dim=32,  # Can be tuned
+                action_dim=action_dim if not gaussian_action else action_dim * 2,
+                hidden_dim=64, # Can be tuned
             )
 
         self.eval_distances = []
@@ -222,6 +223,9 @@ class KNNConditioningModel(nn.Module):
             interleaved = torch.cat([states, actions, distances], dim=2).view(batch_size, self.input_dim)
             interleaved = interleaved.to(dtype=torch.float32)
             output = self.model(interleaved)
+
+        if self.gaussian_action:
+            output = output[:, :self.action_dim]
 
         if self.training_mode:
             return output
@@ -372,7 +376,7 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
     )
 
     best_val_loss = float('inf')
-    early_stopping_patience = 12
+    early_stopping_patience = 13
     early_stopping_counter = 0
     
     for epoch in range(num_epochs):
@@ -405,6 +409,11 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
             num_val_batches = 0
             with torch.no_grad():
                 for neighbor_states, neighbor_actions, neighbor_distances, actions, weights in val_loader:
+                    neighbor_states = train_loader.dataset.agent.datasets['state'].obs_scaler.transform(val_loader.dataset.agent.datasets['state'].obs_scaler.inverse_transform(neighbor_states))
+                    actions = train_loader.dataset.agent.datasets['state'].act_scaler.transform(val_loader.dataset.agent.datasets['state'].act_scaler.inverse_transform(actions))
+                    if not train_loader.dataset.bc_baseline:
+                        neighbor_actions = train_loader.dataset.agent.datasets['state'].act_scaler.transform(val_loader.dataset.agent.datasets['state'].act_scaler.inverse_transform(neighbor_actions))
+                        neighbor_distances = train_loader.dataset.agent.datasets['delta_state'].obs_scaler.transform(val_loader.dataset.agent.datasets['delta_state'].obs_scaler.inverse_transform(neighbor_distances))
                     predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
                     loss = criterion(predicted_actions, actions)
                     val_loss += loss.detach()
@@ -424,15 +433,15 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                     early_stopping_counter += 1
 
                 if early_stopping_counter >= early_stopping_patience:
-                    #print(f'Recommend early stopping after {epoch+1 - early_stopping_patience} epochs')
+                    print(f'Recommend early stopping after {epoch+1 - early_stopping_patience} epochs')
                     torch.save(best_check, model_path)
                     return best_check['model']
 
                 
-                #print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+                print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
             model.train()
         else:
-            #print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss}")
+            print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss}")
             pass
 
     if isinstance(model, nn.DataParallel):

@@ -37,11 +37,7 @@ import mimicgen.utils.robomimic_utils as RobomimicUtils
 from mimicgen.utils.misc_utils import add_red_border_to_frame
 from mimicgen.configs import MG_TaskSpec
 import jax
-jax.config.update("jax_disable_jit", True)
-jax.config.update('jax_default_prng_impl', 'threefry2x32')
-jax.config.update("jax_enable_x64", True)
-jax.config.update("jax_disable_most_optimizations", True)
-jax.config.update("jax_default_matmul_precision", "highest")
+jax.config.update("jax_default_matmul_precision", "highest") # Crucial for determinism
 import mediapy as media
 import numpy as np
 from tapnet.models import tapir_model
@@ -52,6 +48,8 @@ from fast_scaler import FastScaler
 from PIL import Image
 from typing import List, Dict
 import cv2
+from groundingdino.util.inference import load_model, load_image, predict, annotate
+import groundingdino.datasets.transforms as T
 DEBUG = False
 
 TWO_PI = 2 * np.pi
@@ -59,11 +57,19 @@ INV_TWO_PI = 1 / TWO_PI
 
 # To be populated if needed
 dino_model = None
-device = None
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 img_transform = None
 img_env = None
 camera_name = None
 pca = None
+
+grounding_dino_model = None
+last_grounding_results = {}
+vision_ob = torch.tensor([], device=device)
+trackers = {}
+last_boxes = {}
+BOX_TRESHOLD = 0.35
+TEXT_TRESHOLD = 0.25
 
 tapir = None
 online_model_init = None
@@ -259,6 +265,12 @@ def get_joint_pixel_coords(sim, joint_name, body_name, camera_name="track"):
     # y, x
     return (height - v, width - u)
 
+def crop_and_resize(img, crop_corners):
+    width, height = img.shape[:2]
+    cropped_img = img[crop_corners[0][1]:crop_corners[1][1], crop_corners[0][0]:crop_corners[1][0], :]
+    resized_img = cv2.resize(cropped_img, (width, height))
+    return resized_img
+
 def construct_env(config):
     global pca
     is_robosuite = config.get('robosuite', False)
@@ -341,12 +353,21 @@ def get_proprio(config, obs):
     else:
         return obs
 
+def reset_vision_ob():
+    global vision_ob, trackers
+    vision_ob = torch.tensor([], device=device)
+    trackers = {}
+
 #@profile
 def get_action_from_obs(config, model, env, observation, frame, obs_history=None, numpy_action=True, is_first_ob=False):
+    global vision_ob
     is_robosuite = config.get('robosuite', False)
     stack_size = config.get('stack_size', 10)
     env_name = config.get('name', 10)
     cam_names = config.get("cams", [])
+
+    if is_first_ob:
+        reset_vision_ob()
 
     if config.get('add_proprio', False):
         proprio_state = get_proprio(config, observation)
@@ -389,9 +410,9 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
             case 'state':
                 obs = crop_obs_for_env(observation, env_name, env_instance=env)
             case 'dino':
-                obs = frame_to_dino(frame, proprio_state=proprio_state, numpy_action=numpy_action)
-            case 'keypoint':
-                obs = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=is_first_ob, proprio_state=proprio_state, cam_names=cam_names)
+                obs = frame_to_obj_centric_dino(env_name, frame, proprio_state=proprio_state, numpy_action=numpy_action)
+            case 'keypoint' | 'semantic_keypoint':
+                obs = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=is_first_ob, proprio_state=proprio_state, cam_names=cam_names, semantic=(obs_type == "semantic_keypoint"))
 
         if stack:
             assert obs_history is not None
@@ -418,7 +439,67 @@ def stack_with_previous(obs_list, stack_size):
         return np.concatenate([obs_list[0]] * (stack_size - len(obs_list)) + obs_list, axis=0)
     return np.concatenate(obs_list[-stack_size:], axis=0)
 
-def frame_to_dino(rgb_array, proprio_state=[], numpy_action=True):
+#@profile
+def frame_to_obj_centric_dino(env_name, rgb_array, proprio_state=[], numpy_action=True):
+    global proprio_tensor_cpu, trackers, last_boxes, vision_ob
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    if len(proprio_tensor_cpu) == 0:
+        proprio_tensor_cpu = torch.empty(len(proprio_state), dtype=torch.float64, device='cpu', pin_memory=True)
+    proprio_tensor_cpu.copy_(torch.from_numpy(proprio_state))
+
+    obs = proprio_tensor_cpu.to(device, non_blocking=True)
+
+    if len(vision_ob) == 0:
+        if len(trackers) == 0:
+            frame_and_box = get_semantic_frame_and_box("", env_name, rgb_array)
+            trackers = {}
+            for (_, box, obj) in frame_and_box:
+                # Center to top left
+                box[0] -= box[2] / 2
+                box[1] -= box[3] / 2
+
+                trackers[obj] = cv2.TrackerCSRT_create()
+                trackers[obj].init(rgb_array, box.to(torch.uint8).tolist())
+                last_boxes[obj] = box
+
+        else:
+            frame_and_box = []
+            for obj in trackers.keys():
+                success, box = trackers[obj].update(rgb_array)
+
+                if not success:
+                    box = last_boxes[obj]
+
+                frame_and_box.append((rgb_array, torch.tensor(box, device=device), obj))
+
+        for (frame, box, obj) in frame_and_box:
+            box_xy, last_box_xy = box[:2], last_boxes[obj][:2]
+            diff = box_xy - last_box_xy
+            dots = torch.sum(box_xy * last_box_xy)
+
+            norm_a = torch.sqrt(torch.sum(box_xy**2))
+            norm_b = torch.sqrt(torch.sum(last_box_xy**2))
+
+            cos_theta = dots / (norm_a * norm_b)
+            cos_theta = torch.clamp(cos_theta, -1.0, 1.0)
+
+            angle_and_mag = torch.stack([
+                torch.arccos(cos_theta),
+                torch.sqrt(torch.sum(diff**2))
+            ])
+
+            last_boxes[obj] = box
+            dino_features = frame_to_dino(frame, numpy_action=False)
+            #vision_ob = torch.hstack([vision_ob, box_xy, angle_and_mag, dino_features])
+            vision_ob = torch.hstack([vision_ob, box_xy, dino_features])
+
+    obs = torch.hstack([obs, vision_ob])
+
+    return obs
+
+#@profile
+def frame_to_dino(rgb_array, proprio_state=np.array([]), numpy_action=True):
     global dino_model, device, img_transform, pca, proprio_tensor_cpu, frame_tensor_cpu, ret_tensor
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -426,7 +507,7 @@ def frame_to_dino(rgb_array, proprio_state=[], numpy_action=True):
         # Load the pre-trained DinoV2 model
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="xFormers is not available*") 
-            dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14', verbose=False).to(device)
+            dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', verbose=False).to(device)
 
         dino_model.eval()
 
@@ -443,7 +524,10 @@ def frame_to_dino(rgb_array, proprio_state=[], numpy_action=True):
     # Convert numpy array to PIL Image
     image = Image.fromarray((rgb_array * 255).astype(np.uint8))
     image = img_transform(image)
-    image = np.array(image.getdata()).reshape(14 * 36, 14 * 36, 3).transpose((2, 0, 1))
+    image = np.array(image)
+    image = image.reshape(14 * 36, 14 * 36, 3)
+    image = image.transpose((2, 0, 1))
+
     if len(frame_tensor_cpu) == 0:
         frame_tensor_cpu = torch.empty(image.shape, device='cpu', pin_memory=True)
     frame_tensor_cpu.copy_(torch.from_numpy(image).float() / 255.0)
@@ -465,10 +549,13 @@ def frame_to_dino(rgb_array, proprio_state=[], numpy_action=True):
     else:
         if len(proprio_tensor_cpu) == 0:
             proprio_tensor_cpu = torch.empty(len(proprio_state), dtype=torch.float64, device='cpu', pin_memory=True)
+        if len(ret_tensor) == 0:
             ret_tensor = torch.empty(len(proprio_state) + len(features[0]), device=features.get_device(), dtype=torch.float64)
-        proprio_tensor_cpu.copy_(torch.from_numpy(proprio_state))
 
-        ret_tensor[:len(proprio_state)] = proprio_tensor_cpu.to(features.get_device(), non_blocking=True)
+        if len(proprio_state) > 0:
+            proprio_tensor_cpu.copy_(torch.from_numpy(proprio_state))
+            ret_tensor[:len(proprio_state)] = proprio_tensor_cpu.to(features.get_device(), non_blocking=True)
+
         ret_tensor[len(proprio_state):] = features[0]
         return ret_tensor
 
@@ -479,7 +566,7 @@ def eval_over(steps, config, env_instance):
 
     return is_metaworld and steps >= 1000 \
         or env_name == "push_t" and steps >= 200 \
-        or is_robosuite and steps >= 300 \
+        or is_robosuite and steps >= 200 \
         or env_name == "maze2d-umaze-v1" and np.linalg.norm(env_instance._get_obs()[0:2] - env_instance._target) <= 0.5 \
         or steps >= 1000 \
 
@@ -492,7 +579,7 @@ def crop_obs_for_env(obs, env, env_instance=None):
         return np.concatenate((obs[:9], obs[18:27], obs[-2:len(obs)]))
     elif env == "drawer-close-v2":
         return np.concatenate((obs[:7], obs[18:25], obs[-3:len(obs)]))
-    elif env == "Square_D1":
+    elif env == "Square_D1" or env == "Stack_D0":
         obj = obs['object']
         ee_pos = obs['robot0_eef_pos']
         ee_pos_vel = obs['robot0_eef_vel_lin']
@@ -521,6 +608,114 @@ def fast_2d_angles_and_magnitudes_jax(tracks_r, last_tracks_r):
         jnp.arccos(cos_theta),
         jnp.sqrt(jnp.sum(diff**2, axis=1))
     ])
+
+def get_query_points_semantic(camera, env_name, frame):
+    global grounding_dino_model
+    if grounding_dino_model == None:
+        grounding_dino_model = load_model("GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py", "GroundingDINO/weights/groundingdino_swint_ogc.pth")
+
+    transform = T.Compose(
+        [
+            T.RandomResize([800], max_size=1333),
+            T.ToTensor(),
+            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]
+    )
+    query_points = []
+    if env_name == 'Stack_D0':
+        frame, _ = transform(Image.fromarray(frame), None)
+        boxes, logits, phrases = predict(
+            model=grounding_dino_model,
+            image=frame,
+            caption="red block . green block",
+            box_threshold=BOX_TRESHOLD,
+            text_threshold=TEXT_TRESHOLD
+        )
+        boxes_dict = {}
+        for i, phrase in enumerate(phrases):
+            if phrase in boxes_dict.keys():
+                boxes_dict[phrase].append(i)
+            else:
+                boxes_dict[phrase] = [i]
+
+        for phrase in sorted(boxes_dict.keys()):
+            indices = boxes_dict[phrase]
+
+            # Find the most confident bounding box for this phrase
+            x, y, width, height = boxes[indices[np.argmax(logits[indices])]] * 256
+            
+            query_points.append(np.hstack(([0], y, x)))
+
+        if len(query_points) != 2:
+            print("Couldn't find all objects! Returning junk data")
+            query_points = np.array(
+                [
+                    [0, 0, 0],
+                    [0, 0, 0],
+                ]
+            )
+
+        return np.array(query_points)
+    
+#@profile
+def get_semantic_frame_and_box(camera, env_name, frame):
+    global grounding_dino_model, last_grounding_results
+    if grounding_dino_model == None:
+        grounding_dino_model = load_model("GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py", "GroundingDINO/weights/groundingdino_swint_ogc.pth").to(device)
+
+    transform = T.Compose(
+        [
+            T.RandomResize([800], max_size=1333),
+            T.ToTensor(),
+            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]
+    )
+    frame_and_box = []
+    if env_name == 'Stack_D0':
+        objects = ["red block", "green block"]
+        image, _ = transform(Image.fromarray(frame), None)
+        text_prompt = " . ".join(objects)
+        boxes, logits, phrases = predict(
+            model=grounding_dino_model,
+            image=image,
+            caption=text_prompt,
+            box_threshold=BOX_TRESHOLD,
+            text_threshold=TEXT_TRESHOLD,
+            device=device
+        )
+        boxes_dict = {}
+        for i, phrase in enumerate(phrases):
+            if phrase in boxes_dict.keys():
+                boxes_dict[phrase].append(i)
+            else:
+                boxes_dict[phrase] = [i]
+
+        for obj in objects:
+            if obj in boxes_dict:
+                indices = boxes_dict[obj]
+
+                # Find the most confident bounding box for this phrase
+                best_box = boxes[indices[np.argmax(logits[indices])]] * 256
+                x, y, width, height = best_box
+                corners = np.array([
+                    [x - width/2, y - height/2],
+                    [x + width/2, y + height/2],
+                ], dtype=np.uint8)
+                if corners[0][0] == corners[1][0] or corners[0][1] == corners[1][1]:
+                    frame_and_box.append(last_grounding_results[camera][obj])
+                else:
+                    frame_and_box.append([crop_and_resize(frame, corners), torch.asarray(best_box, device=device), obj])
+
+                    # Cache if next hit fails
+                    if not camera in last_grounding_results:
+                        last_grounding_results[camera] = {}
+                    last_grounding_results[camera][obj] = frame_and_box[-1]
+            else:
+                # No results this frame for this object, return last
+                frame_and_box.append(last_grounding_results[camera][obj])
+
+        assert len(frame_and_box) == 2
+        return frame_and_box
 
 def get_query_points(camera, env_name, env):
     query_points = []
@@ -573,7 +768,7 @@ def get_query_points(camera, env_name, env):
     return query_points
 
 #@profile
-def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=False, proprio_state=[], cam_names=[]):
+def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=False, proprio_state=[], cam_names=[], semantic=False):
     global tapir, query_features, causal_state, online_model_init, online_model_predict, last_tracks, keypoint_viz, frame_tensor_cpu, ret_tensor, proprio_tensor_cpu
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if tapir is None:
@@ -585,7 +780,10 @@ def frame_to_keypoints(env_name, frame, env, is_robosuite=False, is_first_ob=Fal
     if is_first_ob:
         all_query_points = np.empty((0, 3))
         for i, camera in enumerate(cam_names):
-            query_points = get_query_points(camera, env_name, env)
+            if semantic:
+                query_points = get_query_points_semantic(camera, env_name, frame[:, (i * width):((i + 1) * width), :])
+            else:
+                query_points = get_query_points(camera, env_name, env)
             query_points[:, 2] += i * width
             all_query_points = np.vstack((all_query_points, query_points))
 

@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import gym
 gym.logger.set_level(40)
 import d4rl
-from argparse import ArgumentParser
+import argparse 
 import yaml
 import matplotlib.pyplot as plt
 import torch
@@ -39,7 +39,7 @@ from tapnet.utils import transforms
 from tapnet.utils import viz_utils
 import jax
 from rgb_arrays_to_mp4 import rgb_arrays_to_mp4
-from nn_util import get_object_pixel_coords, get_query_points, fast_2d_angles_and_magnitudes_jax
+from nn_util import get_object_pixel_coords, get_query_points, fast_2d_angles_and_magnitudes_jax, get_query_points_semantic
 
 # Load the pre-trained DinoV2 model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -124,9 +124,11 @@ tapir = tapir_model.ParameterizedTAPIR(params, state, tapir_kwargs=kwargs)
 online_model_init = jax.jit(online_model_init)
 online_model_predict = jax.jit(online_model_predict)
 
-parser = ArgumentParser()
+parser = argparse.ArgumentParser()
 parser.add_argument("env_config_path", help="Path to environment config file")
 parser.add_argument("proprio_path")
+parser.add_argument('--semantic', action=argparse.BooleanOptionalAction)
+
 args, _ = parser.parse_known_args()
 
 with open(args.env_config_path, 'r') as f:
@@ -157,7 +159,7 @@ env = EnvUtils.create_env_from_metadata(env_meta=env_meta, render=True, render_o
 print([env.env.sim.model.geom_id2name(i) for i in range(env.env.sim.model.ngeom)])
 print([env.env.sim.model.camera_id2name(i) for i in range(env.env.sim.model.ncam)])
 #camera_names = [env.env.sim.model.camera_id2name(i) for i in range(env.env.sim.model.ncam)]
-camera_names = ['agentview']
+camera_names = ['agentview', 'sideview']
 env_name = env_meta['env_name']
 render_image_names = RobomimicUtils.get_default_env_cameras(env_meta=env_meta)
 
@@ -180,7 +182,7 @@ def main():
             #frame = env.render(mode='rgb_array', height=512, width=512, camera_name=render_image_names[0])
             traj_obs.append(np.array(proprio_data[traj]['observations'][ob]))
             tracks = []
-            full_frame = np.empty((height, 0, 3))
+            full_frame = np.empty((height, 0, 3), dtype=np.uint8)
             for camera in camera_names:
                 frame = env.render(mode='rgb_array', height=height, width=width, camera_name=camera)
                 full_frame = np.hstack((full_frame, frame))
@@ -191,10 +193,13 @@ def main():
                     select_points = False
                     if select_points:
                         fig, ax = plt.subplots()
-                        ax.imshow(frame)
+                        ax.imshow(full_frame)
                         plt.show()
 
-                    query_points = get_query_points(camera, env_name, env)
+                    if args.semantic:
+                        query_points = get_query_points_semantic(camera, env_name, full_frame[:, (i * width):((i + 1) * width), :])
+                    else:
+                        query_points = get_query_points(camera, env_name, env)
                     query_points[:, 2] += i * width
                     all_query_points = np.vstack((all_query_points, query_points))
 
@@ -203,7 +208,6 @@ def main():
                     all_query_points.shape[0], len(query_features.resolutions) - 1
                 )
                 last_tracks = []
-
             tracks, visibles, causal_state = online_model_predict(
                 frames=np.array(full_frame),
                 query_features=query_features,
@@ -236,8 +240,12 @@ def main():
         video_viz = viz_utils.paint_point_track(np.array(video), tracks, visibles)
         rgb_arrays_to_mp4(video_viz, f"data/robosuite_tapir_{traj}.mp4")
 
-    print(f"Success! Dumping data to {env_cfg['demo_pkl'][:-4] + '_kpt.pkl'}")
-    pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_kpt.pkl', 'wb'))
+    if args.semantic:
+        print(f"Success! Dumping data to {env_cfg['demo_pkl'][:-4] + '_semantic_kpt.pkl'}")
+        pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_semantic_kpt.pkl', 'wb'))
+    else:
+        print(f"Success! Dumping data to {env_cfg['demo_pkl'][:-4] + '_kpt.pkl'}")
+        pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_kpt.pkl', 'wb'))
 
 if __name__ == "__main__":
     main()

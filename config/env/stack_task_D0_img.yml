@@ -3,11 +3,9 @@ type: 'dino'
 demo_hdf5: "data/stack_task_D0/demo.hdf5"
 stack_size: 1
 robosuite: True
-name: Square_D1
+name: Stack_D0
 add_proprio: True
 cams:
   - agentview
-  - sideview
-  - frontview
 val_cfg: "config/env/stack_task_D0_img_val.yml"
 #neighbor_lookup_pkl: "data/neighbor-lookup.pkl"

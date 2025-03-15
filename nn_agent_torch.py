@@ -130,7 +130,9 @@ class NNAgent:
                         dropout_rate=policy_cfg.get('dropout', 0.0),
                         bc_baseline=self.method == NN_METHOD.BC,
                         reduce_delta_s=False,
-                        numpy_action=False
+                        numpy_action=False,
+                        gaussian_action=False,
+                        mlp_combine=False
                     )
 
                 model = nn.DataParallel(model)

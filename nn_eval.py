@@ -35,11 +35,6 @@ from worker_utils import worker_task
 
 DEBUG = False
 
-def crop_and_resize(img, crop_corners):
-    width, height = img.shape[:2]
-    cropped_img = img[crop_corners[0][1]:crop_corners[1][1], crop_corners[0][0]:crop_corners[1][0], :]
-    resized_img = cv2.resize(cropped_img, (width, height))
-    return resized_img
 
 #@profile
 def single_trial_eval(config, agent, env, trial):
@@ -71,7 +66,7 @@ def single_trial_eval(config, agent, env, trial):
         steps += 1
         
         height, width = 256, 256
-        frame = np.empty((height, 0, 3))
+        frame = np.empty((height, 0, 3), dtype=np.uint8)
         if len(cam_names) > 0:
             for cam in cam_names:
                 curr_frame = env.render(mode='rgb_array', height=height, width=width, camera_name=cam)
@@ -84,8 +79,8 @@ def single_trial_eval(config, agent, env, trial):
                 
                 frame = np.hstack((frame, curr_frame))
         else:
-            pass
-            #frame = env.render(mode='rgb_array')
+            frame = env.render(mode='rgb_array', height=height, width=width, camera_name="agentview")
+            #pass
         video_frames.append(frame)
 
         action = get_action_from_obs(config, agent, env, observation, frame, obs_history=obs_history, numpy_action=agent.model.numpy_action, is_first_ob=(steps == 1))
@@ -100,20 +95,24 @@ def single_trial_eval(config, agent, env, trial):
 
             # env.render(mode='human')
 
-    if len(video_frames) > 0 and False:
-        from tapnet.utils import transforms
-        from tapnet.utils import viz_utils
-
-        tracks, visibles = get_keypoint_viz(cam_names)
+    if len(video_frames) > 0:
+        if False:
+            from tapnet.utils import transforms
+            from tapnet.utils import viz_utils
+            tracks, visibles = get_keypoint_viz(cam_names)
        
-        video_frames = np.array(video_frames)
-        height, width = video_frames.shape[1:3]
-        tracks = transforms.convert_grid_coordinates(
-            tracks, (256, 256), (256, 256)
-        )
-        video_viz = viz_utils.paint_point_track(video_frames, tracks, visibles)
+            video_frames = np.array(video_frames)
+            height, width = video_frames.shape[1:3]
+            tracks = transforms.convert_grid_coordinates(
+                tracks, (256, 256), (256, 256)
+            )
+            video_viz = viz_utils.paint_point_track(video_frames, tracks, visibles)
 
-        rgb_arrays_to_mp4(video_viz, f"data/{trial}.mp4")
+            rgb_arrays_to_mp4(video_viz, f"data/{trial}.mp4")
+        else:
+            video_frames = np.array(video_frames)[:, :, :256, :]
+            pickle.dump(video_frames, open(f"data/{trial}.pkl", 'wb'))
+            rgb_arrays_to_mp4(video_frames, f"data/{trial}.mp4")
 
     success = 1 if 'success' in info else 0
 
@@ -231,7 +230,6 @@ def nn_eval(config, nn_agent, trials=10, results=None):
     successes = 0
 
     for trial in range(trials):
-        print(trial)
         episode_reward, success = single_trial_eval(config, nn_agent, env, trial)
         episode_rewards.append(episode_reward)
         successes += success
@@ -622,7 +620,7 @@ def main():
     mp.set_start_method('spawn', force=True)
     agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
     #policy_cfg['cond_force_retrain'] = False
-    nn_eval(env_cfg, agent, trials=1, results="Square_D0/ns_dan_bc_kpt")
+    nn_eval(env_cfg, agent, trials=20)
     #parallel_nn_eval(
     #    env_cfg,
     #    agent,

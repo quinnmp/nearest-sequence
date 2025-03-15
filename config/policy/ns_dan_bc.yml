@@ -1,8 +1,8 @@
 method: cond
-k_neighbors: 726
-lookback: 42
-decay_rate: -0.4271725461007119
-ratio: 0.505704759
+k_neighbors: 363
+lookback: 28
+decay_rate: -0.9433067
+ratio: 0.510385
 #[I 2025-03-05 18:50:40,459] Trial 84 finished with value: 0.65 and parameters: {'k_neighbors': 726, 'lookback': 42, 'decay_rate': -0.4271725461007119, 'ratio': 0.5057047459497799}. Best is trial 84 with value: 0.65.
 
 
