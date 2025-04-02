@@ -23,6 +23,8 @@ from tqdm import tqdm
 import time
 from torch.amp import autocast, GradScaler
 from typing import List
+from video_action_learning.models.dp.base_policy import DiffusionPolicy
+from video_action_learning.models.dp.transformer import TransformerNoisePredictionNet
 import nn_util
 
 if torch.cuda.is_available():
@@ -95,7 +97,7 @@ class DeepSetsActionCombiner(nn.Module):
         return output
 
 class KNNConditioningModel(nn.Module):
-    def __init__(self, state_dim, delta_state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False, bc_baseline=False, mlp_combine=False, add_action=False, reduce_delta_s=False, numpy_action=True, gaussian_action=False, cnn=False, cnn_channels=None, cnn_stride=None, cnn_size=None):
+    def __init__(self, state_dim, delta_state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False, bc_baseline=False, mlp_combine=False, add_action=False, reduce_delta_s=False, numpy_action=True, gaussian_action=False, cnn=False, cnn_channels=None, cnn_stride=None, cnn_size=None, diffusion=False):
         super(KNNConditioningModel, self).__init__()
         self.state_dim = state_dim
         self.delta_state_dim = delta_state_dim
@@ -112,6 +114,7 @@ class KNNConditioningModel(nn.Module):
         self.numpy_action = numpy_action
         self.gaussian_action = gaussian_action
         self.cnn = cnn
+        self.diffusion = diffusion
         
         self.distance_size = delta_state_dim if not euclidean else 1
         if add_action:
@@ -172,16 +175,22 @@ class KNNConditioningModel(nn.Module):
         else:
             in_dim = self.input_dim if not reduce_delta_s else delta_s_final_embedding * 2 + action_dim
 
-        for hidden_dim in hidden_dims:
-            layers.extend([
-                nn.Linear(in_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout_rate),
-            ])
-            in_dim = hidden_dim
+        if not diffusion:
+            for hidden_dim in hidden_dims:
+                layers.extend([
+                    nn.Linear(in_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Dropout(dropout_rate),
+                ])
+                in_dim = hidden_dim
 
-        layers.append(nn.Linear(hidden_dims[-1], action_dim if not gaussian_action else action_dim * 2).to(device))
-        self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
+            layers.append(nn.Linear(hidden_dims[-1], action_dim if not gaussian_action else action_dim * 2).to(device))
+            self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
+        else:
+            action_len = 1
+
+            noise_pred_net = TransformerNoisePredictionNet(action_len, action_dim if not gaussian_action else action_dim * 2, state_dim)
+            self.model = DiffusionPolicy(action_len, action_dim if not gaussian_action else action_dim * 2, noise_pred_net)
         
         if mlp_combine:
             self.action_combiner = DeepSetsActionCombiner(
@@ -191,7 +200,7 @@ class KNNConditioningModel(nn.Module):
 
         self.eval_distances = []
     
-    def forward(self, states, actions, distances, weights, inference=False):
+    def forward(self, states, actions, distances, weights, inference=False, real_actions=None):
         # Will be batchless numpy arrays at inference time
         if inference:
             states = torch.as_tensor(states, dtype=torch.float32).unsqueeze(0)
@@ -211,7 +220,17 @@ class KNNConditioningModel(nn.Module):
             batch_size = states.size(0)
             inputs = torch.cat([states], dim=-1)
             inputs = inputs.view(batch_size, -1)
-            output = self.model(inputs)
+
+            if inference and self.diffusion:
+                output = self.model.sample(inputs)
+            else:
+                if self.diffusion:
+                    real_actions = real_actions.unsqueeze(1).expand(batch_size, 1, real_actions.size(-1))
+                    real_actions = self.action_scaler.transform(real_actions)
+
+                    return self.model(inputs, real_actions)
+                else:
+                    output = self.model(inputs)
 
             #pickle.dump(output.cpu().detach().numpy(), open("data/bc_action.pkl", 'wb'))
 
@@ -245,7 +264,15 @@ class KNNConditioningModel(nn.Module):
                 inputs = torch.cat([states, actions, distances], dim=-1)
             inputs = inputs.view(batch_size * num_neighbors, -1)
 
-            model_outputs = self.model(inputs)
+            if inference and self.diffusion:
+                model_outputs = self.model.sample(inputs)
+            else:
+                if self.diffusion:
+                    # Diffusion training
+                    real_actions = real_actions.unsqueeze(1).expand(batch_size, 1, real_actions.size(-1))
+                    return self.model(inputs, real_actions)
+                else:
+                    model_outputs = self.model(inputs)
 
             model_outputs = model_outputs.view(batch_size, num_neighbors, -1)
 
@@ -420,7 +447,7 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
     best_val_loss = float('inf')
     early_stopping_patience = 8
     early_stopping_counter = 0
-    
+
     for epoch in range(num_epochs):
         # Training phase
         train_loss = 0.0
@@ -430,8 +457,11 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
             for param in model.parameters():
                 param.grad = None
 
-            predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
-            loss = criterion(predicted_actions, actions)
+            if model.module.diffusion:
+                loss = model(neighbor_states, neighbor_actions, neighbor_distances, weights, real_actions=actions)
+            else:
+                predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
+                loss = criterion(predicted_actions, actions)
             loss.backward()
             optimizer.step()
             train_loss += loss.detach()
@@ -456,8 +486,11 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                     if not train_loader.dataset.bc_baseline:
                         neighbor_actions = train_loader.dataset.agent.datasets['state'].act_scaler.transform(val_loader.dataset.agent.datasets['state'].act_scaler.inverse_transform(neighbor_actions))
                         neighbor_distances = train_loader.dataset.agent.datasets['delta_state'].obs_scaler.transform(val_loader.dataset.agent.datasets['delta_state'].obs_scaler.inverse_transform(neighbor_distances))
-                    predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
-                    loss = criterion(predicted_actions, actions)
+                    if model.module.diffusion:
+                        loss = model(neighbor_states, neighbor_actions, neighbor_distances, weights, real_actions=actions)
+                    else:
+                        predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
+                        loss = criterion(predicted_actions, actions)
                     val_loss += loss.detach()
                     num_val_batches += 1
                 
@@ -483,7 +516,111 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                 #print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
             model.train()
         else:
-            #print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss}")
+            print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss}")
+            pass
+
+    if isinstance(model, nn.DataParallel):
+        model = model.module
+
+    torch.save({'model': model,
+                'optimizer_state_dict': optimizer.state_dict(),
+                'dataloader_rng_state': train_loader.generator.get_state()
+}, model_path)
+    return model
+
+def train_model_diffusion(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth", loaded_optimizer_dict=None):
+    from diffusers.optimization import get_scheduler
+    os.makedirs(os.path.dirname(model_path), exist_ok=True)
+
+    model.to(device)
+    model.train()
+    criterion = nn.MSELoss()
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=decay, eps=1e-8, betas: [0.9, 0.999])
+    scheduler = get_scheduler(optimizer=optimizer, name="constant")
+    scaler = torch.cuda.amp.GradScaler(enabled=False)
+
+    if loaded_optimizer_dict is not None:
+        optimizer.load_state_dict(loaded_optimizer_dict)
+
+    best_val_loss = float('inf')
+    early_stopping_patience = 8
+    early_stopping_counter = 0
+
+    for epoch in range(num_epochs):
+        # Training phase
+        train_loss = 0.0
+        num_train_batches = 0
+        start = time.time()
+        for neighbor_states, neighbor_actions, neighbor_distances, actions, weights in train_loader:
+            with torch.autocast(
+                device_type="cuda", dtype=torch.bfloat16, enabled=config.use_amp
+            ):
+                loss = model(neighbor_states, neighbor_actions, neighbor_distances, weights, real_actions=actions)
+
+            optimizer.zero_grad()
+            scaler.scale(loss).backward()
+
+            scaler.unscale_(optimizer)
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+            scaler.step(optimizer)
+            scaler.update()
+
+            scheduler.step()
+
+            train_loss += loss.detach()
+            num_train_batches += 1
+        #print(f"Time for epoch {epoch}: {time.time() - start}")
+        avg_train_loss = train_loss / num_train_batches
+        
+        # Validation phase
+        if val_loader is not None:
+            model.eval()
+            if isinstance(model, nn.DataParallel):
+                model.module.training_mode = True
+            else:
+                model.training_mode = True
+
+            val_loss = 0.0
+            num_val_batches = 0
+            with torch.no_grad():
+                for neighbor_states, neighbor_actions, neighbor_distances, actions, weights in val_loader:
+                    neighbor_states = train_loader.dataset.agent.datasets['state'].obs_scaler.transform(val_loader.dataset.agent.datasets['state'].obs_scaler.inverse_transform(neighbor_states))
+                    actions = train_loader.dataset.agent.datasets['state'].act_scaler.transform(val_loader.dataset.agent.datasets['state'].act_scaler.inverse_transform(actions))
+                    if not train_loader.dataset.bc_baseline:
+                        neighbor_actions = train_loader.dataset.agent.datasets['state'].act_scaler.transform(val_loader.dataset.agent.datasets['state'].act_scaler.inverse_transform(neighbor_actions))
+                        neighbor_distances = train_loader.dataset.agent.datasets['delta_state'].obs_scaler.transform(val_loader.dataset.agent.datasets['delta_state'].obs_scaler.inverse_transform(neighbor_distances))
+                    if model.module.diffusion:
+                        loss = model(neighbor_states, neighbor_actions, neighbor_distances, weights, real_actions=actions)
+                    else:
+                        predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
+                        loss = criterion(predicted_actions, actions)
+                    val_loss += loss.detach()
+                    num_val_batches += 1
+                
+                avg_val_loss = val_loss / num_val_batches
+                
+                scheduler.step(avg_val_loss)
+                # Save the best model based on validation loss
+                if avg_val_loss < best_val_loss:
+                    best_val_loss = avg_val_loss
+                    early_stopping_counter = 0
+                    best_check ={'model': model.module if isinstance(model, nn.DataParallel) else model,
+                                'optimizer_state_dict': optimizer.state_dict(),
+                                'dataloader_rng_state': train_loader.generator.get_state()}
+                else:
+                    early_stopping_counter += 1
+
+                if early_stopping_counter >= early_stopping_patience:
+                    #print(f'Recommend early stopping after {epoch+1 - early_stopping_patience} epochs')
+                    torch.save(best_check, model_path)
+                    return best_check['model']
+
+                
+                #print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+            model.train()
+        else:
+            print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss}")
             pass
 
     if isinstance(model, nn.DataParallel):

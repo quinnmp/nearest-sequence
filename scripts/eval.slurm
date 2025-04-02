@@ -61,7 +61,7 @@ rm data/*lookup*
 #python -u nn_sweep_epochs.py config/env/pick_and_place_task_D0.yml config/policy/bc.yml
 #python -u opengl_test.py
 #python -u state_to_tapir.py config/env/hopper.yml
-python -u nn_param_optimizer.py config/env/pick_and_place_task_D0.yml config/policy/ns_dan_bc.yml
+#python -u nn_param_optimizer.py config/env/pick_and_place_task_D0.yml config/policy/ns_dan_bc.yml
 #python -u robosuite_state_to_kpt.py config/env/coffee_task_D0.yml data/coffee_task_D0/100_proprio.pkl
 #python -u nn_param_optimizer.py config/env/coffee_task_D0_kpt.yml config/policy/ns_dan_bc.yml
 #python -u nn_sweep_k.py config/env/stack_task_D0_img.yml config/policy/dan_img.yml
@@ -75,7 +75,7 @@ python -u nn_param_optimizer.py config/env/pick_and_place_task_D0.yml config/pol
 #conda install -c conda-forge make cmake
 #kernprof -l -v nn_eval.py config/env/square_task_D0_kpt.yml config/policy/ns_dan_bc.yml
 #python -u pkl_numpy_to_torch.py
-#kernprof -l -v nn_eval.py config/env/hopper.yml config/policy/hopper/ns_dan_bc.yml
+python -u nn_eval.py config/env/hopper.yml config/policy/bc.yml
 #python -u tsne_distances.py
 #python -u nn_eval.py config/env/hopper_mix.yml config/policy/bc_img.yml
 #python -u rgb_arrays_to_mp4.py data/hopper_tapir_test.pkl data/hopper_tapir_test.mp4

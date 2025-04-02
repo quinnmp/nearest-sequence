@@ -18,7 +18,7 @@ import gmm_regressor
 import nn_plot
 from fast_scaler import FastScaler
 from nn_conditioning_model import (KNNConditioningModel, KNNExpertDataset,
-                                   train_model)
+                                   train_model, train_model_diffusion)
 from nn_util import (NN_METHOD,
                      compute_distance_torch, compute_distance_with_rot_torch, compute_accum_distance_torch,
                      load_and_scale_data, set_seed)
@@ -133,6 +133,7 @@ class NNAgent:
                         numpy_action=False,
                         gaussian_action=False,
                         mlp_combine=False,
+                        diffusion=True,
                         #cnn=True,
                         #cnn_stride=policy_cfg.get('stride', None),
                         #cnn_channels=policy_cfg.get('channels', None),
@@ -141,7 +142,7 @@ class NNAgent:
 
                 model = nn.DataParallel(model)
 
-                self.model = train_model(
+                self.model = train_model_diffusion(
                     model, 
                     train_loader, 
                     val_loader=val_loader,

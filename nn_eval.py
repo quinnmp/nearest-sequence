@@ -86,7 +86,8 @@ def single_trial_eval(config, agent, env, trial, reset=True):
                 
                 frame = np.hstack((frame, curr_frame))
         else:
-            frame = env.render(mode='rgb_array', height=height, width=width, camera_name="agentview")
+            #frame = env.render(mode='rgb_array', height=height, width=width, camera_name="agentview")
+            frame = []
             #pass
         video_frames.append(frame)
 
@@ -102,7 +103,7 @@ def single_trial_eval(config, agent, env, trial, reset=True):
 
             # env.render(mode='human')
 
-    if len(video_frames) > 0:
+    if len(video_frames) > 0 and False:
         if False:
             from tapnet.utils import transforms
             from tapnet.utils import viz_utils
