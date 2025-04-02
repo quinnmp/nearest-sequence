@@ -132,7 +132,11 @@ class NNAgent:
                         reduce_delta_s=False,
                         numpy_action=False,
                         gaussian_action=False,
-                        mlp_combine=False
+                        mlp_combine=False,
+                        #cnn=True,
+                        #cnn_stride=policy_cfg.get('stride', None),
+                        #cnn_channels=policy_cfg.get('channels', None),
+                        #cnn_size=policy_cfg.get('kernel_size', None),
                     )
 
                 model = nn.DataParallel(model)
@@ -351,6 +355,7 @@ class NNAgentEuclideanStandardized(NNAgentEuclidean):
                 expert_data_path,
                 env_cfg.get('rot_indices', []),
                 env_cfg.get('weights', []),
+                ob_type=env_cfg.get('type', 'state'),
                 use_torch=True
             )
 

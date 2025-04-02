@@ -1,0 +1,11 @@
+method: bc
+
+epochs: 100
+batch_size: 64
+hidden_dims:
+   - 512
+   - 512
+   - 512
+model_name: "dan_img"
+cond_force_retrain: False
+dropout_rate: 0.0

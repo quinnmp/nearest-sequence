@@ -15,22 +15,48 @@ def objective(trial, env_config_path, policy_config_path):
         policy_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
         # Suggest parameter values for optimization
-    policy_cfg['epochs'] = trial.suggest_int('epochs', 1, 250)
+    #policy_cfg['epochs'] = trial.suggest_int('epochs', 1, 250)
     #policy_cfg['k_neighbors'] = trial.suggest_int('neighbors', 1, 999)
     policy_cfg['batch_size'] = trial.suggest_categorical('batch_size', [2**i for i in range(4, 9)])  # 16 to 1024
 
-    num_layers = trial.suggest_int('num_layers', 2, 4)
-    policy_cfg['hidden_dims'] = [trial.suggest_categorical(f'layer_size_{i}', [2**j for j in range(7, 11)]) for i in range(num_layers)]  # 128 to 2048
+    num_layers = trial.suggest_int('num_layers', 2, 5)
+    policy_cfg['hidden_dims'] = [trial.suggest_categorical(f'layer_size_{i}', [2**j for j in range(4, 13)]) for i in range(num_layers)]  # 128 to 8192
 
     policy_cfg['dropout'] = trial.suggest_float('dropout', 0.0, 0.5)
-    #policy_cfg['lr'] = trial.suggest_categorical('lr', [1e-2, 1e-3, 1e-4])
-    #policy_cfg['weight_decay'] = trial.suggest_categorical('weight_decay', [1e-4, 1e-5, 1e-6])
+    policy_cfg['lr'] = trial.suggest_categorical('lr', [1e-2, 1e-3, 1e-4])
+    policy_cfg['weight_decay'] = trial.suggest_categorical('weight_decay', [1e-4, 1e-5, 1e-6])
+    # Define CNN hyperparameter search space
+    #policy_cfg['stride'] = trial.suggest_int('stride', 1, 2)  # Larger strides can lose too much information
+    #policy_cfg['stack_size'] = trial.suggest_int('stack_size', 5, 15)  # Larger strides can lose too much information
+    #policy_cfg['kernel_size'] = trial.suggest_categorical('kernel_size', [3, 5, 7])  # Common CNN kernel sizes
+
+    # For channels, define progression through layers
+    #num_layers = trial.suggest_int('num_conv_layers', 3, 5)  # Reasonable depth range
+    channels = []
+    min_channel = 16  # Start smaller than your original range
+
+    for i in range(num_layers):
+        # Channel options that increase with network depth
+        if i == 0:
+            # First layer typically has fewer channels
+            channel_options = [16, 32, 64]
+        elif i == num_layers - 1:
+            # Last layer can have more channels
+            channel_options = [64, 128, 256]
+        else:
+            # Middle layers
+            channel_options = [32, 64, 128]
+
+        #channel_idx = trial.suggest_int(f'channel_layer_{i}', 0, len(channel_options) - 1)
+        #channels.append(channel_options[channel_idx])
+
+    #policy_cfg['channels'] = channels
 
     # Initialize the NNAgent with the updated config
     nn_agent_instance = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
 
     # Call nn_eval_sanity and return its result
-    result = nn_eval(env_cfg, nn_agent_instance, trials=10)
+    result = nn_eval(env_cfg, nn_agent_instance, trials=20)
     
     # Assuming nn_eval_sanity returns a score that we want to maximize
     return result

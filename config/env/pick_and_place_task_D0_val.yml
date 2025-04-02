@@ -1,0 +1,6 @@
+demo_pkl: "data/pick_and_place_task_D0/1000_val.pkl"
+type: 'state'
+demo_hdf5: "data/pick_and_place_task_D0/demo.hdf5"
+robosuite: True
+name: PickAndPlace_D0
+#val_cfg: "config/env/pick_and_place_task_D0_100_val.yml"

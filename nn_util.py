@@ -35,7 +35,7 @@ import mimicgen
 import mimicgen.utils.file_utils as MG_FileUtils
 import mimicgen.utils.robomimic_utils as RobomimicUtils
 from mimicgen.utils.misc_utils import add_red_border_to_frame
-from mimicgen.configs import MG_TaskSpec
+#from mimicgen.configs import MG_TaskSpec
 import jax
 jax.config.update("jax_default_matmul_precision", "highest") # Crucial for determinism
 import mediapy as media
@@ -48,8 +48,8 @@ from fast_scaler import FastScaler
 from PIL import Image
 from typing import List, Dict
 import cv2
-from groundingdino.util.inference import load_model, load_image, predict, annotate
-import groundingdino.datasets.transforms as T
+#from groundingdino.util.inference import load_model, load_image, predict, annotate
+#import groundingdino.datasets.transforms as T
 DEBUG = False
 
 TWO_PI = 2 * np.pi
@@ -109,7 +109,7 @@ def load_and_scale_data(path, rot_indices, weights, ob_type='state', use_torch=F
     non_rot_observations = observations[:, non_rot_indices]
 
     obs_scaler = FastScaler()
-    if ob_type == 'keypoint' and False:
+    if ob_type == 'rgb':
         obs_scaler.fit(np.concatenate(non_rot_observations))
     else:
         obs_scaler.fit(non_rot_observations)
@@ -413,6 +413,8 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
                 obs = frame_to_obj_centric_dino(env_name, frame, proprio_state=proprio_state, numpy_action=numpy_action)
             case 'keypoint' | 'semantic_keypoint':
                 obs = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=is_first_ob, proprio_state=proprio_state, cam_names=cam_names, semantic=(obs_type == "semantic_keypoint"))
+            case 'rgb':
+                obs = torch.as_tensor(np.transpose(frame.astype(np.float32), (2, 0, 1)).flatten())
 
         if stack:
             assert obs_history is not None
@@ -420,7 +422,7 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
             if len(obs_history) > stack_size:
                 obs_history.pop(0)
         
-                obs = stack_with_previous(obs_history, stack_size=stack_size)
+            obs = stack_with_previous(obs_history, stack_size=stack_size)
 
     action = model.get_action(obs)
 
@@ -436,8 +438,8 @@ def get_keypoint_viz(cam_names):
 
 def stack_with_previous(obs_list, stack_size):
     if len(obs_list) < stack_size:
-        return np.concatenate([obs_list[0]] * (stack_size - len(obs_list)) + obs_list, axis=0)
-    return np.concatenate(obs_list[-stack_size:], axis=0)
+        return torch.concatenate([obs_list[0]] * (stack_size - len(obs_list)) + obs_list, axis=0)
+    return torch.concatenate(obs_list[-stack_size:], axis=0)
 
 #@profile
 def frame_to_obj_centric_dino(env_name, rgb_array, proprio_state=[], numpy_action=True):
@@ -564,11 +566,12 @@ def eval_over(steps, config, env_instance):
     is_metaworld = config.get('metaworld', False)
     is_robosuite = config.get('robosuite', False)
 
-    return is_metaworld and steps >= 1000 \
-        or env_name == "push_t" and steps >= 200 \
-        or is_robosuite and steps >= 200 \
-        or env_name == "maze2d-umaze-v1" and np.linalg.norm(env_instance._get_obs()[0:2] - env_instance._target) <= 0.5 \
-        or steps >= 1000 \
+    return (is_metaworld and steps >= 1000
+        or env_name == "push_t" and steps >= 200
+        #or is_robosuite and steps >= 200
+        or env_name == "maze2d-umaze-v1" and np.linalg.norm(env_instance._get_obs()[0:2] - env_instance._target) <= 0.5
+        #or steps > 1 # For debugging
+        or steps >= 1000)
 
 def crop_obs_for_env(obs, env, env_instance=None):
     if env == "ant-expert-v2":
@@ -579,15 +582,20 @@ def crop_obs_for_env(obs, env, env_instance=None):
         return np.concatenate((obs[:9], obs[18:27], obs[-2:len(obs)]))
     elif env == "drawer-close-v2":
         return np.concatenate((obs[:7], obs[18:25], obs[-3:len(obs)]))
-    elif env == "Square_D1" or env == "Stack_D0":
-        obj = obs['object']
-        ee_pos = obs['robot0_eef_pos']
-        ee_pos_vel = obs['robot0_eef_vel_lin']
-        ee_ang = obs['robot0_eef_quat']
-        ee_ang_vel = obs['robot0_eef_vel_ang']
-        gripper_pos = obs['robot0_gripper_qpos']
-        gripper_pos_vel = obs['robot0_gripper_qpos']
-        return np.hstack((obj, ee_pos, ee_pos_vel, ee_ang, ee_ang_vel, gripper_pos, gripper_pos_vel))
+    elif env == "Square_D1" or env == "Stack_D0" or env == "PickAndPlace_D0":
+        default_low_dim_obs = [
+                "robot0_eef_pos",
+                "robot0_eef_quat",
+                "robot0_gripper_qpos",
+                "object",
+        ]
+
+        ret_obs = np.array([])
+
+        for key in default_low_dim_obs:
+            ret_obs = np.hstack((ret_obs, obs[key]))
+
+        return ret_obs.astype(np.float32)
     elif env == "maze2d-umaze-v1":
         return np.hstack((env_instance._target, obs))
     else:

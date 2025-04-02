@@ -44,6 +44,18 @@ class NeighborData:
     weights: torch.Tensor
     actual_state: torch.Tensor
 
+class Reshape3DCNN(nn.Module):
+    def __init__(self, channels, stack_size, height, width):
+        super().__init__()
+        self.channels = channels
+        self.stack_size = stack_size
+        self.height = height
+        self.width = width
+    
+    def forward(self, x):
+        reshaped = x.reshape(-1, self.channels, self.stack_size, self.height, self.width)
+        return reshaped
+
 class DeepSetsActionCombiner(nn.Module):
     def __init__(self, action_dim, hidden_dim=64):
         super().__init__()
@@ -83,7 +95,7 @@ class DeepSetsActionCombiner(nn.Module):
         return output
 
 class KNNConditioningModel(nn.Module):
-    def __init__(self, state_dim, delta_state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False, bc_baseline=False, mlp_combine=False, add_action=False, reduce_delta_s=False, numpy_action=True, gaussian_action=False):
+    def __init__(self, state_dim, delta_state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, euclidean=False, combined_dim=False, bc_baseline=False, mlp_combine=False, add_action=False, reduce_delta_s=False, numpy_action=True, gaussian_action=False, cnn=False, cnn_channels=None, cnn_stride=None, cnn_size=None):
         super(KNNConditioningModel, self).__init__()
         self.state_dim = state_dim
         self.delta_state_dim = delta_state_dim
@@ -99,6 +111,7 @@ class KNNConditioningModel(nn.Module):
         self.reduce_delta_s = reduce_delta_s
         self.numpy_action = numpy_action
         self.gaussian_action = gaussian_action
+        self.cnn = cnn
         
         self.distance_size = delta_state_dim if not euclidean else 1
         if add_action:
@@ -130,7 +143,35 @@ class KNNConditioningModel(nn.Module):
             self.delta_s_reducer = nn.Sequential(*delta_s_layers).to(dtype=torch.float32)
 
         layers = []
-        in_dim = self.input_dim if not reduce_delta_s else delta_s_final_embedding * 2 + action_dim
+        if cnn:
+            in_channels = 3
+            height, width = 64, 64
+            stack_size = int(state_dim / height / width / in_channels)
+
+            channels = [16, 32, 64, 128] if cnn_channels is None else cnn_channels
+            kernel_size = 3 if cnn_size is None else cnn_size
+            stride = 2 if cnn_stride is None else cnn_stride
+            layers.append(Reshape3DCNN(in_channels, stack_size, height, width))
+
+            time_dim = stack_size
+            for i, out_channels in enumerate(channels):
+                time_dim = time_dim - 1 if i < len(channels) else time_dim
+                layers.extend([
+                    nn.Conv3d(in_channels, out_channels,
+                      kernel_size=(2, kernel_size, kernel_size),
+                      padding=(0, kernel_size//2, kernel_size//2),
+                      stride=(1, stride, stride)),
+                    nn.ReLU(),
+                    nn.Dropout3d(dropout_rate),
+                ])
+                in_channels = out_channels
+
+            cnn_height = cnn_width = height // (stride ** len(channels))
+            layers.append(nn.Flatten())
+            in_dim = int(time_dim * cnn_height * cnn_width * channels[-1])
+        else:
+            in_dim = self.input_dim if not reduce_delta_s else delta_s_final_embedding * 2 + action_dim
+
         for hidden_dim in hidden_dims:
             layers.extend([
                 nn.Linear(in_dim, hidden_dim),
@@ -276,6 +317,7 @@ class KNNExpertDataset(Dataset):
 
             self.distance_scaler = None
             for i in range(len(self)):
+                #print(i)
                 _, _, distances, _, _ = self[i]
                 if self.bc_baseline:
                     # Distances will be -1, just append to make interpreter happy
@@ -285,7 +327,7 @@ class KNNExpertDataset(Dataset):
 
             self.distance_scaler = FastScaler()
             self.distance_scaler.fit(all_distances)
-            pickle.dump(self.distance_scaler.transform(all_distances), open("stack_train_distances_dino.pkl", 'wb'))
+            #pickle.dump(self.distance_scaler.transform(all_distances), open("stack_train_distances_dino.pkl", 'wb'))
             del all_distances
 
             if save_neighbor_lookup:
@@ -376,7 +418,7 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
     )
 
     best_val_loss = float('inf')
-    early_stopping_patience = 13
+    early_stopping_patience = 8
     early_stopping_counter = 0
     
     for epoch in range(num_epochs):
@@ -433,15 +475,15 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, d
                     early_stopping_counter += 1
 
                 if early_stopping_counter >= early_stopping_patience:
-                    print(f'Recommend early stopping after {epoch+1 - early_stopping_patience} epochs')
+                    #print(f'Recommend early stopping after {epoch+1 - early_stopping_patience} epochs')
                     torch.save(best_check, model_path)
                     return best_check['model']
 
                 
-                print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+                #print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
             model.train()
         else:
-            print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss}")
+            #print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss}")
             pass
 
     if isinstance(model, nn.DataParallel):

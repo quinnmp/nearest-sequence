@@ -1,11 +1,12 @@
 method: bc
 
-epochs: 100
+epochs: 1000
 batch_size: 64
 hidden_dims:
-   - 256
-   - 256
-   - 256
+   - 128
+   - 64
+   - 32
+   - 16
 cond_force_retrain: True
 model_name: "bc"
 dropout: 0

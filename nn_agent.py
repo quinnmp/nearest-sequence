@@ -121,7 +121,8 @@ class NNAgent:
                         hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
                         dropout_rate=policy_cfg.get('dropout', 0.0),
                         bc_baseline=self.method == NN_METHOD.BC,
-                        reduce_delta_s=False
+                        reduce_delta_s=False,
+                        cnn=True
                     )
 
                 model = nn.DataParallel(model)

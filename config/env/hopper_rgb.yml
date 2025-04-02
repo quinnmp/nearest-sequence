@@ -1,0 +1,10 @@
+seed: 42
+name: "hopper-expert-v2"
+demo_pkl: "data/hopper-expert-v2_1_rgb.pkl"
+val_cfg: "config/env/hopper_rgb_val.yml"
+neighbor_lookup_pkl: "data/hopper-rgb-bc-neighbor-lookup.pkl"
+cams:
+  - track
+type: 'rgb'
+stack_size: 10
+stack?: True

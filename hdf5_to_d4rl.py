@@ -19,26 +19,36 @@ demos = f['data']
 expert_data = []
 traj_lengths = []
 for demo in demos:
-    traj_lengths.append(len(f['data'][demo]['obs']['object']))
-for demo in np.array(demos)[np.argsort(traj_lengths)[:100]]:
+    #traj_lengths.append(len(f['data'][demo]['obs']['object']))
+#for demo in np.array(demos)[np.argsort(traj_lengths)]:
     # Construct observation
+    #<KeysViewHDF5 ['agentview_image', 'object', 'robot0_eef_pos', 'robot0_eef_quat', 'robot0_eef_vel_ang', 'robot0_eef_vel_lin', 'robot0_eye_in_hand_image', 'robot0_gripper_qpos', 'robot0_gripper_qvel', 'robot0_joint_pos', 'robot0_joint_pos_cos', 'robot0_joint_pos_sin', 'robot0_joint_vel']>
+
+    default_low_dim_obs = [
+            "robot0_eef_pos",
+            "robot0_eef_quat",
+            "robot0_gripper_qpos",
+            "object",
+    ]
+
     demo_obs = f['data'][demo]['obs']
-    ee_pos = demo_obs['robot0_eef_pos']
-    ee_pos_vel = demo_obs['robot0_eef_vel_lin']
-    ee_ang = demo_obs['robot0_eef_quat']
-    ee_ang_vel = demo_obs['robot0_eef_vel_ang']
-    gripper_pos = demo_obs['robot0_gripper_qpos']
-    gripper_pos_vel = demo_obs['robot0_gripper_qpos']
-    if args.goal:
-        obj = demo_obs['object']
-        obs = np.hstack((obj, ee_pos, ee_pos_vel, ee_ang, ee_ang_vel, gripper_pos, gripper_pos_vel))
-    else:
-        obs = np.hstack((ee_pos, ee_pos_vel, ee_ang, ee_ang_vel, gripper_pos, gripper_pos_vel))
+    obs = np.empty((len(f['data'][demo]['obs'][default_low_dim_obs[0]]), 0))
+    
+
+    for key in default_low_dim_obs:
+        if key == 'object' and not args.goal:
+            continue
+        
+        print(len(demo_obs[key][0]))
+        obs = np.hstack((obs, demo_obs[key]))
+
+    print(len(obs[0]))
+
     actions = f['data'][demo]['actions']
     states = f['data'][demo]['states']
-    expert_data.append({"observations": np.array(obs[:]), "actions": np.array(actions[:]), "states": np.array(states[:]), "model_file": demos[demo].attrs['model_file']})
+    expert_data.append({"observations": np.array(obs[:], dtype=np.float32), "actions": np.array(actions[:], dtype=np.float32), "states": np.array(states[:], dtype=np.float32), "model_file": demos[demo].attrs['model_file']})
 
-print(len(expert_data))
+print(expert_data[0]["observations"][0])
 if args.goal:
     pickle.dump(expert_data, open(f"{os.path.dirname(args.file)}/{len(expert_data)}.pkl", 'wb'))
 else:

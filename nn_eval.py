@@ -37,7 +37,7 @@ DEBUG = False
 
 
 #@profile
-def single_trial_eval(config, agent, env, trial):
+def single_trial_eval(config, agent, env, trial, reset=True):
     img = config.get('img', False)
     env_name = config['name']
     is_robosuite = config.get('robosuite', False)
@@ -48,13 +48,19 @@ def single_trial_eval(config, agent, env, trial):
     if not is_robosuite:
         env.seed(trial)
 
-    observation = env.reset()
+    if reset:
+        observation = env.reset()
+    else:
+        observation = env.get_observation()
     if env_name == "maze2d-umaze-v1":
         env.set_target()
-    obs_history = {
-            'retrieval': [],
-            'delta_state': []
-    }
+    if config.get('mixed'):
+        obs_history = {
+                'retrieval': [],
+                'delta_state': []
+        }
+    else:
+        obs_history = []
 
     agent.reset_obs_history()
 
@@ -66,6 +72,7 @@ def single_trial_eval(config, agent, env, trial):
         steps += 1
         
         height, width = 256, 256
+        #height, width = 64, 64
         frame = np.empty((height, 0, 3), dtype=np.uint8)
         if len(cam_names) > 0:
             for cam in cam_names:
@@ -230,7 +237,9 @@ def nn_eval(config, nn_agent, trials=10, results=None):
     successes = 0
 
     for trial in range(trials):
+        #print(trial)
         episode_reward, success = single_trial_eval(config, nn_agent, env, trial)
+        #print(episode_reward)
         episode_rewards.append(episode_reward)
         successes += success
 
@@ -244,6 +253,36 @@ def nn_eval(config, nn_agent, trials=10, results=None):
     )
 
     return np.mean(episode_rewards)
+
+# Set initial state to an initial state from the training dataset
+def nn_eval_sanity(config, nn_agent, data, results=None):
+    env = construct_env(config)
+    episode_rewards = []
+    successes = 0
+
+    for trial in range(len(data)):
+        #print(trial)
+        initial_state = dict(states=data[trial]['states'][0])
+        initial_state["model"] = data[trial]["model_file"]
+        print(initial_state)
+        env.reset_to(initial_state)
+        print(env.get_state())
+        episode_reward, success = single_trial_eval(config, nn_agent, env, trial, reset=False)
+        #print(episode_reward)
+        episode_rewards.append(episode_reward)
+        successes += success
+
+    if results is not None:
+        os.makedirs('results', exist_ok=True)
+        with open(f"results/{results}.pkl", 'wb') as f:
+            pickle.dump(episode_rewards, f)
+    print(
+        f"Candidates {nn_agent.candidates}, lookback {nn_agent.lookback}, decay {nn_agent.decay}, ratio {nn_agent.final_neighbors_ratio}: "
+        f"mean {round(np.mean(episode_rewards), 2)}, std {round(np.std(episode_rewards), 2)}"
+    )
+
+    return np.mean(episode_rewards)
+
 
 def parallel_nn_eval(env_cfg, policy_cfg, trials=10, results=None):
     num_gpus = torch.cuda.device_count()
@@ -621,13 +660,14 @@ def main():
     agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
     #policy_cfg['cond_force_retrain'] = False
     nn_eval(env_cfg, agent, trials=20)
+    #nn_eval_sanity(env_cfg, agent, data=pickle.load(open(env_cfg["demo_pkl"], 'rb'))[:1])
     #parallel_nn_eval(
     #    env_cfg,
     #    agent,
     #    trials=20,
     #    results="parallel_eval_results",
     #)
-    pickle.dump(agent.model.eval_distances, open("stack_eval_distances_dino.pkl", 'wb'))
+    #pickle.dump(agent.model.eval_distances, open("stack_eval_distances_dino.pkl", 'wb'))
     # nn_eval_closed_loop(env_cfg, dan_agent)
     # env_cfg_copy['demo_pkl'] = "data/hopper-expert-v2_1_img.pkl"
     # img_agent = nn_agent.NNAgentEuclidean(env_cfg_copy, policy_cfg)
