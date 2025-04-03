@@ -39,16 +39,12 @@ for demo in demos:
         if key == 'object' and not args.goal:
             continue
         
-        print(len(demo_obs[key][0]))
         obs = np.hstack((obs, demo_obs[key]))
-
-    print(len(obs[0]))
 
     actions = f['data'][demo]['actions']
     states = f['data'][demo]['states']
     expert_data.append({"observations": np.array(obs[:], dtype=np.float32), "actions": np.array(actions[:], dtype=np.float32), "states": np.array(states[:], dtype=np.float32), "model_file": demos[demo].attrs['model_file']})
 
-print(expert_data[0]["observations"][0])
 if args.goal:
     pickle.dump(expert_data, open(f"{os.path.dirname(args.file)}/{len(expert_data)}.pkl", 'wb'))
 else:

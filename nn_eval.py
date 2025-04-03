@@ -1,4 +1,5 @@
 import os
+import time
 
 from cv2.gapi import video
 
@@ -11,7 +12,6 @@ import nn_agent_torch as nn_agent
 import numpy as np
 import metaworld
 import metaworld.envs.mujoco.env_dict as _env_dict
-import time
 import yaml
 from argparse import ArgumentParser
 import d4rl
@@ -70,6 +70,7 @@ def single_trial_eval(config, agent, env, trial, reset=True):
     done = False
     while not (steps > 0 and (done or eval_over(steps, config, env))):
         steps += 1
+        #print(steps)
         
         height, width = 256, 256
         #height, width = 64, 64
@@ -86,8 +87,8 @@ def single_trial_eval(config, agent, env, trial, reset=True):
                 
                 frame = np.hstack((frame, curr_frame))
         else:
-            #frame = env.render(mode='rgb_array', height=height, width=width, camera_name="agentview")
-            frame = []
+            frame = env.render(mode='rgb_array', height=height, width=width, camera_name="agentview")
+            #frame = []
             #pass
         video_frames.append(frame)
 

@@ -9,7 +9,7 @@ from scipy.spatial import distance
 from scipy.spatial import KDTree
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
-from numba import jit, njit, prange, float64, int64
+from numba import jit, njit, prange, float64, int64, types
 from scipy.linalg import lstsq
 from sklearn.preprocessing import StandardScaler
 import math
@@ -362,7 +362,7 @@ def reset_vision_ob():
 def get_action_from_obs(config, model, env, observation, frame, obs_history=None, numpy_action=True, is_first_ob=False):
     global vision_ob
     is_robosuite = config.get('robosuite', False)
-    stack_size = config.get('stack_size', 10)
+    obs_horizon = model.policy_cfg.get('obs_horizon', 1)
     env_name = config.get('name', 10)
     cam_names = config.get("cams", [])
 
@@ -404,7 +404,6 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
                 obs[dataset] = (obs[processed_obs_types[obs_type]]).detach().clone()
     else:
         obs_type = config['type']
-        stack = config.get("stack?", False)
         
         match obs_type:
             case 'state':
@@ -415,14 +414,6 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
                 obs = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=is_first_ob, proprio_state=proprio_state, cam_names=cam_names, semantic=(obs_type == "semantic_keypoint"))
             case 'rgb':
                 obs = torch.as_tensor(np.transpose(frame.astype(np.float32), (2, 0, 1)).flatten())
-
-        if stack:
-            assert obs_history is not None
-            obs_history.append(obs)
-            if len(obs_history) > stack_size:
-                obs_history.pop(0)
-        
-            obs = stack_with_previous(obs_history, stack_size=stack_size)
 
     action = model.get_action(obs)
 
@@ -436,10 +427,11 @@ def get_keypoint_viz(cam_names):
 
     return tracks, visibles
 
+#@profile
 def stack_with_previous(obs_list, stack_size):
     if len(obs_list) < stack_size:
-        return torch.concatenate([obs_list[0]] * (stack_size - len(obs_list)) + obs_list, axis=0)
-    return torch.concatenate(obs_list[-stack_size:], axis=0)
+        return torch.cat([obs_list[0].unsqueeze(0).repeat(stack_size - len(obs_list), 1), obs_list], dim=0)
+    return torch.cat([obs_list[-stack_size:]], dim=0)
 
 #@profile
 def frame_to_obj_centric_dino(env_name, rgb_array, proprio_state=[], numpy_action=True):
@@ -571,7 +563,7 @@ def eval_over(steps, config, env_instance):
         #or is_robosuite and steps >= 200
         or env_name == "maze2d-umaze-v1" and np.linalg.norm(env_instance._get_obs()[0:2] - env_instance._target) <= 0.5
         #or steps > 1 # For debugging
-        or steps >= 1000)
+        or steps >= 200)
 
 def crop_obs_for_env(obs, env, env_instance=None):
     if env == "ant-expert-v2":
@@ -883,7 +875,7 @@ def create_matrices(expert_data, use_torch=False):
         traj_starts = np.asarray(traj_starts)
     return obs_matrix, act_matrix, traj_starts
 
-@njit([float64[:](int64[:], int64[:], float64[:, :], float64[:,:], float64[:], int64[:], int64[:], float64[:])], parallel=True)
+@njit([float64[:](int64[:], int64[:], float64[:, :], float64[:,:], float64[:], int64[:], int64[:], float64[:])], parallel=False, cache=True, fastmath=True)
 def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_history, flattened_obs_matrix, decay_factors, rot_indices, non_rot_indices, rot_weights):
     m = len(nearest_neighbors)
     n = len(flattened_obs_matrix[0])
@@ -939,7 +931,7 @@ def compute_accum_distance_with_rot(nearest_neighbors, max_lookbacks, obs_histor
 
     return neighbor_distances
 
-@njit([float64[:](int64[:], int64[:], float64[:, :], float64[:,:], float64[:])], parallel=True)
+@njit([float64[:](int64[:], int64[:], float64[:, :], float64[:,:], float64[:])], parallel=False, cache=True)
 def compute_accum_distance(nearest_neighbors, max_lookbacks, obs_history, flattened_obs_matrix, decay_factors):
     m = len(nearest_neighbors)
     n = len(flattened_obs_matrix[0])
@@ -1061,7 +1053,7 @@ def compute_accum_distance_torch(nearest_neighbors, max_lookbacks, obs_history, 
 
     return neighbor_distances
 
-@njit([(float64[:], float64[:, :], int64[:], int64[:], float64[:])], parallel=True)
+@njit([(float64[:], float64[:, :], int64[:], int64[:], float64[:])], parallel=False, cache=True)
 def compute_distance_with_rot(curr_ob: np.ndarray, flattened_obs_matrix: np.ndarray, 
                               rot_indices: np.ndarray, non_rot_indices: np.ndarray, 
                               rot_weights: np.ndarray):
@@ -1110,7 +1102,7 @@ def compute_distance_with_rot_torch(curr_ob: torch.Tensor, flattened_obs_matrix:
     
     return neighbor_distances, neighbor_vec_distances
 
-@njit([(float64[:], float64[:, :])], parallel=True)
+@njit([(float64[:], float64[:, :])], parallel=False, cache=True)
 def compute_distance(curr_ob: np.ndarray, flattened_obs_matrix: np.ndarray):
     m = len(flattened_obs_matrix)
 
@@ -1140,7 +1132,7 @@ def compute_distance_torch(curr_ob: torch.Tensor, flattened_obs_matrix: torch.Te
     
     return neighbor_distances, neighbor_vec_distances
 
-@njit([(float64[:], float64[:, :], int64[:], int64[:], float64[:])], parallel=True)
+@njit([(float64[:], float64[:, :], int64[:], int64[:], float64[:])], parallel=False, cache=True)
 def compute_cosine_distance(curr_ob: np.ndarray, flattened_obs_matrix: np.ndarray, 
                             rot_indices: np.ndarray, non_rot_indices: np.ndarray, 
                             rot_weights: np.ndarray):

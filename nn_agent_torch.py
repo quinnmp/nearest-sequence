@@ -18,10 +18,10 @@ import gmm_regressor
 import nn_plot
 from fast_scaler import FastScaler
 from nn_conditioning_model import (KNNConditioningModel, KNNExpertDataset,
-                                   train_model, train_model_diffusion)
+                                   train_model, train_model_diffusion, ChunkingWrapper)
 from nn_util import (NN_METHOD,
                      compute_distance_torch, compute_distance_with_rot_torch, compute_accum_distance_torch,
-                     load_and_scale_data, set_seed)
+                     load_and_scale_data, set_seed, stack_with_previous)
 
 DEBUG = False
 
@@ -45,6 +45,7 @@ class NNAgent:
         self.decay = policy_cfg.get('decay_rate', 1)
         self.window = policy_cfg.get('dtw_window', 0)
         self.final_neighbors_ratio = policy_cfg.get('ratio', 1)
+        self.obs_horizon = policy_cfg.get('obs_horizon', 1)
 
         # Precompute constants
         self.obs_history = torch.tensor([], dtype=torch.float64)
@@ -85,6 +86,9 @@ class NNAgent:
                 # Train the model if it doesn't exist
                 train_dataset = KNNExpertDataset(env_cfg, policy_cfg, euclidean=False, bc_baseline=self.method == NN_METHOD.BC)
 
+                if self.obs_horizon > 1 or policy_cfg.get('act_horizon', 1) > 1:
+                    train_dataset = ChunkingWrapper(policy_cfg['obs_horizon'], policy_cfg['act_horizon'], train_dataset)
+
                 train_loader = DataLoader(
                     train_dataset, 
                     batch_size=policy_cfg.get('batch_size', 64), 
@@ -98,6 +102,10 @@ class NNAgent:
                         val_env_cfg = yaml.load(f, Loader=yaml.FullLoader)
                     val_env_cfg['seed'] = env_cfg.get('seed', 42)
                     val_dataset = KNNExpertDataset(val_env_cfg, policy_cfg, euclidean=False, bc_baseline=self.method == NN_METHOD.BC)
+
+                    if policy_cfg.get('obs_horizon', 1) > 1 or policy_cfg.get('act_horizon', 1) > 1:
+                        val_dataset = ChunkingWrapper(policy_cfg['obs_horizon'], policy_cfg['act_horizon'], val_dataset)
+
                     val_loader = DataLoader(
                         val_dataset, 
                         batch_size=policy_cfg.get('batch_size', 64), 
@@ -129,6 +137,8 @@ class NNAgent:
                         hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
                         dropout_rate=policy_cfg.get('dropout', 0.0),
                         bc_baseline=self.method == NN_METHOD.BC,
+                        obs_horizon=policy_cfg.get("obs_horizon", 1),
+                        act_horizon=policy_cfg.get("act_horizon", 1),
                         reduce_delta_s=False,
                         numpy_action=False,
                         gaussian_action=False,
@@ -142,7 +152,7 @@ class NNAgent:
 
                 model = nn.DataParallel(model)
 
-                self.model = train_model_diffusion(
+                self.model = train_model(
                     model, 
                     train_loader, 
                     val_loader=val_loader,
@@ -168,11 +178,15 @@ class NNAgent:
         self.obs_history = torch.tensor([], dtype=torch.float64)
 
 class NNAgentEuclidean(NNAgent):
+    #@profile
     def get_action(self, current_ob):
+        self.update_obs_history(current_ob['retrieval'])
         if self.method == NN_METHOD.BC:
+            if self.obs_horizon > 1:
+                current_ob['retrieval'] = stack_with_previous(self.obs_history[-self.obs_horizon:], stack_size=self.obs_horizon)
+
             return self.model(current_ob['retrieval'], -1, -1, -1, inference=True).detach().cpu().numpy()
 
-        self.update_obs_history(current_ob['retrieval'])
 
         # If we have elements in our observation space that wraparound (rotations), we can't just do direct Euclidean distance
         if not hasattr(self, '_weighted_ob_buffer'):
