@@ -18,7 +18,7 @@ import gmm_regressor
 import nn_plot
 from fast_scaler import FastScaler
 from nn_conditioning_model import (KNNConditioningModel, KNNExpertDataset,
-                                   train_model, train_model_diffusion, ChunkingWrapper)
+                                   train_model, ChunkingWrapper)
 from nn_util import (NN_METHOD,
                      compute_distance_torch, compute_distance_with_rot_torch, compute_accum_distance_torch,
                      load_and_scale_data, set_seed, stack_with_previous)
@@ -40,11 +40,11 @@ class NNAgent:
             self.datasets = {}
             raise RuntimeError("Must use subclass to handle data loading")
 
-        self.candidates = policy_cfg.get('k_neighbors', 100)
+        self.candidates = policy_cfg.get('k', 100)
         self.lookback = policy_cfg.get('lookback', 10)
         self.decay = policy_cfg.get('decay_rate', 1)
         self.window = policy_cfg.get('dtw_window', 0)
-        self.final_neighbors_ratio = policy_cfg.get('ratio', 1)
+        self.final_neighbors_ratio = policy_cfg.get('final_neighbors_ratio', 1)
         self.obs_horizon = policy_cfg.get('obs_horizon', 1)
 
         # Precompute constants
@@ -127,27 +127,16 @@ class NNAgent:
                 else:
                     optimizer_state_dict = None
                     model = KNNConditioningModel(
+                        # Required kwargs
                         state_dim=state_dim,
                         delta_state_dim=delta_state_dim,
                         action_dim=action_dim,
-                        k=self.candidates,
                         action_scaler=self.datasets['retrieval'].act_scaler,
                         distance_scaler=train_dataset.distance_scaler,
-                        final_neighbors_ratio=self.final_neighbors_ratio,
-                        hidden_dims=policy_cfg.get('hidden_dims', [512, 512]),
-                        dropout_rate=policy_cfg.get('dropout', 0.0),
+                        config=policy_cfg,
+                        # Flag kwargs
                         bc_baseline=self.method == NN_METHOD.BC,
-                        obs_horizon=policy_cfg.get("obs_horizon", 1),
-                        act_horizon=policy_cfg.get("act_horizon", 1),
-                        reduce_delta_s=False,
-                        numpy_action=False,
-                        gaussian_action=False,
-                        mlp_combine=False,
                         diffusion=True,
-                        #cnn=True,
-                        #cnn_stride=policy_cfg.get('stride', None),
-                        #cnn_channels=policy_cfg.get('channels', None),
-                        #cnn_size=policy_cfg.get('kernel_size', None),
                     )
 
                 model = nn.DataParallel(model)
@@ -156,11 +145,9 @@ class NNAgent:
                     model, 
                     train_loader, 
                     val_loader=val_loader,
-                    num_epochs=policy_cfg.get('epochs', 1000), 
-                    lr=float(policy_cfg.get('lr', 1e-3)), 
-                    decay=float(policy_cfg.get('weight_decay', 1e-5)), 
                     model_path=model_path,
-                    loaded_optimizer_dict=optimizer_state_dict if optimizer_state_dict else None
+                    loaded_optimizer_dict=optimizer_state_dict if optimizer_state_dict else None,
+                    config=policy_cfg,
                 )
 
             self.model.eval()

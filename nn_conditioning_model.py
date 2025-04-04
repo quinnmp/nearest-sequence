@@ -1,31 +1,19 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils import data
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset
 import numpy as np
-from scipy.spatial.distance import cdist
 from fast_scaler import FastScaler
-from torch.optim.lr_scheduler import ReduceLROnPlateau
-import argparse
-import yaml
 import pickle
-from numba import jit, njit, prange, float32, int64
-from sklearn.model_selection import KFold
-from sklearn.neighbors import KDTree
 import nn_agent_torch as nn_agent
 import math
-import faiss
-import random
 import os
 from dataclasses import dataclass
-from tqdm import tqdm
 import time
-from torch.amp import autocast, GradScaler
 from typing import List
+from types import SimpleNamespace
 from video_action_learning.models.dp.base_policy import DiffusionPolicy
 from video_action_learning.models.dp.transformer import TransformerNoisePredictionNet
-import nn_util
 
 if torch.cuda.is_available():
     torch.set_default_device('cuda')
@@ -37,6 +25,26 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NULL_TENSOR = torch.as_tensor(-1, dtype=torch.float32)
 
 torch.set_default_dtype(torch.float32)
+
+def set_attributes_from_args(obj, default_config, args):
+    # Args optionally contains a config dictionary
+    # Hierarchy goes default < config < epxlicitly provided kwargs
+
+    # First just populate args with the default values
+    curr_args = default_config.copy()
+
+    # Extract and remove config dict if present
+    config_dict = args.pop("config", {})
+
+    for key in curr_args:
+        if key in args:
+            curr_args[key] = args[key]
+        elif key in config_dict:
+            curr_args[key] = config_dict[key]
+
+    #print(curr_args)
+    for key, value in curr_args.items():
+        setattr(obj, key, value)
 
 @dataclass
 class NeighborData:
@@ -97,40 +105,59 @@ class DeepSetsActionCombiner(nn.Module):
         return output
 
 class KNNConditioningModel(nn.Module):
-    def __init__(self, state_dim, delta_state_dim, action_dim, k, action_scaler, distance_scaler, final_neighbors_ratio=1, hidden_dims=[512, 512], dropout_rate=0.05, obs_horizon=1, act_horizon=1, euclidean=False, combined_dim=False, bc_baseline=False, mlp_combine=False, add_action=False, reduce_delta_s=False, numpy_action=True, gaussian_action=False, cnn=False, cnn_channels=None, cnn_stride=None, cnn_size=None, diffusion=False):
+    def __init__(self, **kwargs):
+        DEFAULT_CONFIG = {
+            'state_dim': int,
+            'delta_state_dim': int,
+            'action_dim': int,
+            'k': int,
+            'action_scaler': None,
+            'distance_scaler': None,
+            'final_neighbors_ratio': 1,
+            'obs_horizon': 1,
+            'act_horizon': 1,
+
+            # Development flags for ablations - not generally used
+            'euclidean': False,
+            'combined_dim': False,
+            'bc_baseline': False,
+            'mlp_combine': False,
+            'add_action': False,
+            'reduce_delta_s': False,
+            'numpy_action': False,
+            'gaussian_action': False,
+
+            # Default to MLP (no flag)
+            'mlp_config': {},
+
+            # CNN Config
+            'cnn': False,
+            'cnn_config': {},
+
+            # Diffusion Config
+            'diffusion': False,
+            'diffusion_config': {}
+        }
+
         super(KNNConditioningModel, self).__init__()
-        self.state_dim = state_dim
-        self.delta_state_dim = delta_state_dim
-        self.action_dim = action_dim
-        self.k = k
-        self.final_neighbors_ratio = final_neighbors_ratio
 
-        self.euclidean = euclidean
-        self.combined_dim = combined_dim
-        self.bc_baseline = bc_baseline
-        self.mlp_combine = mlp_combine
-        self.add_action = add_action
-        self.reduce_delta_s = reduce_delta_s
-        self.numpy_action = numpy_action
-        self.gaussian_action = gaussian_action
-        self.cnn = cnn
-        self.diffusion = diffusion
-        
-        self.distance_size = delta_state_dim if not euclidean else 1
-        if add_action:
-            self.input_dim = state_dim + self.distance_size
-        elif combined_dim:
-            self.input_dim = self.input_dim * math.floor(k * final_neighbors_ratio)
-        elif bc_baseline:
-            self.input_dim = state_dim
+        set_attributes_from_args(self, DEFAULT_CONFIG, kwargs)
+
+        # How big is delta s?
+        self.distance_size = self.delta_state_dim if not self.euclidean else 1
+
+        # Figure out size of the input to our model
+        if self.bc_baseline:
+            self.input_dim = self.state_dim
+        elif self.add_action:
+            self.input_dim = self.state_dim + self.distance_size
         else:
-            self.input_dim = state_dim + action_dim + self.distance_size
+            self.input_dim = self.state_dim + self.action_dim + self.distance_size
 
-        self.action_scaler = action_scaler
-        self.distance_scaler = distance_scaler
-        self.training_mode = True
+        if self.combined_dim:
+            self.input_dim *= math.floor(self.k * self.final_neighbors_ratio)
 
-        if reduce_delta_s:
+        if self.reduce_delta_s:
             delta_s_hidden_dims = []
             delta_s_layers = []
             delta_s_final_embedding = 64
@@ -145,54 +172,70 @@ class KNNConditioningModel(nn.Module):
             delta_s_layers.append(nn.Linear(in_dim, delta_s_final_embedding))
             self.delta_s_reducer = nn.Sequential(*delta_s_layers).to(dtype=torch.float32)
 
+        self.training_mode = True
         layers = []
-        if cnn:
+        if self.cnn:
+            DEFAULT_CNN_CONFIG = {
+                'channels': [16, 32, 64, 128],
+                'stride': 2,
+                'kernel_size': 3,
+                'dropout_rate': 0.05
+            }
+
+            set_attributes_from_args(self, DEFAULT_CNN_CONFIG, self.cnn_config)
+
             in_channels = 3
             height, width = 64, 64
-            stack_size = int(state_dim / height / width / in_channels)
+            stack_size = int(self.state_dim / height / width / in_channels)
 
-            channels = [16, 32, 64, 128] if cnn_channels is None else cnn_channels
-            kernel_size = 3 if cnn_size is None else cnn_size
-            stride = 2 if cnn_stride is None else cnn_stride
             layers.append(Reshape3DCNN(in_channels, stack_size, height, width))
 
             time_dim = stack_size
-            for i, out_channels in enumerate(channels):
-                time_dim = time_dim - 1 if i < len(channels) else time_dim
+            for i, out_channels in enumerate(self.channels):
+                time_dim = time_dim - 1 if i < len(self.channels) else time_dim
                 layers.extend([
                     nn.Conv3d(in_channels, out_channels,
-                      kernel_size=(2, kernel_size, kernel_size),
-                      padding=(0, kernel_size//2, kernel_size//2),
-                      stride=(1, stride, stride)),
+                      kernel_size=(2, self.kernel_size, self.kernel_size),
+                      padding=(0, self.kernel_size//2, self.kernel_size//2),
+                      stride=(1, self.stride, self.stride)),
                     nn.ReLU(),
-                    nn.Dropout3d(dropout_rate),
+                    nn.Dropout3d(self.dropout_rate),
                 ])
                 in_channels = out_channels
 
-            cnn_height = cnn_width = height // (stride ** len(channels))
+            cnn_height = cnn_width = height // (self.stride ** len(self.channels))
             layers.append(nn.Flatten())
-            in_dim = int(time_dim * cnn_height * cnn_width * channels[-1])
+            in_dim = int(time_dim * cnn_height * cnn_width * self.channels[-1])
         else:
-            in_dim = self.input_dim if not reduce_delta_s else delta_s_final_embedding * 2 + action_dim
+            in_dim = self.input_dim if not self.reduce_delta_s else self.delta_s_final_embedding * 2 + self.action_dim
 
-        if not diffusion:
-            for hidden_dim in hidden_dims:
+        pred_dim = self.action_dim if not self.gaussian_action else self.action_dim * 2
+
+        if not self.diffusion:
+            DEFAULT_MLP_CONFIG = {
+                'hidden_dims': [512, 512],
+                'dropout_rate': 0.05
+            }
+
+            set_attributes_from_args(self, DEFAULT_MLP_CONFIG, self.mlp_config)
+
+            for hidden_dim in self.hidden_dims:
                 layers.extend([
                     nn.Linear(in_dim, hidden_dim),
                     nn.ReLU(),
-                    nn.Dropout(dropout_rate),
+                    nn.Dropout(self.dropout_rate),
                 ])
                 in_dim = hidden_dim
 
-            layers.append(nn.Linear(hidden_dims[-1], action_dim if not gaussian_action else action_dim * 2).to(device))
+            layers.append(nn.Linear(self.hidden_dims[-1], pred_dim).to(device))
             self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
         else:
-            noise_pred_net = TransformerNoisePredictionNet(act_horizon, action_dim if not gaussian_action else action_dim * 2, state_dim * obs_horizon)
-            self.model = DiffusionPolicy(act_horizon, action_dim if not gaussian_action else action_dim * 2, noise_pred_net)
+            noise_pred_net = TransformerNoisePredictionNet(self.act_horizon, pred_dim, self.input_dim * self.obs_horizon)
+            self.model = DiffusionPolicy(self.act_horizon, pred_dim, noise_pred_net)
         
-        if mlp_combine:
+        if self.mlp_combine:
             self.action_combiner = DeepSetsActionCombiner(
-                action_dim=action_dim if not gaussian_action else action_dim * 2,
+                action_dim=pred_dim,
                 hidden_dim=64, # Can be tuned
             )
 
@@ -226,9 +269,9 @@ class KNNConditioningModel(nn.Module):
             else:
                 if self.diffusion:
                     # Have to add chunking dimension
+                    real_actions = self.action_scaler.transform(real_actions)
                     if len(real_actions.shape) == 2:
                         real_actions = real_actions.unsqueeze(1).expand(batch_size, 1, real_actions.size(-1))
-                    real_actions = self.action_scaler.transform(real_actions)
 
                     return self.model(inputs, real_actions)
                 else:
@@ -251,9 +294,9 @@ class KNNConditioningModel(nn.Module):
         num_neighbors = math.floor(self.k * self.final_neighbors_ratio)
 
         batch_size = states.size(0)
-        states = states.view(batch_size, num_neighbors, self.state_dim)
-        actions = actions.view(batch_size, num_neighbors, self.action_dim)
-        distances = distances.view(batch_size, num_neighbors, self.distance_size)
+        states = states.view(batch_size, num_neighbors, self.state_dim * self.obs_horizon)
+        actions = actions.view(batch_size, num_neighbors, self.action_dim * self.obs_horizon)
+        distances = distances.view(batch_size, num_neighbors, self.distance_size * self.obs_horizon)
 
         if self.reduce_delta_s:
             states = self.delta_s_reducer(states)
@@ -271,7 +314,11 @@ class KNNConditioningModel(nn.Module):
             else:
                 if self.diffusion:
                     # Diffusion training
-                    real_actions = real_actions.unsqueeze(1).expand(batch_size, 1, real_actions.size(-1))
+                    real_actions = self.action_scaler.transform(real_actions)
+                    real_actions = real_actions.reshape(batch_size * num_neighbors, self.act_horizon, -1)
+                    if len(real_actions.shape) == 2:
+                        real_actions = real_actions.unsqueeze(1)
+
                     return self.model(inputs, real_actions)
                 else:
                     model_outputs = self.model(inputs)
@@ -372,8 +419,11 @@ class KNNExpertDataset(Dataset):
                 pickle.dump({"lookup": self.neighbor_lookup, "distance_scaler": self.distance_scaler}, open(neighbor_lookup_pkl, 'wb'))
 
         # Cache some useful stats
-        self.state_size = len(self[0][0])
-        self.action_size = len(self[0][3])
+        self.state_size = self[0][0].shape[-1]
+        self.action_size = self[0][3].shape[-1]
+        if not self.bc_baseline:
+            self.num_neighbors = self[0][0].shape[-2]
+            self.distance_size = self[0][2].shape[-1]
 
     def __len__(self):
         return len(self.datasets['retrieval'].flattened_obs_matrix)
@@ -449,8 +499,22 @@ class ChunkingWrapper(Dataset):
         # Caches
         self.idx_populated = torch.zeros(len(wrapped), dtype=torch.bool)
 
-        self.state_lookup = torch.empty((len(wrapped), self.obs_horizon, self.state_size))
-        self.action_lookup = torch.empty((len(wrapped), self.act_horizon, self.action_size))
+
+        if self.bc_baseline:
+            # [ob_count, horizon, size]
+            self.state_lookup = torch.empty((len(wrapped), self.obs_horizon, self.state_size))
+            self.action_lookup = torch.empty((len(wrapped), self.act_horizon, self.action_size))
+            self.neighbor_action_lookup = torch.zeros((len(wrapped), self.obs_horizon)) - 1
+            self.distance_lookup = torch.zeros((len(wrapped), self.obs_horizon)) - 1
+            self.weights_lookup = torch.zeros((len(wrapped), self.obs_horizon)) - 1
+        else:
+            # [ob_count, neighbors, horizon, size]
+            self.state_lookup = torch.empty((len(wrapped), self.num_neighbors, self.obs_horizon, self.state_size))
+            self.action_lookup = torch.empty((len(wrapped), self.num_neighbors, self.act_horizon, self.action_size))
+            self.neighbor_action_lookup = torch.empty((len(wrapped), self.num_neighbors, self.obs_horizon, self.action_size)) - 1
+            self.distance_lookup = torch.empty((len(wrapped), self.num_neighbors, self.obs_horizon, self.distance_size)) - 1
+            self.weights_lookup = torch.empty((len(wrapped), self.num_neighbors, self.obs_horizon)) - 1
+
     
     #@profile
     def __getitem__(self, idx):
@@ -466,11 +530,18 @@ class ChunkingWrapper(Dataset):
 
             assert len(obs_indices) == self.obs_horizon
 
-            obs = torch.empty((self.obs_horizon, self.state_size))
+            if self.bc_baseline:
+                obs = torch.empty((self.obs_horizon, self.state_size))
+            else:
+                obs = torch.empty((self.obs_horizon, self.num_neighbors, self.state_size))
+
             for i, wrapped_i in enumerate(obs_indices):
                 obs[i] = self.wrapped[wrapped_i][0]
 
-            self.state_lookup[idx] = obs
+            if self.bc_baseline:
+                self.state_lookup[idx] = obs
+            else:
+                self.state_lookup[idx] = obs.permute((1, 0, 2))
 
             padding_needed = max(traj_len, state_num + self.act_horizon) - traj_len
             act_indices = list(range(state_num, state_num + self.act_horizon - padding_needed))
@@ -478,11 +549,31 @@ class ChunkingWrapper(Dataset):
 
             assert len(act_indices) == self.act_horizon
 
-            acts = torch.empty((self.act_horizon, self.action_size))
+            if self.bc_baseline:
+                acts = torch.empty((self.act_horizon, self.action_size))
+            else:
+                acts = torch.empty((self.act_horizon, self.num_neighbors, self.action_size))
+
             for i, wrapped_i in enumerate(act_indices):
                 acts[i] = self.wrapped[wrapped_i][3]
 
-            self.action_lookup[idx] = acts
+            if self.bc_baseline:
+                self.action_lookup[idx] = acts
+            else:
+                self.action_lookup[idx] = acts.permute((1, 0, 2))
+
+            if not self.bc_baseline:
+                neighbor_acts = torch.empty((self.obs_horizon, self.num_neighbors, self.action_size))
+                dists = torch.empty((self.obs_horizon, self.num_neighbors, self.distance_size))
+                weights = torch.empty((self.obs_horizon, self.num_neighbors))
+                for i, wrapped_i in enumerate(obs_indices):
+                    neighbor_acts[i] = self.wrapped[wrapped_i][1]
+                    dists[i] = self.wrapped[wrapped_i][2]
+                    weights[i] = self.wrapped[wrapped_i][4]
+
+                self.neighbor_action_lookup[idx] = neighbor_acts.permute((1, 0, 2))
+                self.distance_lookup[idx] = dists.permute((1, 0, 2))
+                self.weights_lookup[idx] = weights.permute((1, 0))
 
             self.idx_populated[idx] = True
 
@@ -491,6 +582,11 @@ class ChunkingWrapper(Dataset):
 
         if self.bc_baseline:
             return obs, NULL_TENSOR, NULL_TENSOR, acts, NULL_TENSOR
+        else:
+            neighbor_acts = self.neighbor_action_lookup[idx]
+            dists = self.distance_lookup[idx]
+            weights = self.weights_lookup[idx]
+            return obs, neighbor_acts, dists, acts, weights
 
     def __len__(self):
         return len(self.wrapped)
@@ -502,16 +598,33 @@ class ChunkingWrapper(Dataset):
         raise AttributeError(f"Neither '{self.__class__.__name__}' nor wrapped dataset has attribute '{name}'")
 
 #@profile
-def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-4, decay=1e-6, model_path="cond_models/cond_model.pth", loaded_optimizer_dict=None):
-    os.makedirs(os.path.dirname(model_path), exist_ok=True)
+def train_model(model, train_loader, **kwargs):
+    DEFAULT_CONFIG = {
+        'val_loader': None,
+        'epochs': 100,
+
+        # Optimizer
+        'lr': 1e-4,
+        'weight_decay': 1e-6,
+        'eps': 1e-8,
+
+        # Checkpoint loading
+        'model_path': "cond_models/cond_model.pth",
+        'loaded_optimizer_dict': None
+    }
+
+    config = SimpleNamespace()
+    set_attributes_from_args(config, DEFAULT_CONFIG, kwargs)
+
+    os.makedirs(os.path.dirname(config.model_path), exist_ok=True)
 
     model.to(device)
     model.train()
     criterion = nn.MSELoss()
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=decay, eps=1e-8, amsgrad=False, foreach=True)
+    optimizer = optim.AdamW(model.parameters(), lr=float(config.lr), weight_decay=float(config.weight_decay), eps=float(config.eps), amsgrad=False, foreach=True)
 
-    if loaded_optimizer_dict is not None:
-        optimizer.load_state_dict(loaded_optimizer_dict)
+    if config.loaded_optimizer_dict is not None:
+        optimizer.load_state_dict(config.loaded_optimizer_dict)
 
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
@@ -524,7 +637,7 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-4, d
     early_stopping_patience = 8
     early_stopping_counter = 0
 
-    for epoch in range(num_epochs):
+    for epoch in range(config.epochs):
         # Training phase
         train_loss = 0.0
         num_train_batches = 0
@@ -547,7 +660,7 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-4, d
         avg_train_loss = train_loss / num_train_batches
         
         # Validation phase
-        if val_loader is not None:
+        if config.val_loader is not None:
             model.eval()
             if isinstance(model, nn.DataParallel):
                 model.module.training_mode = True
@@ -557,12 +670,12 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-4, d
             val_loss = 0.0
             num_val_batches = 0
             with torch.no_grad():
-                for neighbor_states, neighbor_actions, neighbor_distances, actions, weights in val_loader:
-                    neighbor_states = train_loader.dataset.agent.datasets['state'].obs_scaler.transform(val_loader.dataset.agent.datasets['state'].obs_scaler.inverse_transform(neighbor_states))
-                    actions = train_loader.dataset.agent.datasets['state'].act_scaler.transform(val_loader.dataset.agent.datasets['state'].act_scaler.inverse_transform(actions))
+                for neighbor_states, neighbor_actions, neighbor_distances, actions, weights in config.val_loader:
+                    neighbor_states = train_loader.dataset.agent.datasets['state'].obs_scaler.transform(config.val_loader.dataset.agent.datasets['state'].obs_scaler.inverse_transform(neighbor_states))
+                    actions = train_loader.dataset.agent.datasets['state'].act_scaler.transform(config.val_loader.dataset.agent.datasets['state'].act_scaler.inverse_transform(actions))
                     if not train_loader.dataset.bc_baseline:
-                        neighbor_actions = train_loader.dataset.agent.datasets['state'].act_scaler.transform(val_loader.dataset.agent.datasets['state'].act_scaler.inverse_transform(neighbor_actions))
-                        neighbor_distances = train_loader.dataset.agent.datasets['delta_state'].obs_scaler.transform(val_loader.dataset.agent.datasets['delta_state'].obs_scaler.inverse_transform(neighbor_distances))
+                        neighbor_actions = train_loader.dataset.agent.datasets['state'].act_scaler.transform(config.val_loader.dataset.agent.datasets['state'].act_scaler.inverse_transform(neighbor_actions))
+                        neighbor_distances = train_loader.dataset.agent.datasets['delta_state'].obs_scaler.transform(config.val_loader.dataset.agent.datasets['delta_state'].obs_scaler.inverse_transform(neighbor_distances))
                     if model.module.diffusion:
                         loss = model(neighbor_states, neighbor_actions, neighbor_distances, weights, real_actions=actions)
                     else:
@@ -586,14 +699,14 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-4, d
 
                 if early_stopping_counter >= early_stopping_patience:
                     print(f'Recommend early stopping after {epoch+1 - early_stopping_patience} epochs')
-                    torch.save(best_check, model_path)
+                    torch.save(best_check, config.model_path)
                     return best_check['model']
 
                 
-                print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+                print(f"Epoch [{epoch + 1}/{config.epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
             model.train()
         else:
-            print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss}")
+            print(f"Epoch [{epoch + 1}/{config.epochs}], Train Loss: {avg_train_loss}")
             pass
 
     if isinstance(model, nn.DataParallel):
@@ -602,173 +715,5 @@ def train_model(model, train_loader, val_loader=None, num_epochs=100, lr=1e-4, d
     torch.save({'model': model,
                 'optimizer_state_dict': optimizer.state_dict(),
                 'dataloader_rng_state': train_loader.generator.get_state()
-}, model_path)
+}, config.model_path)
     return model
-
-def train_model_diffusion(model, train_loader, val_loader=None, num_epochs=100, lr=1e-3, decay=1e-5, model_path="cond_models/cond_model.pth", loaded_optimizer_dict=None):
-    from diffusers.optimization import get_scheduler
-    os.makedirs(os.path.dirname(model_path), exist_ok=True)
-
-    model.to(device)
-    model.train()
-    criterion = nn.MSELoss()
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=decay, eps=1e-8, betas=[0.9, 0.999])
-    scheduler = get_scheduler(optimizer=optimizer, name="constant")
-
-    USE_AMP = False
-    scaler = torch.cuda.amp.GradScaler(enabled=USE_AMP)
-
-    if loaded_optimizer_dict is not None:
-        optimizer.load_state_dict(loaded_optimizer_dict)
-
-    best_val_loss = float('inf')
-    early_stopping_patience = 8
-    early_stopping_counter = 0
-
-    for epoch in range(num_epochs):
-        # Training phase
-        train_loss = 0.0
-        num_train_batches = 0
-        start = time.time()
-        for neighbor_states, neighbor_actions, neighbor_distances, actions, weights in train_loader:
-            #print(num_train_batches)
-            with torch.autocast(
-                device_type="cuda", dtype=torch.bfloat16, enabled=USE_AMP
-            ):
-                loss = model(neighbor_states, neighbor_actions, neighbor_distances, weights, real_actions=actions)
-
-            optimizer.zero_grad()
-            scaler.scale(loss).backward()
-
-            scaler.unscale_(optimizer)
-
-            nn.utils.clip_grad_norm_(model.parameters(), 1)
-            scaler.step(optimizer)
-            scaler.update()
-
-            scheduler.step()
-
-            train_loss += loss.detach()
-            num_train_batches += 1
-        #print(f"Time for epoch {epoch}: {time.time() - start}")
-        avg_train_loss = train_loss / num_train_batches
-        
-        # Validation phase
-        if val_loader is not None:
-            model.eval()
-            if isinstance(model, nn.DataParallel):
-                model.module.training_mode = True
-            else:
-                model.training_mode = True
-
-            val_loss = 0.0
-            num_val_batches = 0
-            with torch.no_grad():
-                for neighbor_states, neighbor_actions, neighbor_distances, actions, weights in val_loader:
-                    neighbor_states = train_loader.dataset.agent.datasets['state'].obs_scaler.transform(val_loader.dataset.agent.datasets['state'].obs_scaler.inverse_transform(neighbor_states))
-                    actions = train_loader.dataset.agent.datasets['state'].act_scaler.transform(val_loader.dataset.agent.datasets['state'].act_scaler.inverse_transform(actions))
-                    if not train_loader.dataset.bc_baseline:
-                        neighbor_actions = train_loader.dataset.agent.datasets['state'].act_scaler.transform(val_loader.dataset.agent.datasets['state'].act_scaler.inverse_transform(neighbor_actions))
-                        neighbor_distances = train_loader.dataset.agent.datasets['delta_state'].obs_scaler.transform(val_loader.dataset.agent.datasets['delta_state'].obs_scaler.inverse_transform(neighbor_distances))
-                    if model.module.diffusion:
-                        loss = model(neighbor_states, neighbor_actions, neighbor_distances, weights, real_actions=actions)
-                    else:
-                        predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
-                        loss = criterion(predicted_actions, actions)
-                    val_loss += loss.detach()
-                    num_val_batches += 1
-                
-                avg_val_loss = val_loss / num_val_batches
-                
-                scheduler.step(avg_val_loss)
-                # Save the best model based on validation loss
-                if avg_val_loss < best_val_loss:
-                    best_val_loss = avg_val_loss
-                    early_stopping_counter = 0
-                    best_check ={'model': model.module if isinstance(model, nn.DataParallel) else model,
-                                'optimizer_state_dict': optimizer.state_dict(),
-                                'dataloader_rng_state': train_loader.generator.get_state()}
-                else:
-                    early_stopping_counter += 1
-
-                if early_stopping_counter >= early_stopping_patience:
-                    #print(f'Recommend early stopping after {epoch+1 - early_stopping_patience} epochs')
-                    torch.save(best_check, model_path)
-                    return best_check['model']
-
-                
-                #print(f"Epoch [{epoch + 1}/{num_epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
-            model.train()
-        else:
-            print(f"Epoch [{epoch + 1}/{num_epochs}], Train Loss: {avg_train_loss}")
-            pass
-
-    if isinstance(model, nn.DataParallel):
-        model = model.module
-
-    torch.save({'model': model,
-                'optimizer_state_dict': optimizer.state_dict(),
-                'dataloader_rng_state': train_loader.generator.get_state()
-}, model_path)
-    return model
-
-def evaluate_model(model, test_loader):
-    model.eval()
-    criterion = nn.MSELoss()
-    total_loss = 0.0
-    
-    with torch.no_grad():
-        for neighbor_states, neighbor_distances, actions in test_loader:
-            actions = actions.squeeze(1)
-            predicted_actions = model(neighbor_states, neighbor_distances)
-            print(f"Predicted: {predicted_actions[0]}")
-            print(f"Actual: {actions[0]}")
-            loss = criterion(predicted_actions, actions)
-            total_loss += loss.item()
-    
-    avg_loss = total_loss / len(test_loader)
-    print(f"Test Loss (MSE): {avg_loss:.4f}")
-    return avg_loss
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("config_path", help="Path to config file")
-    args, _ = parser.parse_known_args()
-
-    with open(args.config_path, 'r') as f:
-        config = yaml.load(f, Loader=yaml.FullLoader)
-
-    print(config)
-
-    candidates = config['policy']['k_neighbors']
-    lookback = config['policy']['lookback']
-    decay = config['policy']['decay_rate']
-    final_neighbors_ratio = config['policy']['ratio']
-
-    full_dataset = KNNExpertDataset(config['data']['pkl'], candidates=candidates[0], lookback=lookback[0], decay=decay[0], final_neighbors_ratio=final_neighbors_ratio[0])
-
-    # Hyperparameters
-    batch_size = 1024
-    num_epochs = 1
-    learning_rate = 1e-3
-
-    train_loader = DataLoader(full_dataset, batch_size=batch_size, shuffle=True, num_workers=-1, worker_init_fn=lambda worker_id: np.random.seed(42 + worker_id))
-
-    # Initialize model
-    state_dim = full_dataset[0][0][0].shape[0]
-    action_dim = full_dataset[0][3].shape[0]
-    model = KNNConditioningModel(state_dim, action_dim, candidates[0], full_dataset.action_scaler, final_neighbors_ratio=final_neighbors_ratio[0])
-
-    # Train model
-    model = train_model(model, train_loader, num_epochs=num_epochs, lr=learning_rate)
-
-    # Final evaluation
-    train_loss = evaluate_model(model, train_loader)
-    print(f"Final Training Loss: {train_loss:.4f}")
-
-    # Save model
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'action_scaler': model.action_scaler
-    }, 'knn_conditioning_model.pth')
-    print("Model saved successfully!")

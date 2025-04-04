@@ -1,52 +1,32 @@
 import pickle
 import numpy as np
 import jax.numpy as jnp
-from scipy.spatial.distance import cdist
 from dataclasses import dataclass
-import nn_plot
-import copy
-from scipy.spatial import distance
-from scipy.spatial import KDTree
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
-from numba import jit, njit, prange, float64, int64, types
-from scipy.linalg import lstsq
-from sklearn.preprocessing import StandardScaler
-import math
-import faiss
+from numba import njit, prange, float64, int64
 import os
 import sys
-import gmm_regressor
 import torch
 import random
 import torchvision.transforms as transforms
 import gym
-import matplotlib.pyplot as plt
 import warnings
 from functools import partial
 
-import robomimic
 import robomimic.utils.obs_utils as ObsUtils
 import robomimic.utils.env_utils as EnvUtils
-from robomimic.envs.env_base import EnvBase
 from robomimic.utils.file_utils import get_env_metadata_from_dataset
 
-import mimicgen
-import mimicgen.utils.file_utils as MG_FileUtils
 import mimicgen.utils.robomimic_utils as RobomimicUtils
-from mimicgen.utils.misc_utils import add_red_border_to_frame
-#from mimicgen.configs import MG_TaskSpec
 import jax
 jax.config.update("jax_default_matmul_precision", "highest") # Crucial for determinism
-import mediapy as media
 import numpy as np
 from tapnet.models import tapir_model
 from tapnet.utils import model_utils
-#from tapnet.utils import transforms
-from tapnet.utils import viz_utils
 from fast_scaler import FastScaler
 from PIL import Image
-from typing import List, Dict
+from typing import List
+
 import cv2
 #from groundingdino.util.inference import load_model, load_image, predict, annotate
 #import groundingdino.datasets.transforms as T
@@ -109,7 +89,7 @@ def load_and_scale_data(path, rot_indices, weights, ob_type='state', use_torch=F
     non_rot_observations = observations[:, non_rot_indices]
 
     obs_scaler = FastScaler()
-    if ob_type == 'rgb':
+    if ob_type == 'rgb' or ob_type == 'dino':
         obs_scaler.fit(np.concatenate(non_rot_observations))
     else:
         obs_scaler.fit(non_rot_observations)
@@ -271,7 +251,7 @@ def crop_and_resize(img, crop_corners):
     resized_img = cv2.resize(cropped_img, (width, height))
     return resized_img
 
-def construct_env(config):
+def construct_env(config, seed=None):
     global pca
     is_robosuite = config.get('robosuite', False)
 
@@ -291,6 +271,8 @@ def construct_env(config):
             ObsUtils.initialize_obs_utils_with_obs_specs(obs_modality_specs=dummy_spec)
 
             env_meta = get_env_metadata_from_dataset(dataset_path=config['demo_hdf5'])
+            if seed is not None:
+                env_meta['seed'] = seed
             env = EnvUtils.create_env_from_metadata(env_meta=env_meta, render_offscreen=True)
         finally:
             sys.stdout.close()
@@ -343,13 +325,18 @@ def construct_env(config):
 def get_proprio(config, obs):
     is_robosuite = config.get('robosuite', False)
     if is_robosuite:
-        ee_pos = obs['robot0_eef_pos']
-        ee_pos_vel = obs['robot0_eef_vel_lin']
-        ee_ang = obs['robot0_eef_quat']
-        ee_ang_vel = obs['robot0_eef_vel_ang']
-        gripper_pos = obs['robot0_gripper_qpos']
-        gripper_pos_vel = obs['robot0_gripper_qpos']
-        return np.hstack((ee_pos, ee_pos_vel, ee_ang, ee_ang_vel, gripper_pos, gripper_pos_vel))
+        proprio_obs = np.array([])
+
+        default_low_dim_obs = [
+            "robot0_eef_pos",
+            "robot0_eef_quat",
+            "robot0_gripper_qpos",
+        ]
+
+        for key in default_low_dim_obs:
+            proprio_obs = np.hstack((proprio_obs, obs[key]))
+
+        return proprio_obs
     else:
         return obs
 
@@ -409,7 +396,7 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
             case 'state':
                 obs = crop_obs_for_env(observation, env_name, env_instance=env)
             case 'dino':
-                obs = frame_to_obj_centric_dino(env_name, frame, proprio_state=proprio_state, numpy_action=numpy_action)
+                obs = frame_to_dino(frame, proprio_state=proprio_state, numpy_action=numpy_action)
             case 'keypoint' | 'semantic_keypoint':
                 obs = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=is_first_ob, proprio_state=proprio_state, cam_names=cam_names, semantic=(obs_type == "semantic_keypoint"))
             case 'rgb':
@@ -501,7 +488,7 @@ def frame_to_dino(rgb_array, proprio_state=np.array([]), numpy_action=True):
         # Load the pre-trained DinoV2 model
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="xFormers is not available*") 
-            dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', verbose=False).to(device)
+            dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14', verbose=False).to(device)
 
         dino_model.eval()
 

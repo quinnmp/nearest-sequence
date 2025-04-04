@@ -104,7 +104,7 @@ def single_trial_eval(config, agent, env, trial, reset=True):
 
             # env.render(mode='human')
 
-    if len(video_frames) > 0 and False:
+    if len(video_frames) > 0 and True:
         if False:
             from tapnet.utils import transforms
             from tapnet.utils import viz_utils
@@ -642,6 +642,7 @@ def main():
     parser = ArgumentParser()
     parser.add_argument("env_config_path", help="Path to environment config file")
     parser.add_argument("policy_config_path", help="Path to policy config file")
+    #parser.add_argument("trial")
     args, _ = parser.parse_known_args()
 
     with open(args.env_config_path, 'r') as f:
@@ -649,8 +650,8 @@ def main():
     with open(args.policy_config_path, 'r') as f:
         policy_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
-    print(env_cfg)
-    print(policy_cfg)
+    #print(env_cfg)
+    #print(policy_cfg)
 
     env_cfg['seed'] = 42
     #agents = []
@@ -658,11 +659,18 @@ def main():
         #env_cfg['seed'] += 1
         #print(f"Training agent {i}")
         #agents.append(nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg))
-    mp.set_start_method('spawn', force=True)
+    #mp.set_start_method('spawn', force=True)
     agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
+    #nn_eval(env_cfg, agent, trials=20)
+    #env = construct_env(env_cfg, seed=42 + int(args.trial))
+
     #policy_cfg['cond_force_retrain'] = False
-    nn_eval(env_cfg, agent, trials=20)
-    #nn_eval_sanity(env_cfg, agent, data=pickle.load(open(env_cfg["demo_pkl"], 'rb'))[:1])
+
+    #with open(f'results/{args.trial}.txt', 'w') as f:
+    #    f.write(str(single_trial_eval(env_cfg, agent, env, args.trial)[0]))
+    #single_trial_eval(env_cfg, agent, env, args.trial)
+
+    nn_eval_sanity(env_cfg, agent, data=pickle.load(open(env_cfg["demo_pkl"], 'rb'))[:1])
     #parallel_nn_eval(
     #    env_cfg,
     #    agent,
@@ -681,7 +689,6 @@ def main():
     #
     # bc_agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg_copy)
     # nn_eval_split(env_cfg, dan_agent, bc_agent, trials=1)
-    # nn_eval(env_cfg, bc_agent)
     #
 
 if __name__ == "__main__":

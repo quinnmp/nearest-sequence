@@ -1,12 +1,12 @@
 method: cond
-k_neighbors: 999
+k: 10
 lookback: 1
 decay_rate: 0
-ratio: 1
+final_neighbors_ratio: 1
 #[I 2025-03-05 18:50:40,459] Trial 84 finished with value: 0.65 and parameters: {'k_neighbors': 726, 'lookback': 42, 'decay_rate': -0.4271725461007119, 'ratio': 0.5057047459497799}. Best is trial 84 with value: 0.65.
 
 
-epochs: 1000
+epochs: 10
 batch_size: 64
 hidden_dims:
    - 256
@@ -15,3 +15,6 @@ hidden_dims:
 cond_force_retrain: True
 model_name: "ns_dan_bc"
 dropout: 0
+
+obs_horizon: 5
+act_horizon: 5

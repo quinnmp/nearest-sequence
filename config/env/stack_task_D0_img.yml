@@ -1,11 +1,11 @@
-demo_pkl: "data/stack_task_D0/stack_task_D0_100_img_train.pkl"
+#demo_pkl: "data/stack_task_D0/100_img_train.pkl"
+demo_pkl: "data/stack_task_D0/100_img.pkl"
 type: 'dino'
 demo_hdf5: "data/stack_task_D0/demo.hdf5"
-stack_size: 1
 robosuite: True
 name: Stack_D0
 add_proprio: True
 cams:
   - agentview
-val_cfg: "config/env/stack_task_D0_img_val.yml"
+#val_cfg: "config/env/stack_task_D0_img_val.yml"
 #neighbor_lookup_pkl: "data/neighbor-lookup.pkl"
