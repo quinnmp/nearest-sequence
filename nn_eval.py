@@ -120,7 +120,7 @@ def single_trial_eval(config, agent, env, trial, reset=True):
             rgb_arrays_to_mp4(video_viz, f"data/{trial}.mp4")
         else:
             video_frames = np.array(video_frames)[:, :, :256, :]
-            pickle.dump(video_frames, open(f"data/{trial}.pkl", 'wb'))
+            #pickle.dump(video_frames, open(f"data/{trial}.pkl", 'wb'))
             rgb_arrays_to_mp4(video_frames, f"data/{trial}.mp4")
 
     success = 1 if 'success' in info else 0
@@ -266,9 +266,7 @@ def nn_eval_sanity(config, nn_agent, data, results=None):
         #print(trial)
         initial_state = dict(states=data[trial]['states'][0])
         initial_state["model"] = data[trial]["model_file"]
-        print(initial_state)
         env.reset_to(initial_state)
-        print(env.get_state())
         episode_reward, success = single_trial_eval(config, nn_agent, env, trial, reset=False)
         #print(episode_reward)
         episode_rewards.append(episode_reward)
@@ -661,7 +659,7 @@ def main():
         #agents.append(nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg))
     #mp.set_start_method('spawn', force=True)
     agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
-    #nn_eval(env_cfg, agent, trials=20)
+    nn_eval(env_cfg, agent, trials=20)
     #env = construct_env(env_cfg, seed=42 + int(args.trial))
 
     #policy_cfg['cond_force_retrain'] = False
@@ -670,7 +668,7 @@ def main():
     #    f.write(str(single_trial_eval(env_cfg, agent, env, args.trial)[0]))
     #single_trial_eval(env_cfg, agent, env, args.trial)
 
-    nn_eval_sanity(env_cfg, agent, data=pickle.load(open(env_cfg["demo_pkl"], 'rb'))[:1])
+    #nn_eval_sanity(env_cfg, agent, data=pickle.load(open("data/stack_task_D0/100.pkl", 'rb'))[:100])
     #parallel_nn_eval(
     #    env_cfg,
     #    agent,

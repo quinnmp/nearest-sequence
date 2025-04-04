@@ -136,7 +136,7 @@ class NNAgent:
                         config=policy_cfg,
                         # Flag kwargs
                         bc_baseline=self.method == NN_METHOD.BC,
-                        diffusion=True,
+                        diffusion=False,
                     )
 
                 model = nn.DataParallel(model)

@@ -1,14 +1,15 @@
 method: bc
 
-epochs: 1250
+epochs: 10000
 batch_size: 128
-hidden_dims:
-   - 128
-   - 128
-   - 128
-cond_force_retrain: True
+mlp_config:
+        hidden_dims:
+           - 128
+           - 128
+           - 128
+        dropout: 0
+cond_force_retrain: False
 model_name: "bc"
-dropout: 0
 lr: 1e-4
 weight-decay: 1e-6
 

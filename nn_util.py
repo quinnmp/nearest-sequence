@@ -493,8 +493,9 @@ def frame_to_dino(rgb_array, proprio_state=np.array([]), numpy_action=True):
         dino_model.eval()
 
         img_transform = transforms.Compose([
-            transforms.Resize((14 * 36, 14 * 36)),  # DinoV2 expects 224x224 input
-            transforms.CenterCrop(14 * 36),
+            transforms.Resize((224, 224)),  # DinoV2 expects 224x224 input
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
         ])
 
     # Handle 4-channel image (RGBA)
@@ -504,18 +505,23 @@ def frame_to_dino(rgb_array, proprio_state=np.array([]), numpy_action=True):
 
     # Convert numpy array to PIL Image
     image = Image.fromarray((rgb_array * 255).astype(np.uint8))
-    image = img_transform(image)
-    image = np.array(image)
-    image = image.reshape(14 * 36, 14 * 36, 3)
-    image = image.transpose((2, 0, 1))
+    image_tensor = img_transform(image)
+
+    # Debugging
+    if False:
+        from torchvision.utils import save_image
+        import os
+        os.makedirs('debug_images', exist_ok=True)
+        save_image(image_tensor, 'debug_images/pre_dino_input.png')
+    # Apply transformations
+    mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+    image_tensor = (image_tensor - mean) / std
 
     if len(frame_tensor_cpu) == 0:
-        frame_tensor_cpu = torch.empty(image.shape, device='cpu', pin_memory=True)
-    frame_tensor_cpu.copy_(torch.from_numpy(image).float() / 255.0)
-    # Apply transformations
-    mean = torch.tensor([0.485, 0.456, 0.406], device='cpu').view(3, 1, 1)
-    std = torch.tensor([0.229, 0.224, 0.225], device='cpu').view(3, 1, 1)
-    frame_tensor_cpu.sub(mean).div(std)
+        frame_tensor_cpu = torch.empty_like(image_tensor, device='cpu', pin_memory=True)
+
+    frame_tensor_cpu.copy_(image_tensor.to('cpu', non_blocking=True))
     
     # Extract features
     with torch.no_grad():
@@ -550,7 +556,7 @@ def eval_over(steps, config, env_instance):
         #or is_robosuite and steps >= 200
         or env_name == "maze2d-umaze-v1" and np.linalg.norm(env_instance._get_obs()[0:2] - env_instance._target) <= 0.5
         #or steps > 1 # For debugging
-        or steps >= 200)
+        or steps >= 1000)
 
 def crop_obs_for_env(obs, env, env_instance=None):
     if env == "ant-expert-v2":

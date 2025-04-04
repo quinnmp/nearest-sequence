@@ -1,7 +1,7 @@
 import pickle
 import os
 
-from nn_util import construct_env, crop_and_resize, frame_to_dino, get_semantic_frame_and_box, frame_to_obj_centric_dino, reset_vision_ob
+from nn_util import construct_env, crop_and_resize, frame_to_dino, get_semantic_frame_and_box, frame_to_obj_centric_dino, reset_vision_ob, get_proprio
 os.environ["D4RL_SUPPRESS_IMPORT_ERROR"] = "1"
 import numpy
 import time
@@ -38,14 +38,12 @@ from rgb_arrays_to_mp4 import rgb_arrays_to_mp4
 
 parser = ArgumentParser()
 parser.add_argument("env_config_path", help="Path to environment config file")
-parser.add_argument("proprio_path")
 args, _ = parser.parse_known_args()
 
 with open(args.env_config_path, 'r') as f:
     env_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
 data = pickle.load(open(env_cfg['demo_pkl'], 'rb'))
-proprio_data = pickle.load(open(args.proprio_path, 'rb'))
 
 obs_matrix = []
 
@@ -79,7 +77,8 @@ def main():
             for camera in camera_names:
                 frame = env.render(mode='rgb_array', height=height, width=width, camera_name=camera)
                 frames.append(frame)
-                proprio_state = np.array(proprio_data[traj]['observations'][ob])
+                #proprio_state = np.array(proprio_data[traj]['observations'][ob])
+                proprio_state = get_proprio(env_cfg, env.get_observation())
                 #obs = frame_to_obj_centric_dino(env_name, frame, proprio_state=proprio_state, numpy_action=False)
                 obs = frame_to_dino(frame, proprio_state=proprio_state, numpy_action=False)
                 traj_obs.append(obs.cpu().detach().numpy())

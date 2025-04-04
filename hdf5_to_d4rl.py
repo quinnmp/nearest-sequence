@@ -46,7 +46,10 @@ for demo in demos:
     expert_data.append({"observations": np.array(obs[:], dtype=np.float32), "actions": np.array(actions[:], dtype=np.float32), "states": np.array(states[:], dtype=np.float32), "model_file": demos[demo].attrs['model_file']})
 
 if args.goal:
-    pickle.dump(expert_data, open(f"{os.path.dirname(args.file)}/{len(expert_data)}.pkl", 'wb'))
+    file_name = f"{os.path.dirname(args.file)}/{len(expert_data)}.pkl"
 else:
-    pickle.dump(expert_data, open(f"{os.path.dirname(args.file)}/{len(expert_data)}_proprio.pkl", 'wb'))
+    file_name = f"{os.path.dirname(args.file)}/{len(expert_data)}_proprio.pkl"
+
+print(f"Dumping to {file_name}...")
+pickle.dump(expert_data, open(file_name, 'wb'))
 

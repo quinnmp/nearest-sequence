@@ -213,8 +213,9 @@ class KNNConditioningModel(nn.Module):
 
         if not self.diffusion:
             DEFAULT_MLP_CONFIG = {
-                'hidden_dims': [512, 512],
-                'dropout_rate': 0.05
+                'hidden_dims': [128, 128],
+                #'hidden_dims': [2048, 2048, 2048],
+                'dropout_rate': 0.0
             }
 
             set_attributes_from_args(self, DEFAULT_MLP_CONFIG, self.mlp_config)
@@ -630,11 +631,11 @@ def train_model(model, train_loader, **kwargs):
         optimizer,
         mode='min',
         factor=0.5,
-        patience=5,
+        patience=10,
     )
 
     best_val_loss = float('inf')
-    early_stopping_patience = 8
+    early_stopping_patience = 25
     early_stopping_counter = 0
 
     for epoch in range(config.epochs):
