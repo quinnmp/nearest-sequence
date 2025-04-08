@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset
+import torchvision.models as models
 import numpy as np
 from nn_util import freeze_dino, unfreeze_dino, frame_to_dino
 from fast_scaler import FastScaler
@@ -16,6 +17,7 @@ from types import SimpleNamespace
 from video_action_learning.models.dp.base_policy import DiffusionPolicy
 from video_action_learning.models.dp.transformer import TransformerNoisePredictionNet
 DINO_SIZE = 768
+IMG_SIZE = 224 * 224 * 3
 
 if torch.cuda.is_available():
     torch.set_default_device('cuda')
@@ -129,6 +131,7 @@ class KNNConditioningModel(nn.Module):
             'numpy_action': False,
             'gaussian_action': False,
             'dino_head': False,
+            'use_resnet': False,
 
             # Default to MLP (no flag)
             'mlp_config': {},
@@ -274,6 +277,60 @@ class KNNConditioningModel(nn.Module):
 
                 layers.append(nn.Linear(self.hidden_dims[-1], pred_dim).to(device))
                 self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
+            elif self.use_resnet:
+                DEFAULT_MLP_CONFIG = {
+                    'resnet_embedding': 256,
+
+                    'prop_hidden_dims': [64, 128],
+                    'prop_dropout_rate': 0.1,
+
+                    'hidden_dims': [256, 128],
+                    'dropout_rate': 0.1,
+
+                    'embedding_dim': 128
+                }
+
+                set_attributes_from_args(self, DEFAULT_MLP_CONFIG, self.mlp_config)
+
+                # Proprioception Model
+                prop_layers = []
+                in_dim -= IMG_SIZE
+                for hidden_dim in self.prop_hidden_dims:
+                    prop_layers.extend([
+                        nn.Linear(in_dim, hidden_dim),
+                        nn.BatchNorm1d(hidden_dim),
+                        nn.ReLU(),
+                        nn.Dropout(self.prop_dropout_rate),
+                    ])
+                    in_dim = hidden_dim
+                prop_layers.append(nn.Linear(self.prop_hidden_dims[-1], self.embedding_dim).to(device))
+                self.prop_model = nn.Sequential(*prop_layers).to(device=device, dtype=torch.float32)
+
+                # Remove the final classification layer
+                self.resnet = models.resnet18()
+                self.resnet = nn.Sequential(*list(self.resnet.children())[:-1])
+                resnet_out_features = 512
+
+                self.resnet_adapter = nn.Sequential(
+                    nn.Linear(resnet_out_features, self.resnet_embedding),
+                    nn.BatchNorm1d(self.resnet_embedding),
+                    nn.ReLU(),
+                    nn.Dropout(0.1)
+                )
+
+                # Combination Model
+                in_dim = self.embedding_dim + self.resnet_embedding
+                for hidden_dim in self.hidden_dims:
+                    layers.extend([
+                        nn.Linear(in_dim, hidden_dim),
+                        nn.BatchNorm1d(hidden_dim),
+                        nn.ReLU(),
+                        nn.Dropout(self.dropout_rate),
+                    ])
+                    in_dim = hidden_dim
+
+                layers.append(nn.Linear(self.hidden_dims[-1], pred_dim).to(device))
+                self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
             else:
                 DEFAULT_MLP_CONFIG = {
                     'hidden_dims': [128, 128],
@@ -343,6 +400,13 @@ class KNNConditioningModel(nn.Module):
                         dino_embeddings = self.dino_model(inputs[:, -DINO_SIZE:])
                         prop_embeddings = self.prop_model(inputs[:, :-DINO_SIZE])
                         inputs = torch.hstack((dino_embeddings, prop_embeddings))
+                    elif self.use_resnet:
+                        rgb_arrays = inputs[:, -IMG_SIZE:].view(batch_size, 224, 224, 3).permute(0, 3, 1, 2) / 255.0
+                        rgb_arrays = (rgb_arrays - torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)) / torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+
+                        resnet_embeddings = self.resnet_adapter(self.resnet(rgb_arrays).squeeze(2).squeeze(2))
+                        prop_embeddings = self.prop_model(inputs[:, :-IMG_SIZE])
+                        inputs = torch.hstack((resnet_embeddings, prop_embeddings))
                     output = self.model(inputs)
 
             #pickle.dump(output.cpu().detach().numpy(), open("data/bc_action.pkl", 'wb'))

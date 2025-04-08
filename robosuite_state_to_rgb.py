@@ -38,7 +38,6 @@ from rgb_arrays_to_mp4 import rgb_arrays_to_mp4
 
 parser = ArgumentParser()
 parser.add_argument("env_config_path", help="Path to environment config file")
-parser.add_argument("proprio_path")
 
 args, _ = parser.parse_known_args()
 
@@ -46,19 +45,18 @@ with open(args.env_config_path, 'r') as f:
     env_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
 data = pickle.load(open(env_cfg['demo_pkl'], 'rb'))
-proprio_data = pickle.load(open(args.proprio_path, 'rb'))
 
-obs_matrix = []
-
-for traj in data:
-    obs_matrix.append(traj['observations'])
-
-obs = np.concatenate(obs_matrix)
 env = construct_env(env_cfg)
 env_name = env_cfg['name']
-camera_names = ['agentview']
 
-height, width = 256, 256
+camera_names = [env.env.sim.model.camera_id2name(i) for i in range(env.env.sim.model.ncam)]
+camera_names = env_cfg['cams']
+print(camera_names)
+
+crops = env_cfg.get('crops', {})
+print(crops)
+
+height, width = 224, 224
 
 img_data = []
 
@@ -74,15 +72,38 @@ def main():
         env.reset_to(initial_state)
         reset_vision_ob()
         for ob in range(len(data[traj]['observations'])):
-            print(ob)
-            env.step(data[traj]['actions'][ob])
-            env.reset_to({"states" : data[traj]['states'][ob]})
+            full_frame = np.empty((height, 0, 3), dtype=np.uint8)
             for camera in camera_names:
-                frame = env.render(mode='rgb_array', height=height, width=width, camera_name=camera)
-                frames.append(frame)
-                traj_obs.append(np.hstack([proprio_data[traj]["observations"][ob], frame.flatten()]))
-        img_data.append({'observations': np.array(traj_obs), 'actions': data[traj]['actions']})
+                crop_corners = np.array(crops.get(camera, [[0, 0], [width, height]]))
+
+                crop_width = crop_corners[1][0] - crop_corners[0][0]
+                render_width = width / crop_width
+
+                crop_height = crop_corners[1][1] - crop_corners[0][1]
+                render_height = height / crop_height
+
+                frame = env.render(mode='rgb_array', height=round(render_height), width=round(render_width), camera_name=camera)
+                assert frame is not None
+
+                crop_corners[:, 0] *= render_width
+                crop_corners[:, 1] *= render_height
+                crop_corners = np.round(crop_corners).astype(np.uint16)
+                cropped_frame = frame[crop_corners[0][1]:crop_corners[1][1], crop_corners[0][0]:crop_corners[1][0], :]
+
+                full_frame = np.hstack((full_frame, cropped_frame))
+            frames.append(full_frame)
+
+            proprio_state = get_proprio(env_cfg, env.get_observation())
+            traj_obs.append(np.hstack([proprio_state, cv2.resize(full_frame, (224, 224)).flatten()]))
+
+            env.step(data[traj]['actions'][ob])
         #rgb_arrays_to_mp4(frames, f"data/{traj}.mp4")
+
+        if env.get_reward() == 1:
+            img_data.append({'observations': np.array(traj_obs), 'actions': data[traj]['actions']})
+            rgb_arrays_to_mp4(frames, f"data/{traj}.mp4")
+        else:
+            print("REJECTING TRAJECTORY")
 
     print(f"Success! Dumping data to {env_cfg['demo_pkl'][:-4] + '_rgb.pkl'}")
     pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_rgb.pkl', 'wb'))

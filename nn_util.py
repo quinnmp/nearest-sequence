@@ -94,10 +94,19 @@ def load_and_scale_data(path, rot_indices, weights, ob_type='state', use_torch=F
 
     if scale:
         obs_scaler = FastScaler()
-        if ob_type == 'rgb' or ob_type == 'dino':
+        if ob_type == 'dino':
             obs_scaler.fit(np.concatenate(non_rot_observations))
         else:
             obs_scaler.fit(non_rot_observations)
+            if ob_type == 'rgb':
+                IMG_SIZE = 224 * 224 * 3
+                print(obs_scaler.mean_np)
+                obs_scaler.mean_np[-IMG_SIZE:] = 0
+                obs_scaler.scale_np[-IMG_SIZE:] = 1
+                obs_scaler.mean_torch = torch.as_tensor(obs_scaler.mean_np)
+                obs_scaler.scale_torch = torch.as_tensor(obs_scaler.scale_np)
+                print(obs_scaler.mean_np)
+
 
         for traj in expert_data:
             observations = traj['observations']
@@ -416,7 +425,7 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
             case 'keypoint' | 'semantic_keypoint':
                 obs = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=is_first_ob, proprio_state=proprio_state, cam_names=cam_names, semantic=(obs_type == "semantic_keypoint"))
             case 'rgb':
-                obs = torch.as_tensor(np.transpose(frame.astype(np.float32), (2, 0, 1)).flatten())
+                obs = torch.as_tensor(np.hstack([proprio_state, cv2.resize(frame, (224, 224)).flatten()]))
 
     assert obs is not None
 

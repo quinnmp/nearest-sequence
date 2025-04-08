@@ -9,7 +9,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --gpus-per-task=1
 #SBATCH --mem=128G
-#SBATCH --time=6:00:00
+#SBATCH --time=24:00:00
 #SBATCH -o log/%j.out
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=quinnpfeifer@icloud.com
@@ -51,18 +51,18 @@ rm data/*lookup*
 #conda env create -f environment.yml
 
 #python -u hdf5_to_rgb.py data/stack_task_D0/demo.hdf5 data/stack)
-#python -u robosuite_state_to_low_dim.py config/env/stack_task_D0.yml
+#python -u robosuite_state_to_rgb.py config/env/stack_task_D0.yml
 #python -u robosuite_test_crop.py config/env/stack_task_D0.yml
-#python -u split_data.py data/stack_task_D0/100_low_dim.pkl
-#python -u nn_eval.py config/env/stack_task_D0.yml config/policy/bc.yml
+#python -u split_data.py data/stack_task_D0/100_rgb.pkl
+python -u nn_sweep_epochs.py config/env/stack_task_D0.yml config/policy/bc.yml
 #python -u nn_eval.py config/env/stack_task_D0_r3m.yml config/policy/bc_img.yml
-#python -u nn_eval.py config/env/stack_task_D0_dino.yml config/policy/bc_img.yml
+#python -u nn_eval.py config/env/stack_task_D0_rgb.yml config/policy/bc_img.yml
 #python -u nn_model_optimizer.py config/env/hopper_rgb.yml config/policy/bc_img.yml
 #python -u state_to_rgb_array.py config/env/hopper.yml
 #python -u state_to_rgb_array.py config/env/hopper_new.yml
 #python -u nn_sweep_epochs.py config/env/stack_task_D0_dino.yml config/policy/bc_img.yml
 #python -u nn_eval.py config/env/hopper.yml config/policy/bc.yml
-python -u nn_sweep_epochs.py config/env/stack_task_D0_dino.yml config/policy/bc_img.yml
+#python -u nn_sweep_epochs.py config/env/stack_task_D0_dino.yml config/policy/bc_img.yml
 #python -u opengl_test.py
 #python -u state_to_tapir.py config/env/hopper.yml
 #python -u nn_param_optimizer.py config/env/stack_task_D0_r3m.yml config/policy/ns_dan_bc.yml
