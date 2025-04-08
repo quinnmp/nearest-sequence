@@ -15,6 +15,7 @@ from typing import List
 from types import SimpleNamespace
 from video_action_learning.models.dp.base_policy import DiffusionPolicy
 from video_action_learning.models.dp.transformer import TransformerNoisePredictionNet
+DINO_SIZE = 768
 
 if torch.cuda.is_available():
     torch.set_default_device('cuda')
@@ -127,6 +128,7 @@ class KNNConditioningModel(nn.Module):
             'reduce_delta_s': False,
             'numpy_action': False,
             'gaussian_action': False,
+            'dino_head': False,
 
             # Default to MLP (no flag)
             'mlp_config': {},
@@ -215,24 +217,82 @@ class KNNConditioningModel(nn.Module):
         pred_dim = self.action_dim if not self.gaussian_action else self.action_dim * 2
 
         if not self.diffusion:
-            DEFAULT_MLP_CONFIG = {
-                'hidden_dims': [128, 128],
-                'dropout_rate': 0.0
-            }
+            if self.dino_head:
+                DEFAULT_MLP_CONFIG = {
+                    'prop_hidden_dims': [64, 128],
+                    'prop_dropout_rate': 0.1,
 
-            set_attributes_from_args(self, DEFAULT_MLP_CONFIG, self.mlp_config)
+                    'dino_hidden_dims': [1024, 512, 256],
+                    'dino_dropout_rate': 0.2,
 
-            for hidden_dim in self.hidden_dims:
-                layers.extend([
-                    nn.Linear(in_dim, hidden_dim),
-                    #nn.BatchNorm1d(hidden_dim),
-                    nn.ReLU(),
-                    nn.Dropout(self.dropout_rate),
-                ])
-                in_dim = hidden_dim
+                    'hidden_dims': [256, 128],
+                    'dropout_rate': 0.1,
 
-            layers.append(nn.Linear(self.hidden_dims[-1], pred_dim).to(device))
-            self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
+                    'embedding_dim': 128
+                }
+
+                set_attributes_from_args(self, DEFAULT_MLP_CONFIG, self.mlp_config)
+
+                # Proprioception Model
+                prop_layers = []
+                in_dim -= DINO_SIZE
+                for hidden_dim in self.prop_hidden_dims:
+                    prop_layers.extend([
+                        nn.Linear(in_dim, hidden_dim),
+                        nn.BatchNorm1d(hidden_dim),
+                        nn.ReLU(),
+                        nn.Dropout(self.prop_dropout_rate),
+                    ])
+                    in_dim = hidden_dim
+                prop_layers.append(nn.Linear(self.prop_hidden_dims[-1], self.embedding_dim).to(device))
+                self.prop_model = nn.Sequential(*prop_layers).to(device=device, dtype=torch.float32)
+
+                # DINO Model
+                dino_layers = []
+                in_dim = DINO_SIZE
+                for hidden_dim in self.dino_hidden_dims:
+                    dino_layers.extend([
+                        nn.Linear(in_dim, hidden_dim),
+                        nn.BatchNorm1d(hidden_dim),
+                        nn.ReLU(),
+                        nn.Dropout(self.dino_dropout_rate),
+                    ])
+                    in_dim = hidden_dim
+                dino_layers.append(nn.Linear(self.dino_hidden_dims[-1], self.embedding_dim).to(device))
+                self.dino_model = nn.Sequential(*dino_layers).to(device=device, dtype=torch.float32)
+
+                # Combination Model
+                in_dim = self.embedding_dim * 2
+                for hidden_dim in self.hidden_dims:
+                    layers.extend([
+                        nn.Linear(in_dim, hidden_dim),
+                        nn.BatchNorm1d(hidden_dim),
+                        nn.ReLU(),
+                        nn.Dropout(self.dropout_rate),
+                    ])
+                    in_dim = hidden_dim
+
+                layers.append(nn.Linear(self.hidden_dims[-1], pred_dim).to(device))
+                self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
+            else:
+                DEFAULT_MLP_CONFIG = {
+                    'hidden_dims': [128, 128],
+                    'dropout_rate': 0.0
+                }
+
+                set_attributes_from_args(self, DEFAULT_MLP_CONFIG, self.mlp_config)
+
+                for hidden_dim in self.hidden_dims:
+                    layers.extend([
+                        nn.Linear(in_dim, hidden_dim),
+                        #nn.BatchNorm1d(hidden_dim),
+                        nn.ReLU(),
+                        nn.Dropout(self.dropout_rate),
+                    ])
+                    in_dim = hidden_dim
+
+                layers.append(nn.Linear(self.hidden_dims[-1], pred_dim).to(device))
+                self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
         else:
             noise_pred_net = TransformerNoisePredictionNet(self.act_horizon, pred_dim, self.input_dim)
             self.model = DiffusionPolicy(self.act_horizon, pred_dim, noise_pred_net)
@@ -279,6 +339,10 @@ class KNNConditioningModel(nn.Module):
 
                     return self.model(inputs, real_actions)
                 else:
+                    if self.dino_head:
+                        dino_embeddings = self.dino_model(inputs[:, -DINO_SIZE:])
+                        prop_embeddings = self.prop_model(inputs[:, :-DINO_SIZE])
+                        inputs = torch.hstack((dino_embeddings, prop_embeddings))
                     output = self.model(inputs)
 
             #pickle.dump(output.cpu().detach().numpy(), open("data/bc_action.pkl", 'wb'))

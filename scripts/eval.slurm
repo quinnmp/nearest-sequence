@@ -1,15 +1,15 @@
 #!/bin/bash
 
 #SBATCH --job-name=knn
-#SBATCH --account=cse
-#SBATCH --partition=gpu-rtx6k
+#SBATCH --account=weirdlab
+#SBATCH --partition=gpu-a40
 
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
 #SBATCH --gpus-per-task=1
 #SBATCH --mem=128G
-#SBATCH --time=12:00:00
+#SBATCH --time=6:00:00
 #SBATCH -o log/%j.out
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=quinnpfeifer@icloud.com
@@ -62,10 +62,10 @@ rm data/*lookup*
 #python -u state_to_rgb_array.py config/env/hopper_new.yml
 #python -u nn_sweep_epochs.py config/env/stack_task_D0_dino.yml config/policy/bc_img.yml
 #python -u nn_eval.py config/env/hopper.yml config/policy/bc.yml
-#python -u nn_sweep_epochs.py config/env/stack_task_D0_img.yml config/policy/bc.yml
+python -u nn_sweep_epochs.py config/env/stack_task_D0_dino.yml config/policy/bc_img.yml
 #python -u opengl_test.py
 #python -u state_to_tapir.py config/env/hopper.yml
-python -u nn_param_optimizer.py config/env/stack_task_D0_r3m.yml config/policy/ns_dan_bc.yml
+#python -u nn_param_optimizer.py config/env/stack_task_D0_r3m.yml config/policy/ns_dan_bc.yml
 #python -u robosuite_state_to_kpt.py config/env/coffee_task_D0.yml data/coffee_task_D0/100_proprio.pkl
 #python -u nn_param_optimizer.py config/env/coffee_task_D0_kpt.yml config/policy/ns_dan_bc.yml
 #python -u nn_sweep_epochs.py config/env/stack_task_D0.yml config/policy/bc.yml
