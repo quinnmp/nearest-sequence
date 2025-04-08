@@ -24,7 +24,7 @@ for demo in demos:
     # Construct observation
     #<KeysViewHDF5 ['agentview_image', 'object', 'robot0_eef_pos', 'robot0_eef_quat', 'robot0_eef_vel_ang', 'robot0_eef_vel_lin', 'robot0_eye_in_hand_image', 'robot0_gripper_qpos', 'robot0_gripper_qvel', 'robot0_joint_pos', 'robot0_joint_pos_cos', 'robot0_joint_pos_sin', 'robot0_joint_vel']>
 
-    default_low_dim_obs = [
+    images = [
             "robot0_eef_pos",
             "robot0_eef_quat",
             "robot0_gripper_qpos",

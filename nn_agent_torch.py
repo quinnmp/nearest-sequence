@@ -36,9 +36,40 @@ class NNAgent:
 
         # If this is already defined, a subclass has intentionally set it
         if not hasattr(self, 'datasets'):
-            # Make linter happy
             self.datasets = {}
-            raise RuntimeError("Must use subclass to handle data loading")
+            # We may use different datasets for retrieval, neighbor state, and state delta
+            if env_cfg.get('mixed', False):
+                # Lookup dict for duplicate datasets
+                paths = {}
+                for dataset in ['retrieval', 'state', 'delta_state']:
+                    path = env_cfg[dataset]['demo_pkl']
+
+                    # Check for duplicates
+                    if path in paths.keys():
+                        self.datasets[dataset] = self.datasets[paths[path]]
+                    else:
+                        paths[path] = dataset
+
+                        self.datasets[dataset] = load_and_scale_data(
+                            path,
+                            env_cfg[dataset].get('rot_indices', []),
+                            env_cfg[dataset].get('weights', []),
+                            use_torch=True,
+                            scale=False
+                        )
+            else:
+                expert_data_path = env_cfg['demo_pkl']
+                one_dataset = load_and_scale_data(
+                    expert_data_path,
+                    env_cfg.get('rot_indices', []),
+                    env_cfg.get('weights', []),
+                    ob_type=env_cfg.get('type', 'state'),
+                    use_torch=True,
+                    scale=False
+                )
+
+                for dataset in ['retrieval', 'state', 'delta_state']:
+                    self.datasets[dataset] = one_dataset
 
         self.candidates = policy_cfg.get('k', 100)
         self.lookback = policy_cfg.get('lookback', 10)
@@ -128,7 +159,8 @@ class NNAgent:
                     optimizer_state_dict = None
                     model = KNNConditioningModel(
                         # Required kwargs
-                        state_dim=state_dim,
+                        #state_dim=state_dim,
+                        state_dim=state_dim if not policy_cfg.get("tune_dino", False) else state_dim - (256 * 256 * 3) + 768,
                         delta_state_dim=delta_state_dim,
                         action_dim=action_dim,
                         action_scaler=self.datasets['retrieval'].act_scaler,
@@ -167,6 +199,12 @@ class NNAgent:
 class NNAgentEuclidean(NNAgent):
     #@profile
     def get_action(self, current_ob):
+        if not isinstance(current_ob, dict):
+            current_ob = {
+                'retrieval': torch.clone(current_ob) if torch.is_tensor(current_ob) else torch.tensor(current_ob, dtype=torch.float64),
+                'delta_state': torch.clone(current_ob) if torch.is_tensor(current_ob) else torch.tensor(current_ob, dtype=torch.float64)
+            }
+
         self.update_obs_history(current_ob['retrieval'])
         if self.method == NN_METHOD.BC:
             if self.obs_horizon > 1:

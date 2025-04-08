@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset
 import numpy as np
+from nn_util import freeze_dino, unfreeze_dino, frame_to_dino
 from fast_scaler import FastScaler
 import pickle
 import nn_agent_torch as nn_agent
@@ -157,6 +158,8 @@ class KNNConditioningModel(nn.Module):
         if self.combined_dim:
             self.input_dim *= math.floor(self.k * self.final_neighbors_ratio)
 
+        self.input_dim *= self.obs_horizon
+
         if self.reduce_delta_s:
             delta_s_hidden_dims = []
             delta_s_layers = []
@@ -214,7 +217,6 @@ class KNNConditioningModel(nn.Module):
         if not self.diffusion:
             DEFAULT_MLP_CONFIG = {
                 'hidden_dims': [128, 128],
-                #'hidden_dims': [2048, 2048, 2048],
                 'dropout_rate': 0.0
             }
 
@@ -223,6 +225,7 @@ class KNNConditioningModel(nn.Module):
             for hidden_dim in self.hidden_dims:
                 layers.extend([
                     nn.Linear(in_dim, hidden_dim),
+                    #nn.BatchNorm1d(hidden_dim),
                     nn.ReLU(),
                     nn.Dropout(self.dropout_rate),
                 ])
@@ -231,7 +234,7 @@ class KNNConditioningModel(nn.Module):
             layers.append(nn.Linear(self.hidden_dims[-1], pred_dim).to(device))
             self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
         else:
-            noise_pred_net = TransformerNoisePredictionNet(self.act_horizon, pred_dim, self.input_dim * self.obs_horizon)
+            noise_pred_net = TransformerNoisePredictionNet(self.act_horizon, pred_dim, self.input_dim)
             self.model = DiffusionPolicy(self.act_horizon, pred_dim, noise_pred_net)
         
         if self.mlp_combine:
@@ -516,12 +519,12 @@ class ChunkingWrapper(Dataset):
             self.distance_lookup = torch.empty((len(wrapped), self.num_neighbors, self.obs_horizon, self.distance_size)) - 1
             self.weights_lookup = torch.empty((len(wrapped), self.num_neighbors, self.obs_horizon)) - 1
 
-    
     #@profile
     def __getitem__(self, idx):
         if not self.idx_populated[idx]:
             state_traj = torch.searchsorted(self.datasets['retrieval'].traj_starts, idx, right=True) - 1
             traj_start = self.datasets['retrieval'].traj_starts[state_traj]
+
             state_num = idx - traj_start
             traj_len = len(self.datasets['retrieval'].obs_matrix[state_traj])
 
@@ -581,6 +584,9 @@ class ChunkingWrapper(Dataset):
         obs = self.state_lookup[idx]
         acts = self.action_lookup[idx]
 
+        if acts.shape[0] == 1:
+            acts = acts.squeeze()
+
         if self.bc_baseline:
             return obs, NULL_TENSOR, NULL_TENSOR, acts, NULL_TENSOR
         else:
@@ -611,7 +617,8 @@ def train_model(model, train_loader, **kwargs):
 
         # Checkpoint loading
         'model_path': "cond_models/cond_model.pth",
-        'loaded_optimizer_dict': None
+        'loaded_optimizer_dict': None,
+        'tune_dino': False
     }
 
     config = SimpleNamespace()
@@ -622,7 +629,27 @@ def train_model(model, train_loader, **kwargs):
     model.to(device)
     model.train()
     criterion = nn.MSELoss()
-    optimizer = optim.AdamW(model.parameters(), lr=float(config.lr), weight_decay=float(config.weight_decay), eps=float(config.eps), amsgrad=False, foreach=True)
+    if not config.tune_dino:
+        optimizer = optim.AdamW(model.parameters(), lr=float(config.lr), weight_decay=float(config.weight_decay), eps=float(config.eps), amsgrad=False, foreach=True)
+    else:
+        optimizer = optim.AdamW([
+            {
+                'params': model.parameters(),
+                'lr': float(config.lr),
+                'weight_decay': float(config.weight_decay),
+                'eps': float(config.eps),
+                'amsgrad': False,
+                'foreach': True,
+            },
+            {
+                'params': list(unfreeze_dino()),
+                'lr': 1e-5,
+                'weight_decay': 0,
+                'eps': float(config.eps),
+                'amsgrad': False,
+                'foreach': True,
+            }
+        ])
 
     if config.loaded_optimizer_dict is not None:
         optimizer.load_state_dict(config.loaded_optimizer_dict)
@@ -635,7 +662,8 @@ def train_model(model, train_loader, **kwargs):
     )
 
     best_val_loss = float('inf')
-    early_stopping_patience = 25
+    #early_stopping_patience = 25
+    early_stopping_patience = 24
     early_stopping_counter = 0
 
     for epoch in range(config.epochs):
@@ -646,6 +674,14 @@ def train_model(model, train_loader, **kwargs):
         for neighbor_states, neighbor_actions, neighbor_distances, actions, weights in train_loader:
             for param in model.parameters():
                 param.grad = None
+
+            if config.tune_dino:
+                dino_states = torch.empty((neighbor_states.shape[0], neighbor_states.shape[1] - (256 * 256 * 3) + 768))
+                for i, img in enumerate(neighbor_states):
+                    img = img.detach().cpu().numpy()
+                    img_len = 256 * 256 * 3
+                    dino_states[i] = frame_to_dino(img[-img_len:].reshape((256, 256, 3)), proprio_state=img[:-img_len], numpy_action=False)
+                neighbor_states = dino_states
 
             if model.module.diffusion:
                 loss = model(neighbor_states, neighbor_actions, neighbor_distances, weights, real_actions=actions)
@@ -663,6 +699,10 @@ def train_model(model, train_loader, **kwargs):
         # Validation phase
         if config.val_loader is not None:
             model.eval()
+
+            if config.tune_dino:
+                freeze_dino()
+
             if isinstance(model, nn.DataParallel):
                 model.module.training_mode = True
             else:
@@ -672,11 +712,21 @@ def train_model(model, train_loader, **kwargs):
             num_val_batches = 0
             with torch.no_grad():
                 for neighbor_states, neighbor_actions, neighbor_distances, actions, weights in config.val_loader:
-                    neighbor_states = train_loader.dataset.agent.datasets['state'].obs_scaler.transform(config.val_loader.dataset.agent.datasets['state'].obs_scaler.inverse_transform(neighbor_states))
-                    actions = train_loader.dataset.agent.datasets['state'].act_scaler.transform(config.val_loader.dataset.agent.datasets['state'].act_scaler.inverse_transform(actions))
-                    if not train_loader.dataset.bc_baseline:
-                        neighbor_actions = train_loader.dataset.agent.datasets['state'].act_scaler.transform(config.val_loader.dataset.agent.datasets['state'].act_scaler.inverse_transform(neighbor_actions))
-                        neighbor_distances = train_loader.dataset.agent.datasets['delta_state'].obs_scaler.transform(config.val_loader.dataset.agent.datasets['delta_state'].obs_scaler.inverse_transform(neighbor_distances))
+                    if train_loader.dataset.agent.datasets['state'].obs_scaler is not None:
+                        neighbor_states = train_loader.dataset.agent.datasets['state'].obs_scaler.transform(config.val_loader.dataset.agent.datasets['state'].obs_scaler.inverse_transform(neighbor_states))
+                        actions = train_loader.dataset.agent.datasets['state'].act_scaler.transform(config.val_loader.dataset.agent.datasets['state'].act_scaler.inverse_transform(actions))
+                        if not train_loader.dataset.bc_baseline:
+                            neighbor_actions = train_loader.dataset.agent.datasets['state'].act_scaler.transform(config.val_loader.dataset.agent.datasets['state'].act_scaler.inverse_transform(neighbor_actions))
+                            neighbor_distances = train_loader.dataset.agent.datasets['delta_state'].obs_scaler.transform(config.val_loader.dataset.agent.datasets['delta_state'].obs_scaler.inverse_transform(neighbor_distances))
+
+                    if config.tune_dino:
+                        dino_states = torch.empty((neighbor_states.shape[0], neighbor_states.shape[1] - (256 * 256 * 3) + 768))
+                        for i, img in enumerate(neighbor_states):
+                            img = img.detach().cpu().numpy()
+                            img_len = 256 * 256 * 3
+                            dino_states[i] = frame_to_dino(img[-img_len:].reshape((256, 256, 3)), proprio_state=img[:-img_len], numpy_action=False)
+                        neighbor_states = dino_states
+
                     if model.module.diffusion:
                         loss = model(neighbor_states, neighbor_actions, neighbor_distances, weights, real_actions=actions)
                     else:
@@ -706,6 +756,9 @@ def train_model(model, train_loader, **kwargs):
                 
                 print(f"Epoch [{epoch + 1}/{config.epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
             model.train()
+
+            if config.tune_dino:
+                unfreeze_dino()
         else:
             print(f"Epoch [{epoch + 1}/{config.epochs}], Train Loss: {avg_train_loss}")
             pass
@@ -716,5 +769,5 @@ def train_model(model, train_loader, **kwargs):
     torch.save({'model': model,
                 'optimizer_state_dict': optimizer.state_dict(),
                 'dataloader_rng_state': train_loader.generator.get_state()
-}, config.model_path)
+    }, config.model_path)
     return model

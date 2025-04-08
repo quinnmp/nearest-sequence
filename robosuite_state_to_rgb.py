@@ -38,12 +38,15 @@ from rgb_arrays_to_mp4 import rgb_arrays_to_mp4
 
 parser = ArgumentParser()
 parser.add_argument("env_config_path", help="Path to environment config file")
+parser.add_argument("proprio_path")
+
 args, _ = parser.parse_known_args()
 
 with open(args.env_config_path, 'r') as f:
     env_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
 data = pickle.load(open(env_cfg['demo_pkl'], 'rb'))
+proprio_data = pickle.load(open(args.proprio_path, 'rb'))
 
 obs_matrix = []
 
@@ -77,15 +80,11 @@ def main():
             for camera in camera_names:
                 frame = env.render(mode='rgb_array', height=height, width=width, camera_name=camera)
                 frames.append(frame)
-                #proprio_state = np.array(proprio_data[traj]['observations'][ob])
-                proprio_state = get_proprio(env_cfg, env.get_observation())
-                #obs = frame_to_obj_centric_dino(env_name, frame, proprio_state=proprio_state, numpy_action=False)
-                obs = frame_to_dino(frame, proprio_state=proprio_state, numpy_action=False)
-                traj_obs.append(obs.cpu().detach().numpy())
+                traj_obs.append(np.hstack([proprio_data[traj]["observations"][ob], frame.flatten()]))
         img_data.append({'observations': np.array(traj_obs), 'actions': data[traj]['actions']})
-        rgb_arrays_to_mp4(frames, f"data/{traj}.mp4")
+        #rgb_arrays_to_mp4(frames, f"data/{traj}.mp4")
 
-    print(f"Success! Dumping data to {env_cfg['demo_pkl'][:-4] + '_img.pkl'}")
-    pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_img.pkl', 'wb'))
+    print(f"Success! Dumping data to {env_cfg['demo_pkl'][:-4] + '_rgb.pkl'}")
+    pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_rgb.pkl', 'wb'))
 
 main()

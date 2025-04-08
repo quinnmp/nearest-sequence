@@ -1,4 +1,4 @@
-demo_pkl: "data/stack_task_D0/100_img_train.pkl"
+demo_pkl: "data/stack_task_D0/100_dino_train.pkl"
 #demo_pkl: "data/stack_task_D0/1_img.pkl"
 type: 'dino'
 demo_hdf5: "data/stack_task_D0/demo.hdf5"

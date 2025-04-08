@@ -12,6 +12,7 @@ import torchvision.transforms as transforms
 import gym
 import warnings
 from functools import partial
+import matplotlib.pyplot as plt
 
 import robomimic.utils.obs_utils as ObsUtils
 import robomimic.utils.env_utils as EnvUtils
@@ -26,6 +27,7 @@ from tapnet.utils import model_utils
 from fast_scaler import FastScaler
 from PIL import Image
 from typing import List
+from r3m import load_r3m
 
 import cv2
 #from groundingdino.util.inference import load_model, load_image, predict, annotate
@@ -37,6 +39,7 @@ INV_TWO_PI = 1 / TWO_PI
 
 # To be populated if needed
 dino_model = None
+r3m = None
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 img_transform = None
 img_env = None
@@ -60,14 +63,14 @@ causal_state = []
 last_tracks = []
 keypoint_viz = []
 
-proprio_tensor_cpu = [] # Pinned memory on CPU
-frame_tensor_cpu = [] # Pinned memory on CPU
-ret_tensor = []
+proprio_tensor_cpu = torch.tensor([]) # Pinned memory on CPU
+frame_tensor_cpu = torch.tensor([]) # Pinned memory on CPU
+ret_tensor = torch.tensor([])
 
 @dataclass
 class Dataset:
     name: str
-    obs_scaler: FastScaler
+    obs_scaler: FastScaler | None # None if not normalized
     act_scaler: FastScaler
     rot_indices: np.ndarray | torch.Tensor
     weights: np.ndarray | torch.Tensor
@@ -79,8 +82,9 @@ class Dataset:
     flattened_act_matrix: np.ndarray | torch.Tensor
     processed_obs_matrix: np.ndarray | torch.Tensor
 
-def load_and_scale_data(path, rot_indices, weights, ob_type='state', use_torch=False):
+def load_and_scale_data(path, rot_indices, weights, ob_type='state', use_torch=False, scale=True):
     expert_data = load_expert_data(path)
+
     
     observations = np.concatenate([traj['observations'] for traj in expert_data])
     rot_indices = np.array(rot_indices, dtype=np.int64) 
@@ -88,38 +92,44 @@ def load_and_scale_data(path, rot_indices, weights, ob_type='state', use_torch=F
     non_rot_indices = np.array([i for i in range(observations.shape[-1]) if i not in rot_indices], dtype=np.int64)
     non_rot_observations = observations[:, non_rot_indices]
 
-    obs_scaler = FastScaler()
-    if ob_type == 'rgb' or ob_type == 'dino':
-        obs_scaler.fit(np.concatenate(non_rot_observations))
+    if scale:
+        obs_scaler = FastScaler()
+        if ob_type == 'rgb' or ob_type == 'dino':
+            obs_scaler.fit(np.concatenate(non_rot_observations))
+        else:
+            obs_scaler.fit(non_rot_observations)
+
+        for traj in expert_data:
+            observations = traj['observations']
+            if use_torch:
+                observations_tensor = torch.tensor(observations, dtype=torch.float32, device=device)
+                transformed_data = obs_scaler.transform(observations_tensor[:, non_rot_indices])
+                observations_tensor[:, non_rot_indices] = transformed_data
+                traj['observations'] = observations_tensor
+            else:
+                traj['observations'][:, non_rot_indices] = obs_scaler.transform(observations[:, non_rot_indices])
+                
+        new_path = path[:-4] + '_standardized.pkl'
+        save_expert_data(expert_data, new_path)
     else:
-        obs_scaler.fit(non_rot_observations)
+        new_path = path
+        obs_scaler = None
 
     act_scaler = FastScaler()
     act_scaler.fit(np.concatenate([traj['actions'] for traj in expert_data]))
-
-    for traj in expert_data:
-        observations = traj['observations']
-        if use_torch:
-            observations_tensor = torch.tensor(observations, dtype=torch.float32, device=device)
-            transformed_data = obs_scaler.transform(observations_tensor[:, non_rot_indices])
-            observations_tensor[:, non_rot_indices] = transformed_data
-            traj['observations'] = observations_tensor
-        else:
-            traj['observations'][:, non_rot_indices] = scaler.transform(observations[:, non_rot_indices])
-            
-    new_path = path[:-4] + '_standardized.pkl'
-    save_expert_data(expert_data, new_path)
     
     obs_matrix, act_matrix, traj_starts = create_matrices(expert_data, use_torch=use_torch)
     
     if use_torch:
-        flattened_obs_matrix = torch.cat([torch.as_tensor(obs) for obs in obs_matrix], dim=0).to(torch.float64)
+        flattened_obs_matrix = torch.cat([torch.as_tensor(obs) for obs in obs_matrix], dim=0)
         flattened_act_matrix = torch.cat([torch.as_tensor(act) for act in act_matrix], dim=0)
         if len(weights) > 0:
             weights = torch.as_tensor(weights, dtype=torch.float64)
+            processed_obs_matrix = flattened_obs_matrix[:, non_rot_indices] * torch.as_tensor(weights[non_rot_indices], dtype=flattened_obs_matrix[0][0].dtype)
         else:
             weights = torch.ones(obs_matrix[0][0].shape[0], dtype=torch.float32)
-        processed_obs_matrix = flattened_obs_matrix[:, non_rot_indices] * weights[non_rot_indices]
+            processed_obs_matrix = flattened_obs_matrix
+
         traj_starts = torch.as_tensor(traj_starts)
     else:
         flattened_obs_matrix = np.concatenate(obs_matrix, dtype=np.float32)
@@ -245,7 +255,10 @@ def get_joint_pixel_coords(sim, joint_name, body_name, camera_name="track"):
     # y, x
     return (height - v, width - u)
 
-def crop_and_resize(img, crop_corners):
+def crop_and_resize(img, crop_corners) -> np.ndarray:
+    if len(crop_corners) == 0:
+        return img
+
     width, height = img.shape[:2]
     cropped_img = img[crop_corners[0][1]:crop_corners[1][1], crop_corners[0][0]:crop_corners[1][0], :]
     resized_img = cv2.resize(cropped_img, (width, height))
@@ -322,7 +335,7 @@ def construct_env(config, seed=None):
 
     return env
 
-def get_proprio(config, obs):
+def get_proprio(config, obs) -> np.ndarray:
     is_robosuite = config.get('robosuite', False)
     if is_robosuite:
         proprio_obs = np.array([])
@@ -359,7 +372,7 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
     if config.get('add_proprio', False):
         proprio_state = get_proprio(config, observation)
     else:
-        proprio_state = []
+        proprio_state = np.array([])
 
     # Three types of observations:
     # state, dino, keypoint
@@ -383,25 +396,34 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
                 if stack:
                     assert obs_history is not None
                     obs_history[dataset].append(obs[dataset])
-                    if len(obs_history[dataset]) > stack_size:
+                    if len(obs_history[dataset]) > obs_horizon:
                         obs_history[dataset].pop(0)
                 
-                    obs[dataset] = stack_with_previous(obs_history[dataset], stack_size=stack_size)
+                    obs[dataset] = stack_with_previous(obs_history[dataset], stack_size=obs_horizon)
             else:
                 obs[dataset] = (obs[processed_obs_types[obs_type]]).detach().clone()
     else:
         obs_type = config['type']
         
+        obs = None
         match obs_type:
             case 'state':
                 obs = crop_obs_for_env(observation, env_name, env_instance=env)
             case 'dino':
                 obs = frame_to_dino(frame, proprio_state=proprio_state, numpy_action=numpy_action)
+            case 'r3m':
+                obs = frame_to_r3m(frame, proprio_state=proprio_state, numpy_action=numpy_action)
             case 'keypoint' | 'semantic_keypoint':
                 obs = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=is_first_ob, proprio_state=proprio_state, cam_names=cam_names, semantic=(obs_type == "semantic_keypoint"))
             case 'rgb':
                 obs = torch.as_tensor(np.transpose(frame.astype(np.float32), (2, 0, 1)).flatten())
 
+    assert obs is not None
+
+    #if is_first_ob:
+        #pickle.dump(obs.detach().cpu().numpy(), open("debug_obs.pkl", 'wb'))
+        #print(obs)
+        #pickle.dump(obs, open("debug_obs.pkl", 'wb'))
     action = model.get_action(obs)
 
     return action
@@ -421,7 +443,7 @@ def stack_with_previous(obs_list, stack_size):
     return torch.cat([obs_list[-stack_size:]], dim=0)
 
 #@profile
-def frame_to_obj_centric_dino(env_name, rgb_array, proprio_state=[], numpy_action=True):
+def frame_to_obj_centric_dino(env_name, rgb_array, proprio_state=np.array([]), numpy_action=True):
     global proprio_tensor_cpu, trackers, last_boxes, vision_ob
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -479,6 +501,32 @@ def frame_to_obj_centric_dino(env_name, rgb_array, proprio_state=[], numpy_actio
 
     return obs
 
+def unfreeze_dino():
+    global dino_model, device, img_transform
+    if dino_model is None:
+        # Load the pre-trained DinoV2 model
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="xFormers is not available*") 
+            dino_model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14', verbose=False).to(device)
+
+        img_transform = transforms.Compose([
+            transforms.Resize((224, 224)),  # DinoV2 expects 224x224 input
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+        ])
+
+    for param in dino_model.parameters():
+        param.requires_grad = True
+
+    return list(dino_model.parameters())
+
+def freeze_dino():
+    global dino_model
+    assert dino_model is not None
+
+    for param in dino_model.parameters():
+        param.requires_grad = False
+
 #@profile
 def frame_to_dino(rgb_array, proprio_state=np.array([]), numpy_action=True):
     global dino_model, device, img_transform, pca, proprio_tensor_cpu, frame_tensor_cpu, ret_tensor
@@ -514,8 +562,8 @@ def frame_to_dino(rgb_array, proprio_state=np.array([]), numpy_action=True):
         os.makedirs('debug_images', exist_ok=True)
         save_image(image_tensor, 'debug_images/pre_dino_input.png')
     # Apply transformations
-    mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+    mean = torch.tensor([0.485, 0.456, 0.406], device='cpu').view(3, 1, 1)
+    std = torch.tensor([0.229, 0.224, 0.225], device='cpu').view(3, 1, 1)
     image_tensor = (image_tensor - mean) / std
 
     if len(frame_tensor_cpu) == 0:
@@ -546,6 +594,68 @@ def frame_to_dino(rgb_array, proprio_state=np.array([]), numpy_action=True):
         ret_tensor[len(proprio_state):] = features[0]
         return ret_tensor
 
+#@profile
+def frame_to_r3m(rgb_array, proprio_state=np.array([]), numpy_action=True) -> torch.Tensor:
+    global r3m, device, img_transform, pca, proprio_tensor_cpu, frame_tensor_cpu, ret_tensor
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    DEBUG = False
+    if DEBUG:
+        plt.imsave("r3m_pre_true.png", rgb_array)
+
+    if r3m is None:
+        r3m = load_r3m("resnet50") # resnet18, resnet34
+        r3m.eval()
+        r3m.to(device)
+
+        img_transform = transforms.Compose([
+            transforms.Resize((224, 224)),  # DinoV2 expects 224x224 input
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+        ])
+
+    # Handle 4-channel image (RGBA)
+    if rgb_array.shape[2] == 4:
+        # Convert RGBA to RGB by dropping the alpha channel
+        rgb_array = rgb_array[:, :, :3]
+
+    # Convert numpy array to PIL Image
+    image = Image.fromarray((rgb_array).astype(np.uint8))
+    image_tensor = img_transform(image)
+
+    if len(frame_tensor_cpu) == 0:
+        frame_tensor_cpu = torch.empty_like(image_tensor, device='cpu', pin_memory=True)
+
+    frame_tensor_cpu.copy_(image_tensor.to('cpu', non_blocking=True))
+
+    if DEBUG:
+        transformed_np = image_tensor.permute(1, 2, 0).numpy()
+        pickle.dump(transformed_np, open("frame_sample.pkl", 'wb'))
+        plt.imsave("r3m_post_true.png", transformed_np)
+    
+    # Extract features
+    with torch.no_grad():
+        features = r3m(frame_tensor_cpu.to(device).unsqueeze(0))
+
+    if pca is not None:
+        features = pca.transform(features)
+
+    if numpy_action:
+        features = features.detach().cpu().numpy()[0]
+        return np.hstack((proprio_state, features))
+    else:
+        if len(proprio_tensor_cpu) == 0:
+            proprio_tensor_cpu = torch.empty(len(proprio_state), dtype=torch.float64, device='cpu', pin_memory=True)
+        if len(ret_tensor) == 0:
+            ret_tensor = torch.empty(len(proprio_state) + len(features[0]), device=features.get_device(), dtype=torch.float64)
+
+        if len(proprio_state) > 0:
+            proprio_tensor_cpu.copy_(torch.from_numpy(proprio_state))
+            ret_tensor[:len(proprio_state)] = proprio_tensor_cpu.to(features.get_device(), non_blocking=True)
+
+        ret_tensor[len(proprio_state):] = features[0]
+        return ret_tensor
+
 def eval_over(steps, config, env_instance):
     env_name = config['name']
     is_metaworld = config.get('metaworld', False)
@@ -556,7 +666,7 @@ def eval_over(steps, config, env_instance):
         #or is_robosuite and steps >= 200
         or env_name == "maze2d-umaze-v1" and np.linalg.norm(env_instance._get_obs()[0:2] - env_instance._target) <= 0.5
         #or steps > 1 # For debugging
-        or steps >= 1000)
+        or steps >= 200)
 
 def crop_obs_for_env(obs, env, env_instance=None):
     if env == "ant-expert-v2":
@@ -569,10 +679,10 @@ def crop_obs_for_env(obs, env, env_instance=None):
         return np.concatenate((obs[:7], obs[18:25], obs[-3:len(obs)]))
     elif env == "Square_D1" or env == "Stack_D0" or env == "PickAndPlace_D0":
         default_low_dim_obs = [
+                "object",
                 "robot0_eef_pos",
                 "robot0_eef_quat",
                 "robot0_gripper_qpos",
-                "object",
         ]
 
         ret_obs = np.array([])
@@ -1170,7 +1280,8 @@ def compute_cosine_distance(curr_ob: np.ndarray, flattened_obs_matrix: np.ndarra
 class NN_METHOD:
     NN, NS, LWR, GMM, COND, KNN_AND_DIST, BC = range(7)
 
-    def from_string(name):
+    @classmethod
+    def from_string(cls, name):
         match name:
             case 'nn':
                 return NN_METHOD.NN

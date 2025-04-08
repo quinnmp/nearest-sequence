@@ -18,10 +18,10 @@ if __name__ == "__main__":
     print(env_cfg)
     print(policy_cfg)
 
-    policy_cfg['epochs'] = 10
+    policy_cfg['epochs'] = 5
     agent = nn_agent_torch.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
     policy_cfg['warm_start'] = True
-    for k in range(10, 10000, 10):
+    for k in range(5, 10000, 5):
         print(k)
         nn_eval(env_cfg, agent)
         agent = nn_agent_torch.NNAgentEuclideanStandardized(env_cfg, policy_cfg)

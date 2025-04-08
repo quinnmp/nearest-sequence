@@ -3,18 +3,20 @@ k: 10
 lookback: 1
 decay_rate: 0
 final_neighbors_ratio: 1
-#[I 2025-03-05 18:50:40,459] Trial 84 finished with value: 0.65 and parameters: {'k_neighbors': 726, 'lookback': 42, 'decay_rate': -0.4271725461007119, 'ratio': 0.5057047459497799}. Best is trial 84 with value: 0.65.
 
-
-epochs: 10
-batch_size: 64
-hidden_dims:
-   - 256
-   - 256
-   - 256
+epochs: 1000
+batch_size: 128
+mlp_config:
+  hidden_dims:
+     - 512
+     - 512
+     - 512
+  dropout: 0.0
+model_name: "ns_dan_img"
 cond_force_retrain: True
-model_name: "ns_dan_bc"
-dropout: 0
+lr: 1e-4
+weight_decay: 1e-6
 
-obs_horizon: 5
-act_horizon: 5
+
+#obs_horizon: 0
+#act_horizon: 0

@@ -15,7 +15,7 @@ def objective(trial, env_config_path, policy_config_path):
     with open(policy_config_path, 'r') as f:
         policy_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
-    #policy_cfg['epochs'] = trial.suggest_int('epochs', 10, 1000)
+    policy_cfg['epochs'] = trial.suggest_int('epochs', 10, 100)
     policy_cfg['k_neighbors'] = trial.suggest_int('k_neighbors', 10, 999)
     policy_cfg['lookback'] = trial.suggest_int('lookback', 1, 50)
     policy_cfg['decay_rate'] = trial.suggest_float('decay_rate', -3.0, 0.0)

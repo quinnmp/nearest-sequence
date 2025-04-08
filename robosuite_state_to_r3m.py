@@ -1,7 +1,7 @@
 import pickle
 import os
 
-from nn_util import construct_env, crop_and_resize, frame_to_r3m, get_semantic_frame_and_box, frame_to_obj_centric_dino, reset_vision_ob, get_proprio, frame_to_dino
+from nn_util import construct_env, crop_and_resize, frame_to_r3m, get_semantic_frame_and_box, frame_to_obj_centric_dino, reset_vision_ob, get_proprio
 os.environ["D4RL_SUPPRESS_IMPORT_ERROR"] = "1"
 import numpy as np
 import gym
@@ -74,7 +74,7 @@ def main():
             frames.append(full_frame)
 
             proprio_state = get_proprio(env_cfg, env.get_observation())
-            obs = frame_to_dino(full_frame, proprio_state=proprio_state, numpy_action=False)
+            obs = frame_to_r3m(full_frame, proprio_state=proprio_state, numpy_action=False)
             traj_obs.append(obs.cpu().detach().numpy())
 
             env.step(data[traj]['actions'][ob])
@@ -86,7 +86,7 @@ def main():
         else:
             print("REJECTING TRAJECTORY")
 
-    print(f"Success! Dumping data to {env_cfg['demo_pkl'][:-4] + '_dino.pkl'}")
-    pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_dino.pkl', 'wb'))
+    print(f"Success! Dumping data to {env_cfg['demo_pkl'][:-4] + '_r3m.pkl'}")
+    pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_r3m.pkl', 'wb'))
 
 main()

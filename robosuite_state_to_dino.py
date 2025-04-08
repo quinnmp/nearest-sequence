@@ -1,7 +1,7 @@
 import pickle
 import os
 
-from nn_util import construct_env, crop_and_resize, frame_to_r3m, get_semantic_frame_and_box, frame_to_obj_centric_dino, reset_vision_ob, get_proprio, frame_to_dino
+from nn_util import construct_env, crop_and_resize, frame_to_dino, get_semantic_frame_and_box, frame_to_obj_centric_dino, reset_vision_ob, get_proprio
 os.environ["D4RL_SUPPRESS_IMPORT_ERROR"] = "1"
 import numpy as np
 import gym
@@ -20,12 +20,6 @@ with open(args.env_config_path, 'r') as f:
 
 data = pickle.load(open(env_cfg['demo_pkl'], 'rb'))
 
-obs_matrix = []
-
-for traj in data:
-    obs_matrix.append(traj['observations'])
-
-obs = np.concatenate(obs_matrix)
 env = construct_env(env_cfg)
 env_name = env_cfg['name']
 
@@ -51,7 +45,7 @@ def main():
         env.reset()
         env.reset_to(initial_state)
         reset_vision_ob()
-        for ob in range(len(data[traj]['observations'])):
+        for i in range(len(data[traj]['actions'])):
             full_frame = np.empty((height, 0, 3), dtype=np.uint8)
             for camera in camera_names:
                 crop_corners = np.array(crops.get(camera, [[0, 0], [width, height]]))
@@ -77,7 +71,7 @@ def main():
             obs = frame_to_dino(full_frame, proprio_state=proprio_state, numpy_action=False)
             traj_obs.append(obs.cpu().detach().numpy())
 
-            env.step(data[traj]['actions'][ob])
+            env.step(data[traj]['actions'][i])
 
         # Sanity check - must actually be a success
         if env.get_reward() == 1:

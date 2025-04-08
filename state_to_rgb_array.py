@@ -69,10 +69,10 @@ for traj in range(len(data)):
             np.hstack((np.zeros(unobserved_nq), data[traj]['observations'][ob][:nq])), 
             data[traj]['observations'][ob][-nv:])
         #frame = env.sim.render(height=520, width=520)
-        frame = env.render(mode='rgb_array', height=64, width=64)
-        traj_obs.append(np.transpose(frame.astype(np.float32), (2, 0, 1)).flatten())
-        plt.imsave('hopper_frame.png', frame)
-    stacked_traj_obs = stack_with_previous(traj_obs, stack_size=stack_size)
-    img_data.append({'observations': stacked_traj_obs, 'actions': data[traj]['actions']})
+        frame = env.render(mode='rgb_array', height=256, width=256)
+        traj_obs.append(frame.flatten())
+        #plt.imsave('hopper_frame.png', frame)
+    #stacked_traj_obs = stack_with_previous(traj_obs, stack_size=stack_size)
+    img_data.append({'observations': traj_obs, 'actions': data[traj]['actions']})
 
 pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_rgb.pkl', 'wb'))

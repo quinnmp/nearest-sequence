@@ -1,0 +1,16 @@
+#demo_pkl: "data/stack_task_D0/100_dino_train.pkl"
+demo_pkl: "data/stack_task_D0/100_dino.pkl"
+type: 'dino'
+demo_hdf5: "data/stack_task_D0/demo.hdf5"
+robosuite: True
+name: Stack_D0
+add_proprio: True
+cams:
+  #- agentview
+  - frontview
+  - sideview
+crops:
+  #agentview: [[75, 75], [200, 180]]
+  frontview: [[0.40625, 0.48828125], [0.625, 0.703125]]
+  sideview: [[0.34375, 0.55078125], [0.53125, 0.765625]]
+  #val_cfg: "config/env/stack_task_D0_dino_val.yml"

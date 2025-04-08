@@ -1,15 +1,15 @@
 #!/bin/bash
 
 #SBATCH --job-name=knn
-#SBATCH --account=weirdlab
-#SBATCH --partition=gpu-l40s
+#SBATCH --account=cse
+#SBATCH --partition=gpu-rtx6k
 
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
 #SBATCH --gpus-per-task=1
 #SBATCH --mem=128G
-#SBATCH --time=24:00:00
+#SBATCH --time=12:00:00
 #SBATCH -o log/%j.out
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=quinnpfeifer@icloud.com
@@ -39,9 +39,7 @@ export PYTHONPATH=:/gscratch/weirdlab/quinn/nearest-sequence/video_action_learni
 #export LD_PRELOAD=$CONDA_PREFIX/lib/libGL.so:$LD_PRELOAD
 # For Mujoco
 unset LD_PRELOAD
-#export LD_PRELOAD=$CONDA_PREFIX/lib/libGLEW.so:$CONDA_PREFIX/lib/libGL.so
-#export LD_PRELOAD=$CONDA_PREFIX/lib/libGLEW.so
-#export LD_PRELOAD=$CONDA_PREFIX/lib/libEGL.so:$LD_PRELOAD
+export LD_PRELOAD=$CONDA_PREFIX/lib/libGL.so
 export CUDA_LAUNCH_BLOCKING=1
 rm data/*lookup*
 
@@ -52,19 +50,22 @@ rm data/*lookup*
 #conda env remove -n nearest-sequence
 #conda env create -f environment.yml
 
-python -u nn_eval.py config/env/stack_task_D0.yml config/policy/bc.yml
-#python -u hdf5_to_d4rl.py data/stack_task_D0/demo.hdf5 --goal
-#python -u robosuite_state_to_img.py config/env/stack_task_D0.yml
-#python split_data.py
+#python -u hdf5_to_rgb.py data/stack_task_D0/demo.hdf5 data/stack)
+#python -u robosuite_state_to_low_dim.py config/env/stack_task_D0.yml
+#python -u robosuite_test_crop.py config/env/stack_task_D0.yml
+#python -u split_data.py data/stack_task_D0/100_low_dim.pkl
+#python -u nn_eval.py config/env/stack_task_D0.yml config/policy/bc.yml
+#python -u nn_eval.py config/env/stack_task_D0_r3m.yml config/policy/bc_img.yml
+#python -u nn_eval.py config/env/stack_task_D0_dino.yml config/policy/bc_img.yml
 #python -u nn_model_optimizer.py config/env/hopper_rgb.yml config/policy/bc_img.yml
 #python -u state_to_rgb_array.py config/env/hopper.yml
 #python -u state_to_rgb_array.py config/env/hopper_new.yml
-#python -u nn_eval.py config/env/stack_task_D0_img.yml config/policy/bc.yml
-#python -u nn_eval.py config/env/stack_task_D0_img.yml config/policy/bc.yml
-#python -u nn_sweep_epochs.py config/env/pick_and_place_task_D0.yml config/policy/bc.yml
+#python -u nn_sweep_epochs.py config/env/stack_task_D0_dino.yml config/policy/bc_img.yml
+#python -u nn_eval.py config/env/hopper.yml config/policy/bc.yml
+#python -u nn_sweep_epochs.py config/env/stack_task_D0_img.yml config/policy/bc.yml
 #python -u opengl_test.py
 #python -u state_to_tapir.py config/env/hopper.yml
-#python -u nn_param_optimizer.py config/env/pick_and_place_task_D0.yml config/policy/ns_dan_bc.yml
+python -u nn_param_optimizer.py config/env/stack_task_D0_r3m.yml config/policy/ns_dan_bc.yml
 #python -u robosuite_state_to_kpt.py config/env/coffee_task_D0.yml data/coffee_task_D0/100_proprio.pkl
 #python -u nn_param_optimizer.py config/env/coffee_task_D0_kpt.yml config/policy/ns_dan_bc.yml
 #python -u nn_sweep_epochs.py config/env/stack_task_D0.yml config/policy/bc.yml

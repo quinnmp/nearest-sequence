@@ -1,7 +1,4 @@
 import os
-import time
-
-from cv2.gapi import video
 
 from rgb_arrays_to_mp4 import rgb_arrays_to_mp4
 os.environ["D4RL_SUPPRESS_IMPORT_ERROR"] = "1"
@@ -10,27 +7,14 @@ gym.logger.set_level(40)
 import nn_util
 import nn_agent_torch as nn_agent
 import numpy as np
-import metaworld
-import metaworld.envs.mujoco.env_dict as _env_dict
 import yaml
 from argparse import ArgumentParser
-import d4rl
 import pickle
-from itertools import product
-from push_t_env import PushTEnv
 import torch
 import torch.multiprocessing as mp
-import torch.distributed as dist
 import torchvision.transforms as transforms
-from PIL import Image
-import matplotlib.pyplot as plt
-import mujoco
-from typing import Dict, Any
-from nn_util import crop_obs_for_env, construct_env, get_action_from_obs, eval_over, get_keypoint_viz
+from nn_util import crop_obs_for_env, construct_env, get_action_from_obs, eval_over, get_keypoint_viz, crop_and_resize
 import copy
-import cv2
-import sys
-from functools import partial
 from worker_utils import worker_task
 
 DEBUG = False
@@ -38,10 +22,10 @@ DEBUG = False
 
 #@profile
 def single_trial_eval(config, agent, env, trial, reset=True):
-    img = config.get('img', False)
     env_name = config['name']
     is_robosuite = config.get('robosuite', False)
     cam_names = config.get("cams", [])
+    crops = config.get('crops', {})
     
     video_frames = []
 
@@ -72,27 +56,34 @@ def single_trial_eval(config, agent, env, trial, reset=True):
         steps += 1
         #print(steps)
         
-        height, width = 256, 256
-        #height, width = 64, 64
-        frame = np.empty((height, 0, 3), dtype=np.uint8)
+        height, width = 224, 224
+        full_frame = np.empty((height, 0, 3), dtype=np.uint8)
         if len(cam_names) > 0:
             for cam in cam_names:
-                curr_frame = env.render(mode='rgb_array', height=height, width=width, camera_name=cam)
-                #if cam == "agentview":
-                #    curr_frame = crop_and_resize(curr_frame, [[0, 50], [256, 256]])
-                #elif cam == "sideview":
-                #    curr_frame = crop_and_resize(curr_frame, [[0, 150], [220, 256]])
-                #elif cam == "frontview":
-                #    curr_frame = crop_and_resize(curr_frame, [[38, 143], [220, 200]])
-                
-                frame = np.hstack((frame, curr_frame))
+                crop_corners = np.array(crops.get(cam, [[0, 0], [width, height]]))
+
+                crop_width = crop_corners[1][0] - crop_corners[0][0]
+                render_width = width / crop_width
+
+                crop_height = crop_corners[1][1] - crop_corners[0][1]
+                render_height = height / crop_height
+
+                frame = env.render(mode='rgb_array', height=round(render_height), width=round(render_width), camera_name=cam)
+                assert frame is not None
+
+                crop_corners[:, 0] *= render_width
+                crop_corners[:, 1] *= render_height
+                crop_corners = np.round(crop_corners).astype(np.uint16)
+                cropped_frame = frame[crop_corners[0][1]:crop_corners[1][1], crop_corners[0][0]:crop_corners[1][0], :]
+
+                full_frame = np.hstack((full_frame, cropped_frame))
         else:
             frame = env.render(mode='rgb_array', height=height, width=width, camera_name="agentview")
             #frame = []
             #pass
-        video_frames.append(frame)
+        video_frames.append(full_frame)
 
-        action = get_action_from_obs(config, agent, env, observation, frame, obs_history=obs_history, numpy_action=agent.model.numpy_action, is_first_ob=(steps == 1))
+        action = get_action_from_obs(config, agent, env, observation, full_frame, obs_history=obs_history, numpy_action=agent.model.numpy_action, is_first_ob=(steps == 1))
         observation, reward, done, info = env.step(action)[:4]
 
         if env_name == "push_t":
@@ -119,7 +110,7 @@ def single_trial_eval(config, agent, env, trial, reset=True):
 
             rgb_arrays_to_mp4(video_viz, f"data/{trial}.mp4")
         else:
-            video_frames = np.array(video_frames)[:, :, :256, :]
+            video_frames = np.array(video_frames)
             #pickle.dump(video_frames, open(f"data/{trial}.pkl", 'wb'))
             rgb_arrays_to_mp4(video_frames, f"data/{trial}.mp4")
 
@@ -257,7 +248,7 @@ def nn_eval(config, nn_agent, trials=10, results=None):
     return np.mean(episode_rewards)
 
 # Set initial state to an initial state from the training dataset
-def nn_eval_sanity(config, nn_agent, data, results=None):
+def nn_eval_sanity(config, nn_agent, data, comp_data, results=None):
     env = construct_env(config)
     episode_rewards = []
     successes = 0
@@ -268,6 +259,12 @@ def nn_eval_sanity(config, nn_agent, data, results=None):
         initial_state["model"] = data[trial]["model_file"]
         env.reset_to(initial_state)
         episode_reward, success = single_trial_eval(config, nn_agent, env, trial, reset=False)
+
+        if not (pickle.load(open("debug_obs.pkl", 'rb')) == comp_data[trial]['observations'][0]).all():
+            print("OBSERVATIONS DON'T MATCH")
+        else:
+            print("OBSERVATIONS MATCH")
+
         #print(episode_reward)
         episode_rewards.append(episode_reward)
         successes += success
@@ -659,7 +656,7 @@ def main():
         #agents.append(nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg))
     #mp.set_start_method('spawn', force=True)
     agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
-    nn_eval(env_cfg, agent, trials=20)
+    nn_eval(env_cfg, agent, trials=10)
     #env = construct_env(env_cfg, seed=42 + int(args.trial))
 
     #policy_cfg['cond_force_retrain'] = False
@@ -668,7 +665,7 @@ def main():
     #    f.write(str(single_trial_eval(env_cfg, agent, env, args.trial)[0]))
     #single_trial_eval(env_cfg, agent, env, args.trial)
 
-    #nn_eval_sanity(env_cfg, agent, data=pickle.load(open("data/stack_task_D0/100.pkl", 'rb'))[:100])
+    #nn_eval_sanity(env_cfg, agent, data=pickle.load(open("data/stack_task_D0/100.pkl", 'rb'))[:10], comp_data=pickle.load(open("data/stack_task_D0/100_low_dim_train.pkl", 'rb'))[:10])
     #parallel_nn_eval(
     #    env_cfg,
     #    agent,

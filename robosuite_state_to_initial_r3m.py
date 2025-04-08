@@ -1,7 +1,7 @@
 import pickle
 import os
 
-from nn_util import construct_env, crop_and_resize, frame_to_r3m, get_semantic_frame_and_box, frame_to_obj_centric_dino, reset_vision_ob, get_proprio, frame_to_dino
+from nn_util import construct_env, crop_and_resize, frame_to_r3m, get_semantic_frame_and_box, frame_to_obj_centric_dino, reset_vision_ob, get_proprio
 os.environ["D4RL_SUPPRESS_IMPORT_ERROR"] = "1"
 import numpy as np
 import gym
@@ -42,7 +42,6 @@ img_data = []
 
 def main():
     for traj in range(len(data)):
-        frames = []
         print(f"Processing traj {traj}...")
         initial_state = dict(states=data[traj]['states'][0])
         initial_state["model"] = data[traj]["model_file"]
@@ -52,29 +51,29 @@ def main():
         env.reset_to(initial_state)
         reset_vision_ob()
         for ob in range(len(data[traj]['observations'])):
-            full_frame = np.empty((height, 0, 3), dtype=np.uint8)
-            for camera in camera_names:
-                crop_corners = np.array(crops.get(camera, [[0, 0], [width, height]]))
+            if ob == 1:
+                full_frame = np.empty((height, 0, 3), dtype=np.uint8)
+                for camera in camera_names:
+                    crop_corners = np.array(crops.get(camera, [[0, 0], [width, height]]))
 
-                crop_width = crop_corners[1][0] - crop_corners[0][0]
-                render_width = width / crop_width
+                    crop_width = crop_corners[1][0] - crop_corners[0][0]
+                    render_width = width / crop_width
 
-                crop_height = crop_corners[1][1] - crop_corners[0][1]
-                render_height = height / crop_height
+                    crop_height = crop_corners[1][1] - crop_corners[0][1]
+                    render_height = height / crop_height
 
-                frame = env.render(mode='rgb_array', height=round(render_height), width=round(render_width), camera_name=camera)
-                assert frame is not None
+                    frame = env.render(mode='rgb_array', height=round(render_height), width=round(render_width), camera_name=camera)
+                    assert frame is not None
 
-                crop_corners[:, 0] *= render_width
-                crop_corners[:, 1] *= render_height
-                crop_corners = np.round(crop_corners).astype(np.uint16)
-                cropped_frame = frame[crop_corners[0][1]:crop_corners[1][1], crop_corners[0][0]:crop_corners[1][0], :]
+                    crop_corners[:, 0] *= render_width
+                    crop_corners[:, 1] *= render_height
+                    crop_corners = np.round(crop_corners).astype(np.uint16)
+                    cropped_frame = frame[crop_corners[0][1]:crop_corners[1][1], crop_corners[0][0]:crop_corners[1][0], :]
 
-                full_frame = np.hstack((full_frame, cropped_frame))
-            frames.append(full_frame)
+                    full_frame = np.hstack((full_frame, cropped_frame))
 
             proprio_state = get_proprio(env_cfg, env.get_observation())
-            obs = frame_to_dino(full_frame, proprio_state=proprio_state, numpy_action=False)
+            obs = frame_to_r3m(full_frame, proprio_state=proprio_state, numpy_action=False)
             traj_obs.append(obs.cpu().detach().numpy())
 
             env.step(data[traj]['actions'][ob])
@@ -82,11 +81,10 @@ def main():
         # Sanity check - must actually be a success
         if env.get_reward() == 1:
             img_data.append({'observations': np.array(traj_obs), 'actions': data[traj]['actions']})
-            rgb_arrays_to_mp4(frames, f"data/{traj}.mp4")
         else:
             print("REJECTING TRAJECTORY")
 
-    print(f"Success! Dumping data to {env_cfg['demo_pkl'][:-4] + '_dino.pkl'}")
-    pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_dino.pkl', 'wb'))
+    print(f"Success! Dumping data to {env_cfg['demo_pkl'][:-4] + '_r3m_init.pkl'}")
+    pickle.dump(img_data, open(env_cfg['demo_pkl'][:-4] + '_r3m_init.pkl', 'wb'))
 
 main()
