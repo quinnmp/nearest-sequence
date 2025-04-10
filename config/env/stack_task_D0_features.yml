@@ -1,10 +1,10 @@
-demo_pkl: "data/stack_task_D0/100_rgb_train.pkl"
-#demo_pkl: "data/stack_task_D0/100_rgb.pkl"
-type: 'rgb'
+demo_pkl: "data/stack_task_D0/100_features_train.pkl"
+type: 'resnet'
 demo_hdf5: "data/stack_task_D0/demo.hdf5"
 robosuite: True
 name: Stack_D0
 add_proprio: True
+resnet_path: "cond_models/resnet.pth"
 cams:
   #- agentview
   - frontview
@@ -13,4 +13,4 @@ crops:
   #agentview: [[75, 75], [200, 180]]
   frontview: [[0.40625, 0.48828125], [0.625, 0.703125]]
   sideview: [[0.34375, 0.55078125], [0.53125, 0.765625]]
-val_cfg: "config/env/stack_task_D0_rgb_val.yml"
+val_cfg: "config/env/stack_task_D0_features_val.yml"

@@ -5,7 +5,7 @@ os.environ["D4RL_SUPPRESS_IMPORT_ERROR"] = "1"
 import gym
 gym.logger.set_level(40)
 import nn_util
-import nn_agent_torch as nn_agent
+#import nn_agent_torch as nn_agent
 import numpy as np
 import yaml
 from argparse import ArgumentParser
@@ -15,7 +15,7 @@ import torch.multiprocessing as mp
 import torchvision.transforms as transforms
 from nn_util import crop_obs_for_env, construct_env, get_action_from_obs, eval_over, get_keypoint_viz, crop_and_resize
 import copy
-from worker_utils import worker_task
+#from worker_utils import worker_task
 
 DEBUG = False
 
@@ -95,7 +95,7 @@ def single_trial_eval(config, agent, env, trial, reset=True):
 
             # env.render(mode='human')
 
-    if len(video_frames) > 0 and True:
+    if len(video_frames) > 0 and False:
         if False:
             from tapnet.utils import transforms
             from tapnet.utils import viz_utils
@@ -655,8 +655,8 @@ def main():
         #print(f"Training agent {i}")
         #agents.append(nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg))
     #mp.set_start_method('spawn', force=True)
-    agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
-    nn_eval(env_cfg, agent, trials=10)
+    #agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
+    nn_eval(env_cfg, agent, trials=100)
     #env = construct_env(env_cfg, seed=42 + int(args.trial))
 
     #policy_cfg['cond_force_retrain'] = False

@@ -78,6 +78,8 @@ class NNAgent:
         self.final_neighbors_ratio = policy_cfg.get('final_neighbors_ratio', 1)
         self.obs_horizon = policy_cfg.get('obs_horizon', 1)
 
+        self.env_cfg = env_cfg
+
         # Precompute constants
         self.obs_history = torch.tensor([], dtype=torch.float64)
 
@@ -171,15 +173,17 @@ class NNAgent:
                         diffusion=False,
                     )
 
-                model = nn.DataParallel(model)
+                #self.model = nn.DataParallel(model)
+                self.model = model
 
-                self.model = train_model(
-                    model, 
+                train_model(
+                    self, 
                     train_loader, 
                     val_loader=val_loader,
                     model_path=model_path,
                     loaded_optimizer_dict=optimizer_state_dict if optimizer_state_dict else None,
                     config=policy_cfg,
+                    eval_epochs=0
                 )
 
             self.model.eval()

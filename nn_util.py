@@ -20,6 +20,7 @@ from robomimic.utils.file_utils import get_env_metadata_from_dataset
 
 import mimicgen.utils.robomimic_utils as RobomimicUtils
 import jax
+
 jax.config.update("jax_default_matmul_precision", "highest") # Crucial for determinism
 import numpy as np
 from tapnet.models import tapir_model
@@ -40,6 +41,7 @@ INV_TWO_PI = 1 / TWO_PI
 # To be populated if needed
 dino_model = None
 r3m = None
+resnet = None
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 img_transform = None
 img_env = None
@@ -100,13 +102,16 @@ def load_and_scale_data(path, rot_indices, weights, ob_type='state', use_torch=F
             obs_scaler.fit(non_rot_observations)
             if ob_type == 'rgb':
                 IMG_SIZE = 224 * 224 * 3
-                print(obs_scaler.mean_np)
                 obs_scaler.mean_np[-IMG_SIZE:] = 0
                 obs_scaler.scale_np[-IMG_SIZE:] = 1
                 obs_scaler.mean_torch = torch.as_tensor(obs_scaler.mean_np)
                 obs_scaler.scale_torch = torch.as_tensor(obs_scaler.scale_np)
-                print(obs_scaler.mean_np)
-
+            if ob_type == 'resnet':
+                RESNET_FEATURE_SIZE = 512
+                obs_scaler.mean_np[-RESNET_FEATURE_SIZE:] = 0
+                obs_scaler.scale_np[-RESNET_FEATURE_SIZE:] = 1
+                obs_scaler.mean_torch = torch.as_tensor(obs_scaler.mean_np)
+                obs_scaler.scale_torch = torch.as_tensor(obs_scaler.scale_np)
 
         for traj in expert_data:
             observations = traj['observations']
@@ -422,6 +427,8 @@ def get_action_from_obs(config, model, env, observation, frame, obs_history=None
                 obs = frame_to_dino(frame, proprio_state=proprio_state, numpy_action=numpy_action)
             case 'r3m':
                 obs = frame_to_r3m(frame, proprio_state=proprio_state, numpy_action=numpy_action)
+            case 'resnet':
+                obs = frame_to_resnet(frame, proprio_state=proprio_state, numpy_action=numpy_action, resnet_path=config.get("resnet_path", None))
             case 'keypoint' | 'semantic_keypoint':
                 obs = frame_to_keypoints(env_name, frame, env, is_robosuite=is_robosuite, is_first_ob=is_first_ob, proprio_state=proprio_state, cam_names=cam_names, semantic=(obs_type == "semantic_keypoint"))
             case 'rgb':
@@ -663,6 +670,58 @@ def frame_to_r3m(rgb_array, proprio_state=np.array([]), numpy_action=True) -> to
             ret_tensor[:len(proprio_state)] = proprio_tensor_cpu.to(features.get_device(), non_blocking=True)
 
         ret_tensor[len(proprio_state):] = features[0]
+        return ret_tensor
+
+#@profile
+def frame_to_resnet(rgb_array, proprio_state=np.array([]), numpy_action=True, resnet_path=None) -> torch.Tensor:
+    global resnet, device, img_transform, pca, proprio_tensor_cpu, frame_tensor_cpu, ret_tensor
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    DEBUG = False
+    if DEBUG:
+        plt.imsave("r3m_pre_true.png", rgb_array)
+
+    if resnet is None:
+        assert resnet_path is not None
+        resnet = torch.load(resnet_path, weights_only=False)
+        resnet.eval()
+
+        img_transform = transforms.Compose([
+            transforms.Resize((224, 224)),  # DinoV2 expects 224x224 input
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+        ])
+
+    rgb_array = cv2.resize(rgb_array, (224, 224))
+    rgb_array = torch.as_tensor(rgb_array).view(-1, 224, 224, 3).permute(0, 3, 1, 2) / 255.0
+    rgb_array = (rgb_array - torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)) / torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+
+    if DEBUG:
+        transformed_np = image_tensor.permute(1, 2, 0).numpy()
+        pickle.dump(transformed_np, open("frame_sample.pkl", 'wb'))
+        plt.imsave("r3m_post_true.png", transformed_np)
+    
+    # Extract features
+    with torch.no_grad():
+        features = resnet(rgb_array).squeeze(2).squeeze(2)
+
+    if pca is not None:
+        features = pca.transform(features)
+
+    if numpy_action:
+        features = features.detach().cpu().numpy()[0]
+        return np.hstack((proprio_state, features))
+    else:
+        if len(proprio_tensor_cpu) == 0:
+            proprio_tensor_cpu = torch.empty(len(proprio_state), dtype=torch.float64, device='cpu', pin_memory=True)
+        if len(ret_tensor) == 0:
+            ret_tensor = torch.empty(len(proprio_state) + len(features[0]), device=features.get_device(), dtype=torch.float64)
+
+        if len(proprio_state) > 0:
+            proprio_tensor_cpu.copy_(torch.from_numpy(proprio_state))
+            ret_tensor[:len(proprio_state)] = proprio_tensor_cpu.to(features.get_device(), non_blocking=True)
+
+        ret_tensor[len(proprio_state):] = features
         return ret_tensor
 
 def eval_over(steps, config, env_instance):

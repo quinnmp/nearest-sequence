@@ -16,7 +16,7 @@ weight_decay: 1e-5
 obs_horizon: 1
 act_horizon: 1
 
-tune_dino: False
+#load_resnet: False
 
 #[I 2025-02-18 10:42:00,961] Trial 46 finished with value: 37.33440075374686 and parameters: {'epochs': 863, 'batch_size': 16, 'num_layers': 3, 'layer_size_0': 128, 'layer_size_1': 256, 'layer_size_2': 128}. Best is trial 46 with value: 37.33440075374686.
 

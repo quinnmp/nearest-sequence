@@ -1,22 +1,24 @@
-method: cond
-k: 10
-lookback: 1
-decay_rate: 0
-final_neighbors_ratio: 1
+#[I 2025-04-09 19:49:08,828] Trial 14 finished with value: 0.6 and parameters: {'k': 999, 'lookback': 35, 'decay_rate': -2.3245878520878165, 'ratio': 0.35720321165846747}. Best is trial 14 with value: 0.6.
+##[I 2025-04-09 21:19:11,426] Trial 30 finished with value: 0.65 and parameters: {'k': 257, 'lookback': 36, 'decay_rate': -2.6382669243250487, 'ratio': 0.49797501950196005}. Best is trial 30 with value: 0.65.
+#Candidates 915, lookback 43, decay -0.7338746472460093, ratio 0.3502358850973245: mean 0.7, std 0.46
+#Candidates 890, lookback 49, decay -0.6513513267531923, ratio 0.3046577787838335: mean 0.7, std 0.46
+#Candidates 898, lookback 42, decay -0.5340798167876616, ratio 0.31826594608506353: mean 0.65, std 0.48
+#Candidates 849, lookback 43, decay -0.11958288816205198, ratio 0.3379296501398806: mean 0.65, std 0.48
 
-epochs: 1000
-batch_size: 128
-mlp_config:
-  hidden_dims:
-     - 512
-     - 512
-     - 512
-  dropout: 0.0
+method: cond
+k: 898
+lookback: 42
+decay_rate: -0.5340798167
+final_neighbors_ratio: 0.318265946085
+
+epochs: 100
+batch_size: 32
 model_name: "ns_dan_img"
 cond_force_retrain: True
 lr: 1e-4
 weight_decay: 1e-6
 
+load_resnet: True
 
 #obs_horizon: 0
 #act_horizon: 0

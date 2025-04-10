@@ -16,8 +16,10 @@ from typing import List
 from types import SimpleNamespace
 from video_action_learning.models.dp.base_policy import DiffusionPolicy
 from video_action_learning.models.dp.transformer import TransformerNoisePredictionNet
+from nn_eval import nn_eval
 DINO_SIZE = 768
 IMG_SIZE = 224 * 224 * 3
+RESNET_FEATURE_SIZE = 512
 
 if torch.cuda.is_available():
     torch.set_default_device('cuda')
@@ -132,6 +134,7 @@ class KNNConditioningModel(nn.Module):
             'gaussian_action': False,
             'dino_head': False,
             'use_resnet': False,
+            'load_resnet': False,
 
             # Default to MLP (no flag)
             'mlp_config': {},
@@ -307,12 +310,69 @@ class KNNConditioningModel(nn.Module):
                 self.prop_model = nn.Sequential(*prop_layers).to(device=device, dtype=torch.float32)
 
                 # Remove the final classification layer
-                self.resnet = models.resnet18()
+                self.resnet = models.resnet34()
                 self.resnet = nn.Sequential(*list(self.resnet.children())[:-1])
-                resnet_out_features = 512
 
                 self.resnet_adapter = nn.Sequential(
-                    nn.Linear(resnet_out_features, self.resnet_embedding),
+                    nn.Linear(RESNET_FEATURE_SIZE, self.resnet_embedding),
+                    nn.BatchNorm1d(self.resnet_embedding),
+                    nn.ReLU(),
+                    nn.Dropout(0.1)
+                )
+
+                # Combination Model
+                in_dim = self.embedding_dim + self.resnet_embedding
+                for hidden_dim in self.hidden_dims:
+                    layers.extend([
+                        nn.Linear(in_dim, hidden_dim),
+                        nn.BatchNorm1d(hidden_dim),
+                        nn.ReLU(),
+                        nn.Dropout(self.dropout_rate),
+                    ])
+                    in_dim = hidden_dim
+
+                layers.append(nn.Linear(self.hidden_dims[-1], pred_dim).to(device))
+                self.model = nn.Sequential(*layers).to(device=device, dtype=torch.float32)
+            elif self.load_resnet:
+                DEFAULT_MLP_CONFIG = {
+                    'resnet_embedding': 256,
+
+                    'prop_hidden_dims': [64, 128],
+                    'prop_dropout_rate': 0.1,
+
+                    'hidden_dims': [256, 128],
+                    'dropout_rate': 0.1,
+
+                    'embedding_dim': 128
+                }
+
+                set_attributes_from_args(self, DEFAULT_MLP_CONFIG, self.mlp_config)
+
+                # Proprioception Model
+                prop_layers = []
+                if self.bc_baseline:
+                    in_dim -= RESNET_FEATURE_SIZE
+                else:
+                    in_dim -= RESNET_FEATURE_SIZE * 2
+                for hidden_dim in self.prop_hidden_dims:
+                    prop_layers.extend([
+                        nn.Linear(in_dim, hidden_dim),
+                        nn.BatchNorm1d(hidden_dim),
+                        nn.ReLU(),
+                        nn.Dropout(self.prop_dropout_rate),
+                    ])
+                    in_dim = hidden_dim
+                prop_layers.append(nn.Linear(self.prop_hidden_dims[-1], self.embedding_dim).to(device))
+                self.prop_model = nn.Sequential(*prop_layers).to(device=device, dtype=torch.float32)
+
+                # Remove the final classification layer
+                if self.bc_baseline:
+                    resnet_input = RESNET_FEATURE_SIZE
+                else:
+                    resnet_input = RESNET_FEATURE_SIZE * 2 + self.action_dim
+
+                self.resnet_adapter = nn.Sequential(
+                    nn.Linear(resnet_input, self.resnet_embedding),
                     nn.BatchNorm1d(self.resnet_embedding),
                     nn.ReLU(),
                     nn.Dropout(0.1)
@@ -400,12 +460,17 @@ class KNNConditioningModel(nn.Module):
                         dino_embeddings = self.dino_model(inputs[:, -DINO_SIZE:])
                         prop_embeddings = self.prop_model(inputs[:, :-DINO_SIZE])
                         inputs = torch.hstack((dino_embeddings, prop_embeddings))
-                    elif self.use_resnet:
-                        rgb_arrays = inputs[:, -IMG_SIZE:].view(batch_size, 224, 224, 3).permute(0, 3, 1, 2) / 255.0
-                        rgb_arrays = (rgb_arrays - torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)) / torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+                    elif self.use_resnet or self.load_resnet:
+                        if self.use_resnet:
+                            rgb_arrays = inputs[:, -IMG_SIZE:].view(batch_size, 224, 224, 3).permute(0, 3, 1, 2) / 255.0
+                            rgb_arrays = (rgb_arrays - torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)) / torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+                            resnet_features = self.resnet(rgb_arrays).squeeze(2).squeeze(2)
+                            prop_embeddings = self.prop_model(inputs[:, :-IMG_SIZE])
+                        elif self.load_resnet:
+                            resnet_features = inputs[:, -RESNET_FEATURE_SIZE:]
+                            prop_embeddings = self.prop_model(inputs[:, :-RESNET_FEATURE_SIZE])
 
-                        resnet_embeddings = self.resnet_adapter(self.resnet(rgb_arrays).squeeze(2).squeeze(2))
-                        prop_embeddings = self.prop_model(inputs[:, :-IMG_SIZE])
+                        resnet_embeddings = self.resnet_adapter(resnet_features)
                         inputs = torch.hstack((resnet_embeddings, prop_embeddings))
                     output = self.model(inputs)
 
@@ -452,8 +517,18 @@ class KNNConditioningModel(nn.Module):
                         real_actions = real_actions.unsqueeze(1)
 
                     return self.model(inputs, real_actions)
-                else:
-                    model_outputs = self.model(inputs)
+                elif self.load_resnet:
+                    s = inputs[:, :self.state_dim]
+                    a = inputs[:, self.state_dim:self.state_dim+self.action_dim]
+                    delta_s = inputs[:, self.state_dim+self.action_dim:]
+
+                    resnet_features = torch.hstack([s[:, -RESNET_FEATURE_SIZE:], a, delta_s[:, -RESNET_FEATURE_SIZE:]])
+                    prop_embeddings = self.prop_model(torch.hstack([s[:, :-RESNET_FEATURE_SIZE], a, delta_s[:, :-RESNET_FEATURE_SIZE]]))
+
+                    resnet_embeddings = self.resnet_adapter(resnet_features)
+                    inputs = torch.hstack((resnet_embeddings, prop_embeddings))
+
+                model_outputs = self.model(inputs)
 
             model_outputs = model_outputs.view(batch_size, num_neighbors, -1)
 
@@ -488,11 +563,15 @@ class KNNConditioningModel(nn.Module):
         """Override train method to set training_mode flag"""
         super().train(mode)
         self.training_mode = mode
+        if hasattr(self, "resnet"):
+            self.resnet.train()
         return self
     
     def eval(self):
         """Override eval method to set training_mode flag"""
         super().eval()
+        if hasattr(self, "resnet"):
+            self.resnet.eval()
         return self
 
 class KNNExpertDataset(Dataset):
@@ -733,7 +812,7 @@ class ChunkingWrapper(Dataset):
         raise AttributeError(f"Neither '{self.__class__.__name__}' nor wrapped dataset has attribute '{name}'")
 
 #@profile
-def train_model(model, train_loader, **kwargs):
+def train_model(agent, train_loader, eval_epochs=0, **kwargs):
     DEFAULT_CONFIG = {
         'val_loader': None,
         'epochs': 100,
@@ -745,6 +824,7 @@ def train_model(model, train_loader, **kwargs):
 
         # Checkpoint loading
         'model_path': "cond_models/cond_model.pth",
+        'resnet_export': "cond_models/resnet.pth",
         'loaded_optimizer_dict': None,
         'tune_dino': False
     }
@@ -754,6 +834,7 @@ def train_model(model, train_loader, **kwargs):
 
     os.makedirs(os.path.dirname(config.model_path), exist_ok=True)
 
+    model = agent.model
     model.to(device)
     model.train()
     criterion = nn.MSELoss()
@@ -786,12 +867,12 @@ def train_model(model, train_loader, **kwargs):
         optimizer,
         mode='min',
         factor=0.5,
-        patience=10,
+        patience=7,
     )
 
     best_val_loss = float('inf')
     #early_stopping_patience = 25
-    early_stopping_patience = 24
+    early_stopping_patience = 17
     early_stopping_counter = 0
 
     for epoch in range(config.epochs):
@@ -811,7 +892,7 @@ def train_model(model, train_loader, **kwargs):
                     dino_states[i] = frame_to_dino(img[-img_len:].reshape((256, 256, 3)), proprio_state=img[:-img_len], numpy_action=False)
                 neighbor_states = dino_states
 
-            if model.module.diffusion:
+            if model.diffusion:
                 loss = model(neighbor_states, neighbor_actions, neighbor_distances, weights, real_actions=actions)
             else:
                 predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
@@ -823,7 +904,12 @@ def train_model(model, train_loader, **kwargs):
             num_train_batches += 1
         #print(f"Time for epoch {epoch}: {time.time() - start}")
         avg_train_loss = train_loss / num_train_batches
-        
+
+        if eval_epochs != 0 and epoch > 0 and epoch % eval_epochs == 0:
+            model.eval()
+            nn_eval(agent.env_cfg, agent, trials=10)
+            model.train()
+
         # Validation phase
         if config.val_loader is not None:
             model.eval()
@@ -855,7 +941,7 @@ def train_model(model, train_loader, **kwargs):
                             dino_states[i] = frame_to_dino(img[-img_len:].reshape((256, 256, 3)), proprio_state=img[:-img_len], numpy_action=False)
                         neighbor_states = dino_states
 
-                    if model.module.diffusion:
+                    if model.diffusion:
                         loss = model(neighbor_states, neighbor_actions, neighbor_distances, weights, real_actions=actions)
                     else:
                         predicted_actions = model(neighbor_states, neighbor_actions, neighbor_distances, weights)
@@ -877,10 +963,18 @@ def train_model(model, train_loader, **kwargs):
                     early_stopping_counter += 1
 
                 if early_stopping_counter >= early_stopping_patience:
-                    print(f'Recommend early stopping after {epoch+1 - early_stopping_patience} epochs')
+                    #print(f'Recommend early stopping after {epoch+1 - early_stopping_patience} epochs')
                     torch.save(best_check, config.model_path)
-                    return best_check['model']
+                    agent.model = best_check['model']
 
+                    torch.save({'model': best_check['model'],
+                                'optimizer_state_dict': optimizer.state_dict(),
+                                'dataloader_rng_state': train_loader.generator.get_state()
+                    }, config.model_path)
+
+                    if model.use_resnet:
+                        torch.save(model.resnet, config.resnet_export)
+                    return
                 
                 print(f"Epoch [{epoch + 1}/{config.epochs}], LR {optimizer.param_groups[0]['lr']}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
             model.train()
@@ -888,14 +982,5 @@ def train_model(model, train_loader, **kwargs):
             if config.tune_dino:
                 unfreeze_dino()
         else:
-            print(f"Epoch [{epoch + 1}/{config.epochs}], Train Loss: {avg_train_loss}")
+            #print(f"Epoch [{epoch + 1}/{config.epochs}], Train Loss: {avg_train_loss}")
             pass
-
-    if isinstance(model, nn.DataParallel):
-        model = model.module
-
-    torch.save({'model': model,
-                'optimizer_state_dict': optimizer.state_dict(),
-                'dataloader_rng_state': train_loader.generator.get_state()
-    }, config.model_path)
-    return model

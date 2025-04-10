@@ -15,15 +15,15 @@ def objective(trial, env_config_path, policy_config_path):
     with open(policy_config_path, 'r') as f:
         policy_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
-    policy_cfg['epochs'] = trial.suggest_int('epochs', 10, 100)
-    policy_cfg['k_neighbors'] = trial.suggest_int('k_neighbors', 10, 999)
+    #policy_cfg['epochs'] = trial.suggest_int('epochs', 10, 100)
+    policy_cfg['k'] = trial.suggest_int('k', 10, 1000)
     policy_cfg['lookback'] = trial.suggest_int('lookback', 1, 50)
     policy_cfg['decay_rate'] = trial.suggest_float('decay_rate', -3.0, 0.0)
-    policy_cfg['ratio'] = trial.suggest_float('ratio', max(0.05, 1 / policy_cfg['k_neighbors']), 1.0)
+    policy_cfg['final_neighbors_ratio'] = trial.suggest_float('final_neighbors_ratio', max(0.05, 1 / policy_cfg['k']), 1.0)
 
     nn_agent_instance = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
 
-    result = nn_eval(env_cfg, nn_agent_instance, trials=20)
+    result = nn_eval(env_cfg, nn_agent_instance, trials=50)
     
     return result
 
@@ -33,7 +33,7 @@ def optimize(env_config_path, policy_config_path):
         n_startup_trials=10,
     )
     study = optuna.create_study(sampler=sampler, direction='maximize')
-    study.optimize(lambda trial: objective(trial, env_config_path, policy_config_path), n_trials=100)
+    study.optimize(lambda trial: objective(trial, env_config_path, policy_config_path), n_trials=50)
     
     trials = study.get_trials()
     scores = []
@@ -57,10 +57,10 @@ def optimize(env_config_path, policy_config_path):
     result_file_name = "hopper_ns_dan_bc"
     for params in best_k_params:
         #policy_cfg['epochs'] = params['epochs']
-        policy_cfg['k_neighbors'] = params['k_neighbors']
+        policy_cfg['k'] = params['k']
         policy_cfg['lookback'] = params['lookback']
         policy_cfg['decay_rate'] = params['decay_rate']
-        policy_cfg['ratio'] = params['ratio']
+        policy_cfg['final_neighbors_ratio'] = params['final_neighbors_ratio']
         agent = nn_agent.NNAgentEuclideanStandardized(env_cfg, policy_cfg)
         final_scores.append(nn_eval(env_cfg, agent, trials=100, results=result_file_name))
         with open(f"results/{result_file_name}.pkl", 'rb') as f:
